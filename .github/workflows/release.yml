@@ -14,7 +14,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       provider: ${{ steps.modules.outputs.provider }}
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@v5.1.0
         with:
           fetch-depth: 0
       - id: version
@@ -81,11 +81,11 @@ jobs:
           - linea-fleet
           - linea-fleet-livecapture
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@v5.1.0
       # Go stages cross-compile on the runner; QEMU runs only the few RUN
       # steps of the final stages (the builder's user setup).
-      - uses: docker/setup-qemu-action@v3.6.0
-      - uses: docker/setup-buildx-action@v3.11.1
+      - uses: docker/setup-qemu-action@v4.4.0
+      - uses: docker/setup-buildx-action@v4.4.1
       - uses: sigstore/cosign-installer@v3.10.1
       - name: Log in to ghcr.io
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
@@ -122,15 +122,15 @@ jobs:
           - { goos: windows, goarch: amd64 }
           - { goos: windows, goarch: arm64 }
     steps:
-      - uses: actions/checkout@v4.2.2
-      - uses: actions/setup-go@v5.5.0
+      - uses: actions/checkout@v5.1.0
+      - uses: actions/setup-go@v6.5.0
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      - uses: pnpm/action-setup@v4.1.0
+      - uses: pnpm/action-setup@v5.0.0
         with:
           package_json_file: web/package.json
-      - uses: actions/setup-node@v4.4.0
+      - uses: actions/setup-node@v5.0.0
         with:
           node-version: 24.12.0
           cache: pnpm
@@ -154,7 +154,7 @@ jobs:
           cp LICENSE README.md "dist/$name/"
           cd dist
           if [ "$GOOS" = windows ]; then zip -qr "$name.zip" "$name"; else tar -czf "$name.tar.gz" "$name"; fi
-      - uses: actions/upload-artifact@v4.6.2
+      - uses: actions/upload-artifact@v6.0.0
         with:
           name: cli-${{ matrix.goos }}-${{ matrix.goarch }}
           path: |
@@ -170,10 +170,10 @@ jobs:
       contents: write
       id-token: write
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@v5.1.0
         with:
           fetch-depth: 0
-      - uses: actions/download-artifact@v4.3.0
+      - uses: actions/download-artifact@v7.0.0
         with:
           pattern: cli-*
           path: dist

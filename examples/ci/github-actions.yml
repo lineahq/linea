@@ -38,7 +38,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install linea
         working-directory: ${{ runner.temp }}
         run: |
@@ -50,7 +50,7 @@ jobs:
           mv "$name/linea" linea
       - name: Keep runtime binaries between runs
         if: env.RUNTIME != ''
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/linea/runtimes
           key: linea-runtime-${{ env.RUNTIME }}
@@ -62,7 +62,7 @@ jobs:
           "$LINEA" test --runtime "$RUNTIME" --config "$CONFIG" --tests "$TESTS" --report junit.xml
       - name: Keep the JUnit report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: collector-regression-junit
           path: junit.xml
@@ -71,7 +71,7 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - name: Install linea
@@ -85,7 +85,7 @@ jobs:
           mv "$name/linea" linea
       - name: Keep runtime binaries between runs
         if: env.RUNTIME != ''
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/linea/runtimes
           key: linea-runtime-${{ env.RUNTIME }}
