@@ -71,6 +71,7 @@ Update the doc a change touches in the same commit.
 | `deploy/compose/fleet/`, `deploy/compose/collector/`, `deploy/compose/linea/` | Compose files for the fleet server (and its overlays), for the Collector lab and for the debugger's shared-platform stack |
 | `scripts/`, `scripts/fleet/`, `scripts/collector/` | Debugger, fleet and Collector scripts |
 | `tools/fleet-capacity/` | Fleet capacity harness and agent simulator runs |
+| `tools/notices/` | Generator of each shipped binary's `THIRD_PARTY_NOTICES.txt` (release archives and images) |
 | `docs/` | One folder per part: `debugger/`, `fleet/`, `collector-components/`; developer notes in `internals/` |
 
 ## Modules and go.work

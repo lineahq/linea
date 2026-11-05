@@ -35,6 +35,15 @@ Windows the shell scripts run under Git Bash.
 - `go test ./internal/debugger/api -run TestOpenAPIIsCurrent -update`
   regenerates `internal/debugger/api/openapi.json` after a change to an API or
   report type; the test fails while the committed contract is stale.
+- `go run ./tools/notices -title <name> [-extra name=file] -o <file>
+  ./cmd/<binary>` writes a binary's third-party notices: the license and
+  notice files of every module it links for `GOOS`/`GOARCH`, plus the Go
+  distribution's license. It fails when a linked module has none, so a new
+  dependency without license terms stops the release and the image builds.
+  The release workflow and the five product Dockerfiles run it (built for the
+  host with `GOOS= GOARCH=`, run with the target's); the web build writes the
+  bundled packages' licenses to `licenses.md` (Vite `build.license`), which
+  `linea-server`'s notices include with Monaco's `ThirdPartyNotices.txt`.
 - `go mod tidy` reconciles module dependencies; review any resulting `go.mod`
   or `go.sum` changes before committing. The root `go.mod` carries `replace`
   directives for `collector/livecapture` and `collector/provider`, so tidy

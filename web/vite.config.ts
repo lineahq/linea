@@ -9,6 +9,9 @@ export default defineConfig({
     outDir: '../internal/debugger/webui/static/app',
     emptyOutDir: true,
     chunkSizeWarningLimit: 6000,
+    // The bundled packages' licenses, which tools/notices adds to
+    // linea-server's third-party notices; the server also serves the file.
+    license: { fileName: 'licenses.md' },
   },
   server: {
     proxy: { '/api': 'http://127.0.0.1:7070' },

@@ -19,6 +19,9 @@ COPY internal/debugger/api/openapi.json /src/internal/debugger/api/openapi.json
 COPY web/ ./
 # Type-checks, then writes /src/internal/debugger/webui/static/app.
 RUN pnpm gen:api && pnpm build
+# Monaco's notices for the code it vendors, which the build's licenses.md
+# does not cover.
+RUN cp node_modules/monaco-editor/ThirdPartyNotices.txt /src/monaco-notices.txt
 
 # Build stages run on the build host and cross-compile for the target platform.
 FROM --platform=$BUILDPLATFORM golang:1.27.3-bookworm@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6669f51d3821baf9ec37c9 AS build
@@ -37,9 +40,19 @@ ARG GOMAXPROCS=
 # The release version without its "v"; empty for a development build.
 ARG VERSION=
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOMAXPROCS=${GOMAXPROCS} go build -p ${GO_BUILD_PARALLELISM} -trimpath -ldflags="-s -w -X github.com/lineahq/linea/internal/debugger/release.version=${VERSION}" -o /out/linea-server ./cmd/linea-server
+# The third-party notices of what the binary links, for the target platform,
+# and of the embedded web client. The tool itself is built for this host.
+COPY --from=web /src/monaco-notices.txt /tmp/monaco-notices.txt
+RUN GOOS= GOARCH= go build -o /tmp/notices ./tools/notices \
+    && mkdir -p /out/licenses && cp LICENSE /out/licenses/LICENSE \
+    && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} /tmp/notices -title linea-server \
+       -extra "web client=internal/debugger/webui/static/app/licenses.md" \
+       -extra "monaco-editor vendored components=/tmp/monaco-notices.txt" \
+       -o /out/licenses/THIRD_PARTY_NOTICES.txt ./cmd/linea-server
 
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 COPY --from=build /out/linea-server /linea-server
+COPY --from=build /out/licenses /licenses
 USER 65532:65532
 EXPOSE 7070
 ENTRYPOINT ["/linea-server"]

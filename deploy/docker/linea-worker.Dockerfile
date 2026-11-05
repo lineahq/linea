@@ -27,12 +27,19 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOMAXPROCS=${GOMAXPROCS}
 # The pool worker's binary cache (linea-worker --pool --cache-dir /cache): a
 # volume mounted there starts with this directory's owner.
 RUN mkdir /out/cache
+# The third-party notices of what the binary links, for the target platform.
+# The tool itself is built for this host.
+RUN GOOS= GOARCH= go build -o /tmp/notices ./tools/notices \
+    && mkdir -p /out/licenses && cp LICENSE /out/licenses/LICENSE \
+    && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} /tmp/notices -title linea-worker \
+       -o /out/licenses/THIRD_PARTY_NOTICES.txt ./cmd/linea-worker
 
 # Distroless rather than scratch: a worker that dials an https server needs
 # the system roots.
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 COPY --from=build /out/worker /worker
 COPY --from=build --chown=65534:65534 /out/cache /cache
+COPY --from=build /out/licenses /licenses
 # The label marks a runtime image, so `linea runtime register` accepts it;
 # the worker's hello describes the build.
 LABEL io.linea.runtime=default

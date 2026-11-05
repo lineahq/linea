@@ -105,6 +105,11 @@ sign-in through your identity provider, see
   `linux/arm64`: `linea-server`, `linea-worker` and `linea-builder` for the
   team server, `linea-fleet` and `linea-fleet-livecapture` for fleet;
 - the Helm chart, as a release asset;
+- third-party notices: every CLI archive holds `THIRD_PARTY_NOTICES.txt`
+  beside `LICENSE`, and every image holds both in `/licenses/`, with the
+  license and notice files of everything that binary links (for
+  `linea-server` also the bundled web client, which it serves at
+  `/licenses.md`);
 - Go module tags: `vX.Y.Z` for the root module, `pluginsdk/vX.Y.Z` for the
   fleet plugin SDK, `collector/livecapture/vX.Y.Z` for the Collector
   components and `collector/provider/vA.B.C` for the provider SDK.

@@ -7,6 +7,12 @@ change APIs, report schemas and persisted formats; the release notes say how.
 
 ## Unreleased
 
+- Releases carry third-party notices: every CLI archive has
+  `THIRD_PARTY_NOTICES.txt` beside `LICENSE`, and every image has both in
+  `/licenses/`, with the license and notice files of everything that binary
+  links. `linea-server`'s also cover the bundled web client, whose licenses
+  it serves at `/licenses.md`.
+
 ## [0.1.0]
 
 First public release.

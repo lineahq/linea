@@ -34,6 +34,13 @@ ARG GOMAXPROCS=
 # The release version without its "v"; empty for a development build.
 ARG VERSION=
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOMAXPROCS=${GOMAXPROCS} go build -p ${GO_BUILD_PARALLELISM} -trimpath -ldflags="-s -w -X github.com/lineahq/linea/internal/debugger/release.version=${VERSION}" -o /out/linea-builder ./cmd/linea-builder
+# The third-party notices of what the binary links, for the target platform.
+# The tool itself is built for this host. The Go toolchain beside it keeps
+# its own LICENSE in /usr/local/go, and Alpine's packages theirs.
+RUN GOOS= GOARCH= go build -o /tmp/notices ./tools/notices \
+    && mkdir -p /out/licenses && cp LICENSE /out/licenses/LICENSE \
+    && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} /tmp/notices -title linea-builder \
+       -o /out/licenses/THIRD_PARTY_NOTICES.txt ./cmd/linea-builder
 
 # The toolchain, for the target platform.
 FROM golang:1.27.3-bookworm@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6669f51d3821baf9ec37c9 AS toolchain
@@ -50,6 +57,7 @@ RUN apk add --no-cache git \
 COPY --from=toolchain /usr/local/go /usr/local/go
 ENV GOTOOLCHAIN=local PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 COPY --from=build /out/linea-builder /usr/local/bin/linea-builder
+COPY --from=build /out/licenses /licenses
 ENV HOME=/work
 WORKDIR /work
 USER 65532:65532

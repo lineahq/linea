@@ -151,6 +151,10 @@ jobs:
           ext=""; [ "$GOOS" = windows ] && ext=".exe"
           mkdir -p "dist/$name"
           go build -trimpath -ldflags="-s -w -X github.com/lineahq/linea/internal/debugger/release.version=$VERSION" -o "dist/$name/linea$ext" ./cmd/linea
+          # The third-party notices of what this platform's binary links;
+          # the tool itself is built for the runner.
+          GOOS= GOARCH= go build -o "$RUNNER_TEMP/notices" ./tools/notices
+          "$RUNNER_TEMP/notices" -title linea -o "dist/$name/THIRD_PARTY_NOTICES.txt" ./cmd/linea
           cp LICENSE README.md "dist/$name/"
           cd dist
           if [ "$GOOS" = windows ]; then zip -qr "$name.zip" "$name"; else tar -czf "$name.tar.gz" "$name"; fi
