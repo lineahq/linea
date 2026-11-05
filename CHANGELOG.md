@@ -7,11 +7,14 @@ change APIs, report schemas and persisted formats; the release notes say how.
 
 ## Unreleased
 
-- Releases carry third-party notices: every CLI archive has
-  `THIRD_PARTY_NOTICES.txt` beside `LICENSE`, and every image has both in
+## [0.1.1]
+
+- Releases carry third-party notices, which 0.1.0 lacked: every CLI archive
+  has `THIRD_PARTY_NOTICES.txt` beside `LICENSE`, and every image has both in
   `/licenses/`, with the license and notice files of everything that binary
   links. `linea-server`'s also cover the bundled web client, whose licenses
-  it serves at `/licenses.md`.
+  it serves at `/licenses.md`. Nothing else changes; use 0.1.1 instead of
+  0.1.0.
 
 ## [0.1.0]
 
@@ -49,4 +52,5 @@ First public release.
   `github.com/lineahq/linea/collector/livecapture`, tagged
   `collector/livecapture/v0.1.0`, and the contrib `opamp` extension.
 
+[0.1.1]: https://github.com/lineahq/linea/releases/tag/v0.1.1
 [0.1.0]: https://github.com/lineahq/linea/releases/tag/v0.1.0

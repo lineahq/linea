@@ -43,7 +43,7 @@ export LINEA_WORKER_TOKEN=$(cat registration-token)
 image:
 
 ```sh
-docker run --rm -e LINEA_WORKER_TOKEN ghcr.io/lineahq/linea-worker:0.1.0 \
+docker run --rm -e LINEA_WORKER_TOKEN ghcr.io/lineahq/linea-worker:0.1.1 \
   --connect https://linea.example.com --name collector-0.162 --capacity 4
 ```
 

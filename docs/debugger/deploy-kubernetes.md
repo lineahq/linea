@@ -67,7 +67,7 @@ Each release attaches the packaged chart, `linea-<version>.tgz`, to its
 settings:
 
 ```sh
-helm install linea ./linea-0.1.0.tgz -n linea --create-namespace -f values.yaml
+helm install linea ./linea-0.1.1.tgz -n linea --create-namespace -f values.yaml
 ```
 
 From a checkout, install the chart directory, which uses the same images:

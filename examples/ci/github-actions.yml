@@ -21,7 +21,7 @@ env:
   # The linea release to install; pin one, and update it deliberately. An
   # exported scenario reproduces its source run's outcome only with the same
   # release.
-  LINEA_VERSION: 0.1.0
+  LINEA_VERSION: 0.1.1
   # The Collector configuration, the regression scenarios and the scenario
   # both configurations of a pull request run.
   CONFIG: collector/config.yaml

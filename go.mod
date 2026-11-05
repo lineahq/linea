@@ -17,9 +17,9 @@ require (
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/jonboulle/clockwork v0.5.0
-	github.com/lineahq/linea/collector/livecapture v0.1.0
+	github.com/lineahq/linea/collector/livecapture v0.1.1
 	github.com/lineahq/linea/collector/provider v0.1.0
-	github.com/lineahq/linea/pluginsdk v0.1.0
+	github.com/lineahq/linea/pluginsdk v0.1.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/open-telemetry/opamp-go v0.25.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/connector/countconnector v0.162.0

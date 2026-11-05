@@ -68,7 +68,5 @@ which fails if any commit lacks a `Signed-off-by` line matching its author. CI
 runs no tests, so run the checks your change touches locally and list the
 validation commands you ran in the pull request; the template asks for them.
 
-Add a line under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md) for a
-change users will notice. Until the first release, the changelog holds only
-`## [0.1.0]`, a summary of what it ships; extend that summary instead, and
-add `## [Unreleased]` after 0.1.0 is tagged.
+Add a line under `## Unreleased` in [CHANGELOG.md](CHANGELOG.md) for a
+change users will notice.
