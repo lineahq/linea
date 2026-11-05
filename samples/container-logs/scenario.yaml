@@ -1,0 +1,30 @@
+# Container logs on a node: the real filelog receiver reads these files, at
+# the paths the kubelet writes them, from an isolated directory.
+version: 1
+name: container-logs
+mocks:
+  files:
+    - path: /var/log/pods/shop_checkout-7d9f8b6c4-x2x9q_0b7c3f52-1d2e-4f6a-9b8c-7d6e5f4a3b2c/checkout/0.log
+      # Present before the Collector starts: start_at defaults to end, so it is skipped.
+      existing: |
+        2026-10-10T09:59:59.000000000Z stdout F written before the collector started
+      # Written while the Collector runs. The P line is a partial line that the
+      # container parser joins with the next one.
+      content: |
+        2026-10-10T10:00:00.000000000Z stdout F payment accepted order=1042
+        2026-10-10T10:00:01.000000000Z stderr P card declined, retry
+        2026-10-10T10:00:01.100000000Z stderr F ing with backup card
+    - path: /var/log/pods/observability_otel-collector-abc12_11111111-2222-3333-4444-555555555555/otel-collector/0.log
+      content: |
+        2026-10-10T10:00:02.000000000Z stdout F excluded by the exclude pattern
+assertions:
+  - name: the collector's own logs are excluded
+    target: {exporter: otlp/backend, signal: logs}
+    count: {equals: 2}
+  - name: the pod is named from the file path
+    target: {exporter: otlp/backend, signal: logs}
+    resource_attributes:
+      equals:
+        k8s.namespace.name: shop
+        k8s.pod.name: checkout-7d9f8b6c4-x2x9q
+        k8s.container.name: checkout

@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Collector Capture Lab</title>
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header>
+    <div><p class="eyebrow">LOCAL TEST FIXTURE</p><h1>Collector Capture Lab</h1><p class="subtitle">Synthetic telemetry in. Captured copies out.</p></div>
+    <span id="connection" class="badge">Connecting to Collector…</span>
+  </header>
+  <main>
+    <div id="message" class="message" role="alert" hidden></div>
+    <section class="stats" aria-label="Traffic statistics">
+      <div class="stat"><span>Generator → Collector</span><strong id="generated">0</strong><small id="generator-state">Starting synthetic traffic…</small></div>
+      <div class="stat"><span>Extension → viewer</span><strong id="received">0</strong><small id="retained">No captured copies yet</small></div>
+      <div class="stat"><span>Capture session</span><strong id="capture-state">Off</strong><small id="session-time">Start a capture below</small></div>
+      <div class="stat"><span>Session drops / sampled out</span><strong id="dropped">0</strong><small id="selected">No session selected</small></div>
+    </section>
+    <div class="workspace">
+      <aside>
+        <section class="panel controls">
+          <div class="panel-heading"><h2>Capture controls</h2><span id="capture-badge" class="badge">Off</span></div>
+          <form id="capture-form">
+            <fieldset><legend>Signals</legend><div class="checks"><label><input type="checkbox" name="signals" value="traces" checked> Traces</label><label><input type="checkbox" name="signals" value="logs" checked> Logs</label><label><input type="checkbox" name="signals" value="metrics" checked> Metrics</label></div></fieldset>
+            <fieldset><legend>Capture points</legend><div class="checks"><label><input type="checkbox" name="points" value="ingress" checked> Ingress</label><label><input type="checkbox" name="points" value="egress" checked> Egress</label></div></fieldset>
+            <label class="field" for="service">Service<select id="service"><option value="">All synthetic services</option><option>checkout</option><option>inventory</option><option>billing</option></select></label>
+            <label class="check-line"><input id="errors-only" type="checkbox"> Errors only</label>
+            <p class="hint">Error spans, WARN+ logs, and metric points with HTTP status ≥ 500.</p>
+            <details class="ottl-controls">
+              <summary>Custom OTTL filters</summary>
+              <p class="hint">Capture records where conditions are true. One condition per line; all conditions AND together with the quick filters. Use <code>or</code> within a line for alternatives. Leave unused contexts empty.</p>
+              <label class="field" for="ottl-resource">Resource (all signals)<textarea id="ottl-resource" rows="3" spellcheck="false" placeholder='attributes["service.name"] == "checkout"'></textarea></label>
+              <label class="field" for="ottl-span">Span (traces)<textarea id="ottl-span" rows="3" spellcheck="false" placeholder='status.code == STATUS_CODE_ERROR'></textarea></label>
+              <label class="field" for="ottl-log">Log (logs)<textarea id="ottl-log" rows="3" spellcheck="false" placeholder='IsMatch(body, "request.*500")'></textarea></label>
+              <label class="field" for="ottl-metric">Metric (metrics)<textarea id="ottl-metric" rows="3" spellcheck="false" placeholder='name == "test.request.duration"'></textarea></label>
+              <label class="field" for="ottl-datapoint">Datapoint (metrics)<textarea id="ottl-datapoint" rows="3" spellcheck="false" placeholder='attributes["http.response.status_code"] >= 500'></textarea></label>
+              <p class="hint">Collector validates syntax on Start. Maximum 16 conditions including quick filters; 256 characters per condition. Read-only functions such as IsMatch and IsString are supported.</p>
+            </details>
+            <div class="field-pair"><label class="field" for="duration">Duration (seconds)<input id="duration" type="number" min="5" max="300" value="60" required></label><label class="field" for="sampling">Sample (%)<input id="sampling" type="number" min="0" max="100" value="100" step="1" required></label></div>
+            <div class="actions"><button id="start" class="primary" type="submit" disabled>Start capture</button><button id="stop" type="button" disabled>Stop</button></div>
+            <p class="hint">Settings apply when you start a new session. Capture expires automatically.</p>
+          </form>
+          <p id="session-id" class="session-id">No session</p>
+        </section>
+        <section class="panel controls">
+          <h2>Synthetic generator</h2>
+          <p class="hint">Rotates checkout, inventory, and billing. Every fifth sample is an error.</p>
+          <label class="field" for="rate">Samples / second / signal<input id="rate" type="number" min="1" max="100" value="5"></label>
+          <div class="actions"><button id="generator-toggle" type="button" disabled>Pause generator</button><button id="apply-rate" type="button" disabled>Apply rate</button></div>
+          <p id="generator-error" class="hint"></p>
+        </section>
+        <p class="footnote">Only extension-tagged OTLP reaches this viewer. Original pipeline output goes to the Collector's basic debug exporter.</p>
+      </aside>
+      <div class="results">
+        <section class="panel stream">
+          <div class="panel-heading"><div><h2>Captured data <span id="live" class="live">LIVE</span></h2><p class="hint">Stopping capture keeps previous copies visible. Clear removes only the viewer buffer.</p></div><div class="actions compact"><button id="pause-view" type="button">Pause view</button><button id="clear" type="button">Clear</button></div></div>
+          <div class="toolbar"><label class="sr-only" for="view-signal">Filter displayed signal</label><select id="view-signal"><option value="">All signals</option><option value="traces">Traces</option><option value="logs">Logs</option><option value="metrics">Metrics</option></select><label class="sr-only" for="search">Search captured data</label><input id="search" type="search" placeholder="Search service, point, or summary…"><span id="row-count">0 entries</span></div>
+          <p id="buffer-notice" class="notice" hidden></p>
+          <div class="table-scroll"><table><thead><tr><th>Received</th><th>Signal</th><th>Service</th><th>Point</th><th>Summary</th></tr></thead><tbody id="rows"></tbody></table><div id="empty" class="empty"><span class="empty-mark">↗</span><h3>Waiting for captured data</h3><p>Start capture to see copies from the extension.<br>The generator runs independently.</p></div></div>
+        </section>
+        <section class="panel inspector">
+          <div class="panel-heading"><div><h2>OTLP JSON inspector</h2><p id="detail-meta" class="hint">Select a row to inspect its resource, scope, and record.</p></div><button id="copy" type="button" disabled>Copy JSON</button></div>
+          <pre id="detail" tabindex="0">No record selected.</pre>
+        </section>
+      </div>
+    </div>
+  </main>
+  <footer>In-memory test setup · 500 entries / 8 MiB maximum · Synthetic data only</footer>
+</body>
+</html>

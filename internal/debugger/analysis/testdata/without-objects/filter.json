@@ -1,0 +1,146 @@
+{
+  "lineage": [
+    {
+      "id": "1:resource[0].scope[0].log_record[0]",
+      "signal": "logs",
+      "receiver": "otlp",
+      "name": "request",
+      "hops": [
+        {
+          "parent": -1,
+          "seq": 1,
+          "kind": "input.injected",
+          "component": "otlp",
+          "ref": "resource[0].scope[0].log_record[0]"
+        },
+        {
+          "parent": 0,
+          "seq": 2,
+          "kind": "stage.input",
+          "component": "transform/drop",
+          "pipeline": "logs",
+          "ref": "resource[0].scope[0].log_record[0]",
+          "end": "unresolved",
+          "note": "no output record matches it with confidence; it may have been changed, merged or removed"
+        }
+      ],
+      "stops": [
+        {
+          "component": "transform/drop",
+          "pipeline": "logs",
+          "hop": 1,
+          "end": "unresolved"
+        }
+      ]
+    },
+    {
+      "id": "1:resource[0].scope[0].log_record[1]",
+      "signal": "logs",
+      "receiver": "otlp",
+      "name": "request",
+      "hops": [
+        {
+          "parent": -1,
+          "seq": 1,
+          "kind": "input.injected",
+          "component": "otlp",
+          "ref": "resource[0].scope[0].log_record[1]"
+        },
+        {
+          "parent": 0,
+          "seq": 2,
+          "kind": "stage.input",
+          "component": "transform/drop",
+          "pipeline": "logs",
+          "ref": "resource[0].scope[0].log_record[1]",
+          "end": "unresolved",
+          "note": "no output record matches it with confidence; it may have been changed, merged or removed"
+        }
+      ],
+      "stops": [
+        {
+          "component": "transform/drop",
+          "pipeline": "logs",
+          "hop": 1,
+          "end": "unresolved"
+        }
+      ]
+    },
+    {
+      "id": "1:resource[0].scope[0].log_record[2]",
+      "signal": "logs",
+      "receiver": "otlp",
+      "name": "request",
+      "hops": [
+        {
+          "parent": -1,
+          "seq": 1,
+          "kind": "input.injected",
+          "component": "otlp",
+          "ref": "resource[0].scope[0].log_record[2]"
+        },
+        {
+          "parent": 0,
+          "seq": 2,
+          "kind": "stage.input",
+          "component": "transform/drop",
+          "pipeline": "logs",
+          "ref": "resource[0].scope[0].log_record[2]",
+          "end": "unresolved",
+          "note": "no output record matches it with confidence; it may have been changed, merged or removed"
+        }
+      ],
+      "stops": [
+        {
+          "component": "transform/drop",
+          "pipeline": "logs",
+          "hop": 1,
+          "end": "unresolved"
+        }
+      ]
+    }
+  ],
+  "stages": [
+    {
+      "component": "transform/drop",
+      "pipeline": "logs",
+      "kind": "processor",
+      "type": "transform",
+      "signal": "logs",
+      "emission": "synchronous",
+      "inputs": [
+        {
+          "seq": 2,
+          "outputs": [
+            3
+          ],
+          "outcome": "emitted",
+          "diff": {
+            "identity": "content",
+            "before": {
+              "resources": 1,
+              "scopes": 1,
+              "items": 3
+            },
+            "after": {
+              "resources": 1,
+              "scopes": 1,
+              "items": 2
+            },
+            "matching": {
+              "object": 0,
+              "exact": 0,
+              "high": 0,
+              "medium": 0,
+              "unmatched_before": 3,
+              "unmatched_after": 2
+            },
+            "unresolved": [
+              "3 record(s) before and 2 after could not be matched; they may have been changed, removed or added"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+extensions:
+  livecapture/replay:
+    enabled: true
+    environment: development
+    collector_group: debugger-integration
+    control:
+      endpoint: 127.0.0.1:17777
+      tls: {insecure: true}
+    local_control:
+      enabled: true
+      endpoint: 127.0.0.1:17777
+    delivery:
+      endpoint: 127.0.0.1:17777
+      tls: {insecure: true}
+processors:
+  capture/ingress:
+    extension: livecapture/replay
+    sensitivity: raw
+  capture/egress:
+    extension: livecapture/replay
+    sensitivity: redacted
+receivers:
+  otlp:
+    protocols:
+      grpc: {}
+exporters:
+  otlp:
+    endpoint: backend.invalid:4317
+    tls: {insecure: true}
+service:
+  extensions: [livecapture/replay]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [capture/ingress, capture/egress]
+      exporters: [otlp]
+    logs:
+      receivers: [otlp]
+      processors: [capture/ingress, capture/egress]
+      exporters: [otlp]
+    metrics:
+      receivers: [otlp]
+      processors: [capture/ingress, capture/egress]
+      exporters: [otlp]

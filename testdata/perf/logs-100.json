@@ -1,0 +1,1575 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "accounts"
+            }
+          }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": {
+            "name": "accounts.log"
+          },
+          "logRecords": [
+            {
+              "timeUnixNano": "1760000000050000000",
+              "severityNumber": 13,
+              "severityText": "warning",
+              "body": {
+                "stringValue": "login retry for jane"
+              },
+              "attributes": [
+                {
+                  "key": "user.password",
+                  "value": {
+                    "stringValue": "hunter2"
+                  }
+                },
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000500000000",
+              "severityNumber": 17,
+              "severityText": "error",
+              "body": {
+                "stringValue": "payment declined"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "omar"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000001000500000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "healthcheck ok"
+              }
+            },
+            {
+              "timeUnixNano": "1760000002000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "user signed in"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000050000000",
+              "severityNumber": 13,
+              "severityText": "warning",
+              "body": {
+                "stringValue": "login retry for jane"
+              },
+              "attributes": [
+                {
+                  "key": "user.password",
+                  "value": {
+                    "stringValue": "hunter2"
+                  }
+                },
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000500000000",
+              "severityNumber": 17,
+              "severityText": "error",
+              "body": {
+                "stringValue": "payment declined"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "omar"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000001000500000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "healthcheck ok"
+              }
+            },
+            {
+              "timeUnixNano": "1760000002000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "user signed in"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000050000000",
+              "severityNumber": 13,
+              "severityText": "warning",
+              "body": {
+                "stringValue": "login retry for jane"
+              },
+              "attributes": [
+                {
+                  "key": "user.password",
+                  "value": {
+                    "stringValue": "hunter2"
+                  }
+                },
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000500000000",
+              "severityNumber": 17,
+              "severityText": "error",
+              "body": {
+                "stringValue": "payment declined"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "omar"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000001000500000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "healthcheck ok"
+              }
+            },
+            {
+              "timeUnixNano": "1760000002000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "user signed in"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000050000000",
+              "severityNumber": 13,
+              "severityText": "warning",
+              "body": {
+                "stringValue": "login retry for jane"
+              },
+              "attributes": [
+                {
+                  "key": "user.password",
+                  "value": {
+                    "stringValue": "hunter2"
+                  }
+                },
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000500000000",
+              "severityNumber": 17,
+              "severityText": "error",
+              "body": {
+                "stringValue": "payment declined"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "omar"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000001000500000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "healthcheck ok"
+              }
+            },
+            {
+              "timeUnixNano": "1760000002000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "user signed in"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000050000000",
+              "severityNumber": 13,
+              "severityText": "warning",
+              "body": {
+                "stringValue": "login retry for jane"
+              },
+              "attributes": [
+                {
+                  "key": "user.password",
+                  "value": {
+                    "stringValue": "hunter2"
+                  }
+                },
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000500000000",
+              "severityNumber": 17,
+              "severityText": "error",
+              "body": {
+                "stringValue": "payment declined"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "omar"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000001000500000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "healthcheck ok"
+              }
+            },
+            {
+              "timeUnixNano": "1760000002000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "user signed in"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000050000000",
+              "severityNumber": 13,
+              "severityText": "warning",
+              "body": {
+                "stringValue": "login retry for jane"
+              },
+              "attributes": [
+                {
+                  "key": "user.password",
+                  "value": {
+                    "stringValue": "hunter2"
+                  }
+                },
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000500000000",
+              "severityNumber": 17,
+              "severityText": "error",
+              "body": {
+                "stringValue": "payment declined"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "omar"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000001000500000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "healthcheck ok"
+              }
+            },
+            {
+              "timeUnixNano": "1760000002000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "user signed in"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000050000000",
+              "severityNumber": 13,
+              "severityText": "warning",
+              "body": {
+                "stringValue": "login retry for jane"
+              },
+              "attributes": [
+                {
+                  "key": "user.password",
+                  "value": {
+                    "stringValue": "hunter2"
+                  }
+                },
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000500000000",
+              "severityNumber": 17,
+              "severityText": "error",
+              "body": {
+                "stringValue": "payment declined"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "omar"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000001000500000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "healthcheck ok"
+              }
+            },
+            {
+              "timeUnixNano": "1760000002000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "user signed in"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000050000000",
+              "severityNumber": 13,
+              "severityText": "warning",
+              "body": {
+                "stringValue": "login retry for jane"
+              },
+              "attributes": [
+                {
+                  "key": "user.password",
+                  "value": {
+                    "stringValue": "hunter2"
+                  }
+                },
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000500000000",
+              "severityNumber": 17,
+              "severityText": "error",
+              "body": {
+                "stringValue": "payment declined"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "omar"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000001000500000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "healthcheck ok"
+              }
+            },
+            {
+              "timeUnixNano": "1760000002000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "user signed in"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000050000000",
+              "severityNumber": 13,
+              "severityText": "warning",
+              "body": {
+                "stringValue": "login retry for jane"
+              },
+              "attributes": [
+                {
+                  "key": "user.password",
+                  "value": {
+                    "stringValue": "hunter2"
+                  }
+                },
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000500000000",
+              "severityNumber": 17,
+              "severityText": "error",
+              "body": {
+                "stringValue": "payment declined"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "omar"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000001000500000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "healthcheck ok"
+              }
+            },
+            {
+              "timeUnixNano": "1760000002000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "user signed in"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000050000000",
+              "severityNumber": 13,
+              "severityText": "warning",
+              "body": {
+                "stringValue": "login retry for jane"
+              },
+              "attributes": [
+                {
+                  "key": "user.password",
+                  "value": {
+                    "stringValue": "hunter2"
+                  }
+                },
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000500000000",
+              "severityNumber": 17,
+              "severityText": "error",
+              "body": {
+                "stringValue": "payment declined"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "omar"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000001000500000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "healthcheck ok"
+              }
+            },
+            {
+              "timeUnixNano": "1760000002000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "user signed in"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000050000000",
+              "severityNumber": 13,
+              "severityText": "warning",
+              "body": {
+                "stringValue": "login retry for jane"
+              },
+              "attributes": [
+                {
+                  "key": "user.password",
+                  "value": {
+                    "stringValue": "hunter2"
+                  }
+                },
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000500000000",
+              "severityNumber": 17,
+              "severityText": "error",
+              "body": {
+                "stringValue": "payment declined"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "omar"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000001000500000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "healthcheck ok"
+              }
+            },
+            {
+              "timeUnixNano": "1760000002000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "user signed in"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000050000000",
+              "severityNumber": 13,
+              "severityText": "warning",
+              "body": {
+                "stringValue": "login retry for jane"
+              },
+              "attributes": [
+                {
+                  "key": "user.password",
+                  "value": {
+                    "stringValue": "hunter2"
+                  }
+                },
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000500000000",
+              "severityNumber": 17,
+              "severityText": "error",
+              "body": {
+                "stringValue": "payment declined"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "omar"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000001000500000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "healthcheck ok"
+              }
+            },
+            {
+              "timeUnixNano": "1760000002000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "user signed in"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000050000000",
+              "severityNumber": 13,
+              "severityText": "warning",
+              "body": {
+                "stringValue": "login retry for jane"
+              },
+              "attributes": [
+                {
+                  "key": "user.password",
+                  "value": {
+                    "stringValue": "hunter2"
+                  }
+                },
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000500000000",
+              "severityNumber": 17,
+              "severityText": "error",
+              "body": {
+                "stringValue": "payment declined"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "omar"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000001000500000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "healthcheck ok"
+              }
+            },
+            {
+              "timeUnixNano": "1760000002000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "user signed in"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000050000000",
+              "severityNumber": 13,
+              "severityText": "warning",
+              "body": {
+                "stringValue": "login retry for jane"
+              },
+              "attributes": [
+                {
+                  "key": "user.password",
+                  "value": {
+                    "stringValue": "hunter2"
+                  }
+                },
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000500000000",
+              "severityNumber": 17,
+              "severityText": "error",
+              "body": {
+                "stringValue": "payment declined"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "omar"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000001000500000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "healthcheck ok"
+              }
+            },
+            {
+              "timeUnixNano": "1760000002000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "user signed in"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000050000000",
+              "severityNumber": 13,
+              "severityText": "warning",
+              "body": {
+                "stringValue": "login retry for jane"
+              },
+              "attributes": [
+                {
+                  "key": "user.password",
+                  "value": {
+                    "stringValue": "hunter2"
+                  }
+                },
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000500000000",
+              "severityNumber": 17,
+              "severityText": "error",
+              "body": {
+                "stringValue": "payment declined"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "omar"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000001000500000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "healthcheck ok"
+              }
+            },
+            {
+              "timeUnixNano": "1760000002000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "user signed in"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000050000000",
+              "severityNumber": 13,
+              "severityText": "warning",
+              "body": {
+                "stringValue": "login retry for jane"
+              },
+              "attributes": [
+                {
+                  "key": "user.password",
+                  "value": {
+                    "stringValue": "hunter2"
+                  }
+                },
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000500000000",
+              "severityNumber": 17,
+              "severityText": "error",
+              "body": {
+                "stringValue": "payment declined"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "omar"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000001000500000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "healthcheck ok"
+              }
+            },
+            {
+              "timeUnixNano": "1760000002000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "user signed in"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000050000000",
+              "severityNumber": 13,
+              "severityText": "warning",
+              "body": {
+                "stringValue": "login retry for jane"
+              },
+              "attributes": [
+                {
+                  "key": "user.password",
+                  "value": {
+                    "stringValue": "hunter2"
+                  }
+                },
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000500000000",
+              "severityNumber": 17,
+              "severityText": "error",
+              "body": {
+                "stringValue": "payment declined"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "omar"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000001000500000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "healthcheck ok"
+              }
+            },
+            {
+              "timeUnixNano": "1760000002000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "user signed in"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000050000000",
+              "severityNumber": 13,
+              "severityText": "warning",
+              "body": {
+                "stringValue": "login retry for jane"
+              },
+              "attributes": [
+                {
+                  "key": "user.password",
+                  "value": {
+                    "stringValue": "hunter2"
+                  }
+                },
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000500000000",
+              "severityNumber": 17,
+              "severityText": "error",
+              "body": {
+                "stringValue": "payment declined"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "omar"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000001000500000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "healthcheck ok"
+              }
+            },
+            {
+              "timeUnixNano": "1760000002000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "user signed in"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000050000000",
+              "severityNumber": 13,
+              "severityText": "warning",
+              "body": {
+                "stringValue": "login retry for jane"
+              },
+              "attributes": [
+                {
+                  "key": "user.password",
+                  "value": {
+                    "stringValue": "hunter2"
+                  }
+                },
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000500000000",
+              "severityNumber": 17,
+              "severityText": "error",
+              "body": {
+                "stringValue": "payment declined"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "omar"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000001000500000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "healthcheck ok"
+              }
+            },
+            {
+              "timeUnixNano": "1760000002000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "user signed in"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000050000000",
+              "severityNumber": 13,
+              "severityText": "warning",
+              "body": {
+                "stringValue": "login retry for jane"
+              },
+              "attributes": [
+                {
+                  "key": "user.password",
+                  "value": {
+                    "stringValue": "hunter2"
+                  }
+                },
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000500000000",
+              "severityNumber": 17,
+              "severityText": "error",
+              "body": {
+                "stringValue": "payment declined"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "omar"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000001000500000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "healthcheck ok"
+              }
+            },
+            {
+              "timeUnixNano": "1760000002000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "user signed in"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000050000000",
+              "severityNumber": 13,
+              "severityText": "warning",
+              "body": {
+                "stringValue": "login retry for jane"
+              },
+              "attributes": [
+                {
+                  "key": "user.password",
+                  "value": {
+                    "stringValue": "hunter2"
+                  }
+                },
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000500000000",
+              "severityNumber": 17,
+              "severityText": "error",
+              "body": {
+                "stringValue": "payment declined"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "omar"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000001000500000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "healthcheck ok"
+              }
+            },
+            {
+              "timeUnixNano": "1760000002000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "user signed in"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000050000000",
+              "severityNumber": 13,
+              "severityText": "warning",
+              "body": {
+                "stringValue": "login retry for jane"
+              },
+              "attributes": [
+                {
+                  "key": "user.password",
+                  "value": {
+                    "stringValue": "hunter2"
+                  }
+                },
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000500000000",
+              "severityNumber": 17,
+              "severityText": "error",
+              "body": {
+                "stringValue": "payment declined"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "omar"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000001000500000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "healthcheck ok"
+              }
+            },
+            {
+              "timeUnixNano": "1760000002000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "user signed in"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000050000000",
+              "severityNumber": 13,
+              "severityText": "warning",
+              "body": {
+                "stringValue": "login retry for jane"
+              },
+              "attributes": [
+                {
+                  "key": "user.password",
+                  "value": {
+                    "stringValue": "hunter2"
+                  }
+                },
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000500000000",
+              "severityNumber": 17,
+              "severityText": "error",
+              "body": {
+                "stringValue": "payment declined"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "omar"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000001000500000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "healthcheck ok"
+              }
+            },
+            {
+              "timeUnixNano": "1760000002000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "user signed in"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000050000000",
+              "severityNumber": 13,
+              "severityText": "warning",
+              "body": {
+                "stringValue": "login retry for jane"
+              },
+              "attributes": [
+                {
+                  "key": "user.password",
+                  "value": {
+                    "stringValue": "hunter2"
+                  }
+                },
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000500000000",
+              "severityNumber": 17,
+              "severityText": "error",
+              "body": {
+                "stringValue": "payment declined"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "omar"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000001000500000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "healthcheck ok"
+              }
+            },
+            {
+              "timeUnixNano": "1760000002000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "user signed in"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000050000000",
+              "severityNumber": 13,
+              "severityText": "warning",
+              "body": {
+                "stringValue": "login retry for jane"
+              },
+              "attributes": [
+                {
+                  "key": "user.password",
+                  "value": {
+                    "stringValue": "hunter2"
+                  }
+                },
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000500000000",
+              "severityNumber": 17,
+              "severityText": "error",
+              "body": {
+                "stringValue": "payment declined"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "omar"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000001000500000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "healthcheck ok"
+              }
+            },
+            {
+              "timeUnixNano": "1760000002000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "user signed in"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "jane"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

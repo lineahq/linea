@@ -1,0 +1,212 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      provider: ${{ steps.modules.outputs.provider }}
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0
+      - id: version
+        name: The tag is a version with a changelog section
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || { echo "tag $GITHUB_REF_NAME is not vMAJOR.MINOR.PATCH" >&2; exit 1; }
+          grep -q "^## \[$version\]" CHANGELOG.md || { echo "CHANGELOG.md has no [$version] section" >&2; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: The chart and Compose defaults name the version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          fail=0
+          check() { grep -qF "$2" "$1" || { echo "$1 does not name $VERSION: $2" >&2; fail=1; }; }
+          check deploy/charts/linea/Chart.yaml "version: $VERSION"
+          check deploy/charts/linea/Chart.yaml "appVersion: \"$VERSION\""
+          check deploy/compose/linea/compose.yaml "\${LINEA_VERSION:-$VERSION}"
+          check deploy/compose/fleet/compose.yaml "\${FLEET_VERSION:-$VERSION}"
+          check deploy/compose/fleet/compose.livecapture.yaml "\${CAPTURE_VERSION:-$VERSION}"
+          check examples/ci/github-actions.yml "LINEA_VERSION: $VERSION"
+          check examples/ci/github-actions-server.yml "LINEA_VERSION: $VERSION"
+          exit $fail
+      # Users build their own Collector with collector/livecapture, which
+      # requires collector/provider, and write fleet plugins with pluginsdk.
+      # The release job tags all three modules.
+      - id: modules
+        name: The Go modules can be tagged
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          case "$VERSION" in 0.*|1.*) ;; *) echo "v$VERSION needs a /vN module path for collector/livecapture and pluginsdk" >&2; exit 1 ;; esac
+          provider=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' collector/provider/*.go)
+          [ -n "$provider" ] || { echo "collector/provider has no Version constant" >&2; exit 1; }
+          grep -qF "github.com/lineahq/linea/collector/provider v$provider" collector/livecapture/go.mod || { echo "collector/livecapture/go.mod does not require collector/provider v$provider" >&2; exit 1; }
+          # A dependent of the root module resolves the nested modules it
+          # requires, so they must be tagged at these versions.
+          grep -qF "github.com/lineahq/linea/collector/livecapture v$VERSION" go.mod || { echo "go.mod does not require collector/livecapture v$VERSION" >&2; exit 1; }
+          grep -qF "github.com/lineahq/linea/pluginsdk v$VERSION" go.mod || { echo "go.mod does not require pluginsdk v$VERSION" >&2; exit 1; }
+          grep -qF "github.com/lineahq/linea/pluginsdk v$VERSION" examples/fleet-agent-summary-plugin/go.mod || { echo "the example plugin does not require pluginsdk v$VERSION" >&2; exit 1; }
+          grep -qF "github.com/lineahq/linea/collector/provider v$provider" go.mod || { echo "go.mod does not require collector/provider v$provider" >&2; exit 1; }
+          tag="collector/provider/v$provider"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null && ! git diff --quiet "$tag" HEAD -- collector/provider; then
+            echo "collector/provider changed since $tag; raise provider.Version" >&2; exit 1
+          fi
+          echo "provider=$provider" >> "$GITHUB_OUTPUT"
+
+  images:
+    name: Image (${{ matrix.image }})
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      # Keyless cosign signing with the workflow's OIDC identity.
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - linea-server
+          - linea-worker
+          - linea-builder
+          - linea-fleet
+          - linea-fleet-livecapture
+    steps:
+      - uses: actions/checkout@v4.2.2
+      # Go stages cross-compile on the runner; QEMU runs only the few RUN
+      # steps of the final stages (the builder's user setup).
+      - uses: docker/setup-qemu-action@v3.6.0
+      - uses: docker/setup-buildx-action@v3.11.1
+      - uses: sigstore/cosign-installer@v3.10.1
+      - name: Log in to ghcr.io
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Build and push
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          docker buildx build --file deploy/docker/${{ matrix.image }}.Dockerfile \
+            --platform linux/amd64,linux/arm64 \
+            --build-arg VERSION="$VERSION" \
+            --label org.opencontainers.image.source="${{ github.server_url }}/${{ github.repository }}" \
+            --label org.opencontainers.image.version="$VERSION" \
+            --label org.opencontainers.image.revision="${{ github.sha }}" \
+            --sbom=true --provenance=mode=max \
+            --metadata-file metadata.json \
+            --tag "$IMAGE:$VERSION" --push .
+          digest=$(jq -r '."containerimage.digest"' metadata.json)
+          case "$digest" in sha256:*) ;; *) echo "no image digest in the build metadata" >&2; exit 1 ;; esac
+          cosign sign --yes "$IMAGE@$digest"
+
+  cli:
+    name: CLI (${{ matrix.goos }}/${{ matrix.goarch }})
+    needs: check
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+          - { goos: windows, goarch: arm64 }
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-go@v5.5.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - uses: pnpm/action-setup@v4.1.0
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v4.4.0
+        with:
+          node-version: 24.12.0
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Web client
+        working-directory: web
+        run: pnpm install --frozen-lockfile && pnpm build
+      - name: Worker source
+        run: go generate ./internal/debugger/workersrc
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          name="linea_${VERSION}_${GOOS}_${GOARCH}"
+          ext=""; [ "$GOOS" = windows ] && ext=".exe"
+          mkdir -p "dist/$name"
+          go build -trimpath -ldflags="-s -w -X github.com/lineahq/linea/internal/debugger/release.version=$VERSION" -o "dist/$name/linea$ext" ./cmd/linea
+          cp LICENSE README.md "dist/$name/"
+          cd dist
+          if [ "$GOOS" = windows ]; then zip -qr "$name.zip" "$name"; else tar -czf "$name.tar.gz" "$name"; fi
+      - uses: actions/upload-artifact@v4.6.2
+        with:
+          name: cli-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: GitHub release
+    needs: [check, images, cli]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4.3.0
+        with:
+          pattern: cli-*
+          path: dist
+          merge-multiple: true
+      - uses: sigstore/cosign-installer@v3.10.1
+      - name: Package the Helm chart
+        run: helm package deploy/charts/linea --version "${{ needs.check.outputs.version }}" --app-version "${{ needs.check.outputs.version }}" --destination dist
+      - name: Release notes
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: awk -v h="## [$VERSION]" '$0 == h {on=1; next} on && /^## \[/ {exit} on' CHANGELOG.md > notes.md
+      - name: Tag the Go modules
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+          PROVIDER: ${{ needs.check.outputs.provider }}
+        run: |
+          # A re-run finds its own tags. The provider tag stays where its
+          # version was first released; the check job compared its sources.
+          tag() {
+            if git rev-parse -q --verify "refs/tags/$1" >/dev/null; then
+              [ "$2" = any ] || [ "$(git rev-parse "$1^{commit}")" = "$GITHUB_SHA" ] || { echo "$1 exists on another commit" >&2; exit 1; }
+              echo "$1 exists"; return
+            fi
+            git tag "$1" "$GITHUB_SHA" && git push origin "refs/tags/$1"
+          }
+          tag "collector/livecapture/v$VERSION" this
+          tag "pluginsdk/v$VERSION" this
+          tag "collector/provider/v$PROVIDER" any
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist && sha256sum * > SHA256SUMS
+          cosign sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
+          cd ..
+          gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag

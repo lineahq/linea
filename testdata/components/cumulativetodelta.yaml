@@ -1,0 +1,21 @@
+# Converts cumulative sums to deltas. The first point of a series that
+# started before the Collector has no previous value and is dropped.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  cumulativetodelta:
+
+exporters:
+  otlp:
+    endpoint: backend.example.invalid:4317
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [cumulativetodelta]
+      exporters: [otlp]

@@ -1,0 +1,36 @@
+# Test-only distribution used by the Docker lab, CI and smoke tests; never released.
+# Users build their own Collector: docs/collector-components/README.md.
+dist:
+  module: github.com/lineahq/linea/collector/distribution
+  name: otelcol-livecapture
+  description: Collector Live Capture development distribution
+  output_path: ./distribution
+  version: 0.0.1-dev
+  use_absolute_replace_paths: false
+
+receivers:
+  - gomod: go.opentelemetry.io/collector/receiver/otlpreceiver v0.162.0
+processors:
+  - gomod: github.com/lineahq/linea/collector/livecapture v0.0.0
+    import: github.com/lineahq/linea/collector/livecapture/captureprocessor
+    path: ./livecapture
+  - gomod: go.opentelemetry.io/collector/processor/memorylimiterprocessor v0.162.0
+  - gomod: go.opentelemetry.io/collector/processor/batchprocessor v0.162.0
+  # Reference processors for the capture processor benchmarks in
+  # collector/tools/testbed.
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/attributesprocessor v0.162.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/filterprocessor v0.162.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor v0.162.0
+exporters:
+  - gomod: go.opentelemetry.io/collector/exporter/debugexporter v0.162.0
+  - gomod: go.opentelemetry.io/collector/exporter/otlpexporter v0.162.0
+extensions:
+  - gomod: github.com/lineahq/linea/collector/livecapture v0.0.0
+    import: github.com/lineahq/linea/collector/livecapture/livecaptureextension
+    path: ./livecapture
+providers:
+  - gomod: go.opentelemetry.io/collector/confmap/provider/fileprovider v1.68.0
+  - gomod: go.opentelemetry.io/collector/confmap/provider/envprovider v1.68.0
+
+replaces:
+  - github.com/lineahq/linea/collector/provider => ../provider

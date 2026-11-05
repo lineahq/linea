@@ -1,0 +1,15 @@
+/* The resizable left, upper and bottom panes of WorkspacePanes. */
+.od-wbpanes { flex: 1; min-height: 0; min-width: 0; display: flex; }
+.od-wbpanes__left { flex: none; width: var(--left-pane); min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+/* The left and bottom panes are sized by the splitters, whatever size they declare themselves. */
+.od-wbpanes__left > .od-pane { flex: 1 !important; width: auto !important; border-right: 0 !important; }
+.od-wbpanes__column { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.od-wbpanes__graph { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+.od-wbpanes__graph--sized { flex: none; height: var(--upper-pane); }
+.od-wbpanes__bottom { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.od-wbpanes__bottom > .od-pane { flex: 1 !important; height: auto !important; border-top: 0 !important; }
+.od-wbpanes .pane-splitter { flex: none; background: var(--bg-canvas); border: 0 solid var(--border); }
+.od-wbpanes .splitter-left { width: 8px; border-left-width: 1px; border-right-width: 1px; }
+.od-wbpanes .splitter-upper { height: 8px; border-top-width: 1px; border-bottom-width: 1px; }
+.od-wbpanes[class*='resizing-'] { user-select: none; }
+.od-wbpanes[class*='resizing-'] section { pointer-events: none; }

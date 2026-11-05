@@ -1,0 +1,4 @@
+{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"telemetrygen"}}]},"scopeSpans":[{"scope":{"name":"telemetrygen"},"spans":[
+{"traceId":"5b8efff798038103d269b633813fc60c","spanId":"eee19b7ec3c1b174","name":"okey-dokey-0","kind":2,"startTimeUnixNano":"1760400000000000000","endTimeUnixNano":"1760400000100000000","attributes":[{"key":"lab.scenario","value":{"stringValue":"single-span"}}]},
+{"traceId":"5b8efff798038103d269b633813fc60c","spanId":"eee19b7ec3c1b175","name":"okey-dokey-1","kind":2,"startTimeUnixNano":"1760400000000000000","endTimeUnixNano":"1760400000100000000","attributes":[{"key":"lab.scenario","value":{"stringValue":"single-span"}}]}
+]}]}]}

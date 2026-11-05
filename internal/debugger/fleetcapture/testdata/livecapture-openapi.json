@@ -1,0 +1,1401 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Optional livecapture plugin API",
+    "version": "2.3.0",
+    "description": "Plugin-owned capture APIs. Single active authority per private database. Fixed 1-16 target roster chosen by peer generation, fleet agent, fleet group or selector, absolute expiry <=5 minutes, no automatic replay. Raw selection requires explicit operator principal grant. Captured payloads stay in bounded memory. Poll/ACK delivery preserves partial and uncertain OTLP outcomes; retries may duplicate records. No debugger dependency. Collectors authenticate with fleet agent credentials, introspected through the fleet host; the capture label lists the collector groups a credential may serve."
+  },
+  "servers": [
+    {
+      "url": "/api/v1/plugins/{plugin_id}/api",
+      "variables": {
+        "plugin_id": {
+          "default": "livecapture"
+        }
+      }
+    }
+  ],
+  "paths": {
+    "/v1/openapi.json": {
+      "get": {
+        "summary": "Read this plugin-owned schema",
+        "responses": {
+          "200": {
+            "description": "Read this plugin-owned schema"
+          },
+          "400": {
+            "description": "Malformed request"
+          },
+          "401": {
+            "description": "Invalid general API credential"
+          },
+          "403": {
+            "description": "Plugin role, raw permission, or ownership denied"
+          },
+          "404": {
+            "description": "Resource absent/expired"
+          },
+          "409": {
+            "description": "Changed retry, stale generation/epoch, missing consumer or overlapping target"
+          },
+          "412": {
+            "description": "Revision mismatch"
+          },
+          "428": {
+            "description": "If-Match required"
+          },
+          "429": {
+            "description": "Bounded quota reached"
+          },
+          "503": {
+            "description": "Plugin, host, database, or admission unavailable"
+          }
+        }
+      }
+    },
+    "/v1/peers": {
+      "get": {
+        "summary": "List connected capture peers in count- and byte-bounded keyset pages",
+        "responses": {
+          "200": {
+            "description": "Bounded current-state peer/catalog page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "items"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Peer"
+                      },
+                      "minItems": 0,
+                      "maxItems": 64
+                    },
+                    "next_cursor": {
+                      "maxLength": 512,
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request"
+          },
+          "401": {
+            "description": "Invalid general API credential"
+          },
+          "403": {
+            "description": "Plugin role, raw permission, or ownership denied"
+          },
+          "404": {
+            "description": "Resource absent/expired"
+          },
+          "409": {
+            "description": "Changed retry, stale generation/epoch, missing consumer or overlapping target"
+          },
+          "412": {
+            "description": "Revision mismatch"
+          },
+          "428": {
+            "description": "If-Match required"
+          },
+          "429": {
+            "description": "Bounded quota reached"
+          },
+          "503": {
+            "description": "Plugin, host, database, or admission unavailable"
+          },
+          "410": {
+            "description": "Cursor belongs to a previous authority/process; restart discovery"
+          }
+        },
+        "description": "Current-state pages, default 16/max 64 peers, encoded response <=512 KiB. Catalog size can end a page earlier. Follow next_cursor with the same filters; refresh from the beginning on 410 after authority/process change. Query fields are strict.",
+        "parameters": [
+          {
+            "schema": {
+              "maximum": 64,
+              "minimum": 1,
+              "type": "integer",
+              "default": 16
+            },
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "maxLength": 512,
+              "type": "string"
+            },
+            "description": "Opaque next_cursor from the preceding page; bound to authority/process.",
+            "name": "cursor",
+            "in": "query"
+          }
+        ]
+      }
+    },
+    "/v1/channels": {
+      "post": {
+        "summary": "Admin opens an owner-bound channel; expiry at most five minutes",
+        "responses": {
+          "201": {
+            "description": "Admin opens an owner-bound channel; expiry at most five minutes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Channel"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request"
+          },
+          "401": {
+            "description": "Invalid general API credential"
+          },
+          "403": {
+            "description": "Plugin role, raw permission, or ownership denied"
+          },
+          "404": {
+            "description": "Resource absent/expired"
+          },
+          "409": {
+            "description": "Changed retry, stale generation/epoch, missing consumer or overlapping target"
+          },
+          "412": {
+            "description": "Revision mismatch"
+          },
+          "428": {
+            "description": "If-Match required"
+          },
+          "429": {
+            "description": "Bounded quota reached"
+          },
+          "503": {
+            "description": "Plugin, host, database, or admission unavailable"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/channels/{id}/next": {
+      "get": {
+        "summary": "Owner polls; renews five-second liveness, does not acknowledge delivery",
+        "responses": {
+          "200": {
+            "description": "Owner polls; renews five-second liveness, does not acknowledge delivery",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request"
+          },
+          "401": {
+            "description": "Invalid general API credential"
+          },
+          "403": {
+            "description": "Plugin role, raw permission, or ownership denied"
+          },
+          "404": {
+            "description": "Resource absent/expired"
+          },
+          "409": {
+            "description": "Changed retry, stale generation/epoch, missing consumer or overlapping target"
+          },
+          "412": {
+            "description": "Revision mismatch"
+          },
+          "428": {
+            "description": "If-Match required"
+          },
+          "429": {
+            "description": "Bounded quota reached"
+          },
+          "503": {
+            "description": "Plugin, host, database, or admission unavailable"
+          },
+          "204": {
+            "description": "No pending batch"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/channels/{id}/acks": {
+      "post": {
+        "summary": "Owner explicitly accepts a count from the offered batch",
+        "responses": {
+          "204": {
+            "description": "Owner explicitly accepts a count from the offered batch"
+          },
+          "400": {
+            "description": "Malformed request"
+          },
+          "401": {
+            "description": "Invalid general API credential"
+          },
+          "403": {
+            "description": "Plugin role, raw permission, or ownership denied"
+          },
+          "404": {
+            "description": "Resource absent/expired"
+          },
+          "409": {
+            "description": "Changed retry, stale generation/epoch, missing consumer or overlapping target"
+          },
+          "412": {
+            "description": "Revision mismatch"
+          },
+          "428": {
+            "description": "If-Match required"
+          },
+          "429": {
+            "description": "Bounded quota reached"
+          },
+          "503": {
+            "description": "Plugin, host, database, or admission unavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Ack"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/channels/{id}": {
+      "delete": {
+        "summary": "Owner closes channel and withdraws its captures",
+        "responses": {
+          "204": {
+            "description": "Owner closes channel and withdraws its captures"
+          },
+          "400": {
+            "description": "Malformed request"
+          },
+          "401": {
+            "description": "Invalid general API credential"
+          },
+          "403": {
+            "description": "Plugin role, raw permission, or ownership denied"
+          },
+          "404": {
+            "description": "Resource absent/expired"
+          },
+          "409": {
+            "description": "Changed retry, stale generation/epoch, missing consumer or overlapping target"
+          },
+          "412": {
+            "description": "Revision mismatch"
+          },
+          "428": {
+            "description": "If-Match required"
+          },
+          "429": {
+            "description": "Bounded quota reached"
+          },
+          "503": {
+            "description": "Plugin, host, database, or admission unavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/captures": {
+      "post": {
+        "summary": "Admin reserves fixed target generations before dispatch; admission is not activation",
+        "responses": {
+          "202": {
+            "description": "Admin reserves fixed target generations before dispatch; admission is not activation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request"
+          },
+          "401": {
+            "description": "Invalid general API credential"
+          },
+          "403": {
+            "description": "Plugin role, raw permission, or ownership denied"
+          },
+          "404": {
+            "description": "Resource absent/expired"
+          },
+          "409": {
+            "description": "Changed retry, stale generation/epoch, missing consumer or overlapping target"
+          },
+          "412": {
+            "description": "Revision mismatch"
+          },
+          "428": {
+            "description": "If-Match required"
+          },
+          "429": {
+            "description": "Bounded quota reached"
+          },
+          "503": {
+            "description": "Plugin, host, database, or admission unavailable"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaptureRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/captures/{id}": {
+      "get": {
+        "summary": "Owner reconciles durable operation metadata",
+        "responses": {
+          "200": {
+            "description": "Owner reconciles durable operation metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request"
+          },
+          "401": {
+            "description": "Invalid general API credential"
+          },
+          "403": {
+            "description": "Plugin role, raw permission, or ownership denied"
+          },
+          "404": {
+            "description": "Resource absent/expired"
+          },
+          "409": {
+            "description": "Changed retry, stale generation/epoch, missing consumer or overlapping target"
+          },
+          "412": {
+            "description": "Revision mismatch"
+          },
+          "428": {
+            "description": "If-Match required"
+          },
+          "429": {
+            "description": "Bounded quota reached"
+          },
+          "503": {
+            "description": "Plugin, host, database, or admission unavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/captures/{id}/stop": {
+      "post": {
+        "summary": "Owner withdraws desired state; reservations remain until terminal ACK or expiry guard",
+        "responses": {
+          "202": {
+            "description": "Owner withdraws desired state; reservations remain until terminal ACK or expiry guard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request"
+          },
+          "401": {
+            "description": "Invalid general API credential"
+          },
+          "403": {
+            "description": "Plugin role, raw permission, or ownership denied"
+          },
+          "404": {
+            "description": "Resource absent/expired"
+          },
+          "409": {
+            "description": "Changed retry, stale generation/epoch, missing consumer or overlapping target"
+          },
+          "412": {
+            "description": "Revision mismatch"
+          },
+          "428": {
+            "description": "If-Match required"
+          },
+          "429": {
+            "description": "Bounded quota reached"
+          },
+          "503": {
+            "description": "Plugin, host, database, or admission unavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\"[1-9][0-9]*\"$"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/metrics": {
+      "get": {
+        "summary": "Reader/admin reads fixed-cardinality in-memory plugin metric aggregates",
+        "responses": {
+          "403": {
+            "description": "Reader/admin required"
+          },
+          "401": {
+            "description": "Invalid general API credential"
+          },
+          "200": {
+            "description": "No telemetry, peer IDs, credentials or domain payloads",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricSnapshot"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Plugin/host unavailable"
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "servers": [
+        {
+          "description": "Private protected plugin service network only; not the public JSON ingress",
+          "url": "http://livecapture-plugin:8090"
+        }
+      ],
+      "get": {
+        "responses": {
+          "401": {
+            "description": "Separate metrics token required; disabled when no token configured"
+          },
+          "200": {
+            "description": "Fixed-cardinality plugin metrics",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Private Prometheus scrape, independent of core host readiness",
+        "security": [
+          {
+            "metricsBearer": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "managementBearer": {
+        "type": "http",
+        "scheme": "bearer"
+      },
+      "metricsBearer": {
+        "scheme": "bearer",
+        "type": "http",
+        "description": "Separate read-only operator metrics secret, never a management/deployment/service credential"
+      }
+    },
+    "schemas": {
+      "Point": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "pipeline",
+          "point"
+        ],
+        "properties": {
+          "pipeline": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "point": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "CatalogPoint": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "pipeline",
+          "point",
+          "signal",
+          "sensitivity"
+        ],
+        "properties": {
+          "pipeline": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "point": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "signal": {
+            "enum": [
+              "traces",
+              "logs",
+              "metrics"
+            ]
+          },
+          "sensitivity": {
+            "enum": [
+              "raw",
+              "redacted"
+            ]
+          }
+        }
+      },
+      "Identity": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "pod",
+          "collector_group",
+          "enabled",
+          "capture_points",
+          "filter_limits"
+        ],
+        "properties": {
+          "cluster": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "namespace": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "pod": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "collector_group": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "collector_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "distribution_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "capture_points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogPoint"
+            },
+            "minItems": 0,
+            "maxItems": 192
+          },
+          "filter_limits": {
+            "$ref": "#/components/schemas/FilterLimits"
+          }
+        }
+      },
+      "FilterLimits": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "The largest filter the Collector compiles; the version 1 limits when it reports none. Lengths count Unicode code points. Admission refuses a larger filter for this Collector.",
+        "required": [
+          "max_conditions",
+          "max_condition_chars",
+          "max_regex_chars"
+        ],
+        "properties": {
+          "max_conditions": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65536
+          },
+          "max_condition_chars": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65536
+          },
+          "max_regex_chars": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65536
+          }
+        }
+      },
+      "Peer": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "generation",
+          "credential_id",
+          "identity",
+          "authority_id",
+          "plugin_instance"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "credential_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Fleet agent credential the Collector presented."
+          },
+          "agent_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$",
+            "description": "Connected fleet agent uniquely linked by credential and pod identity; absent while unlinked or ambiguous."
+          },
+          "identity": {
+            "$ref": "#/components/schemas/Identity"
+          },
+          "authority_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "plugin_instance": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          }
+        }
+      },
+      "Target": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "peer_id",
+          "generation"
+        ],
+        "properties": {
+          "peer_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "TargetOutcome": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "peer_id",
+          "generation",
+          "state"
+        ],
+        "properties": {
+          "peer_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "agent_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "active",
+              "stopping",
+              "completed",
+              "expired",
+              "limit_reached",
+              "failed",
+              "disabled",
+              "unknown"
+            ]
+          },
+          "stats": {
+            "$ref": "#/components/schemas/TargetStats"
+          }
+        }
+      },
+      "TargetStats": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "The Collector's last reported counters for this target's session. Absent until the first report; live while the operation runs and saved with each state change.",
+        "required": [
+          "selected",
+          "enqueued_records",
+          "enqueued_bytes",
+          "filter_errors"
+        ],
+        "properties": {
+          "selected": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "enqueued_records": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "enqueued_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "filter_errors": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "dropped": {
+            "type": "object",
+            "description": "Nonzero dropped records by reason, such as queue_full, rate_bytes, rate_records, record_size, sampling, stopping, delivery or budget.",
+            "maxProperties": 16,
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      },
+      "Filter": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": {
+          "resource": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 4096
+            },
+            "minItems": 0,
+            "maxItems": 32
+          },
+          "traces": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [],
+            "properties": {
+              "span": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 4096
+                },
+                "minItems": 0,
+                "maxItems": 32
+              }
+            }
+          },
+          "logs": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [],
+            "properties": {
+              "log": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 4096
+                },
+                "minItems": 0,
+                "maxItems": 32
+              }
+            }
+          },
+          "metrics": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [],
+            "properties": {
+              "metric": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 4096
+                },
+                "minItems": 0,
+                "maxItems": 32
+              },
+              "datapoint": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 4096
+                },
+                "minItems": 0,
+                "maxItems": 32
+              }
+            }
+          }
+        },
+        "description": "At most 32 conditions per context, 4096 bytes per condition and 16 KiB of total condition text. Collector validates OTTL syntax before acknowledging active."
+      },
+      "Sampling": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "rate"
+        ],
+        "properties": {
+          "rate": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "mode": {
+            "enum": [
+              "",
+              "hash",
+              "random"
+            ]
+          }
+        }
+      },
+      "Limits": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": {
+          "bytes_per_second": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1048576
+          },
+          "records_per_second": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 5000
+          },
+          "total_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 16777216
+          },
+          "total_records": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "record_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65536
+          }
+        }
+      },
+      "CaptureRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "channel_id",
+          "capture_points",
+          "signals",
+          "expires_at",
+          "authority_id",
+          "plugin_instance"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "channel_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Target"
+            },
+            "minItems": 1,
+            "maxItems": 16
+          },
+          "agents": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$"
+            },
+            "minItems": 1,
+            "maxItems": 16,
+            "uniqueItems": true
+          },
+          "selector": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "description": "Fleet attribute selector over connected agents."
+          },
+          "group_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$",
+            "description": "Fleet collector group ID."
+          },
+          "capture_points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Point"
+            },
+            "minItems": 1,
+            "maxItems": 64
+          },
+          "signals": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 3,
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "traces",
+                "logs",
+                "metrics"
+              ]
+            }
+          },
+          "filter": {
+            "$ref": "#/components/schemas/Filter"
+          },
+          "sampling": {
+            "$ref": "#/components/schemas/Sampling"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/Limits"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "authority_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "plugin_instance": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          }
+        },
+        "description": "Exactly one of targets, agents, selector or group_id. Agents must each have one linked peer; selector and group targets admit the linked peers able to serve the request (1-16), resolved through the fleet host."
+      },
+      "Operation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "state",
+          "revision",
+          "expires_at",
+          "targets",
+          "authority_id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "state": {
+            "enum": [
+              "starting",
+              "active",
+              "stopping",
+              "completed",
+              "stopped",
+              "failed",
+              "expired",
+              "interrupted"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TargetOutcome"
+            },
+            "minItems": 1,
+            "maxItems": 16
+          },
+          "authority_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "acting_for": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id"
+            ],
+            "description": "The user the owning fleet credential acted for, from fleet's X-Fleet-Acting-* headers on create. Attribution only; it grants nothing.",
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "name": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "request_id": {
+                "type": "string",
+                "maxLength": 128
+              }
+            }
+          }
+        }
+      },
+      "ChannelRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expires_at"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Channel": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "expires_at",
+          "heartbeat_seconds",
+          "authority_id",
+          "plugin_instance"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "heartbeat_seconds": {
+            "const": 5
+          },
+          "authority_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "plugin_instance": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          }
+        }
+      },
+      "Envelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "batch_id",
+          "capture_id",
+          "peer_id",
+          "generation",
+          "signal",
+          "records",
+          "encoding",
+          "data",
+          "observed_at",
+          "authority_id",
+          "plugin_instance",
+          "plugin_epoch"
+        ],
+        "properties": {
+          "batch_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "capture_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "peer_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "signal": {
+            "enum": [
+              "traces",
+              "logs",
+              "metrics"
+            ]
+          },
+          "records": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "encoding": {
+            "const": "otlp-protobuf"
+          },
+          "data": {
+            "type": "string",
+            "contentEncoding": "base64",
+            "description": "Standard OTLP ExportRequest protobuf for the declared signal. Memory-only, at most 256 KiB decoded."
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "authority_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "plugin_instance": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "plugin_epoch": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          }
+        }
+      },
+      "Ack": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "batch_id",
+          "accepted_records"
+        ],
+        "properties": {
+          "batch_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "accepted_records": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "description": "Sanitized plugin error {\"error\":{\"code\",\"message\"}}; no request, credential or telemetry content. The code is collector_busy when a requested Collector, or every free candidate of a group or selector, serves another capture (HTTP 409); otherwise capture_request_refused."
+      },
+      "DurationSnapshot": {
+        "required": [
+          "count",
+          "sum_seconds",
+          "buckets"
+        ],
+        "type": "object",
+        "properties": {
+          "sum_seconds": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "buckets": {
+            "type": "array",
+            "maxItems": 12,
+            "items": {
+              "required": [
+                "le",
+                "count"
+              ],
+              "type": "object",
+              "properties": {
+                "le": {
+                  "type": "number"
+                },
+                "count": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "MetricSnapshot": {
+        "required": [
+          "gauges",
+          "counters",
+          "durations",
+          "limits"
+        ],
+        "type": "object",
+        "properties": {
+          "gauges": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            }
+          },
+          "limits": {
+            "type": "object",
+            "additionalProperties": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "durations": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DurationSnapshot"
+            }
+          },
+          "counters": {
+            "type": "object",
+            "additionalProperties": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "security": [
+    {
+      "managementBearer": []
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+linea team server {{ include "linea.fullname" . }} is installed.
+{{- $url := "http://127.0.0.1:7070" }}
+{{- if .Values.ingress.enabled }}
+{{- /* The OIDC redirect URL is the address people reach, with any port the
+ingress host is mapped to; without it, the ingress host. */}}
+{{- $url = printf "%s://%s" (ternary "https" "http" (not (empty .Values.ingress.tls.secretName))) .Values.ingress.host }}
+{{- with ((.Values.config.authentication).oidc).redirect_url }}
+{{- $u := urlParse . }}
+{{- $url = printf "%s://%s" $u.scheme $u.host }}
+{{- end }}
+
+Open {{ $url }} to sign in, or from the CLI:
+
+  linea login --server {{ $url }}{{ if .Values.server.caSecret }} --ca <the CA in {{ .Values.server.caSecret }}>{{ end }}
+{{- else }}
+
+Reach it with a port-forward:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "linea.fullname" . }} 7070:{{ .Values.service.port }}
+{{- end }}
+{{- if .Values.worker.enabled }}
+
+Runs on {{ .Values.worker.name }} go to its dedicated workers: {{ .Values.worker.replicas }} dialing {{ include "linea.serverURL" . }}, {{ .Values.worker.capacity }} request(s) at a time each. Make it the default runtime, the one requests run on when they name none:
+
+  linea runtime default {{ .Values.worker.name }} --server {{ $url }}
+{{- end }}
+{{- if .Values.pool.enabled }}
+
+The worker pool runs the built-in runtime and any runtime the server builds: {{ .Values.pool.replicas }} pod(s) dialing {{ include "linea.serverURL" . }}, {{ .Values.pool.capacity }} request(s) at a time each. Nothing needs registering: requests that name no runtime run on the default runtime, built-in until the team chooses another.
+{{- if and .Values.builder.enabled (gt (int .Values.builder.replicas) 0) }}
+
+For another Collector release or components, build a runtime from a checkout of the linea repository, and make it the default if you like:
+
+  linea runtime build --server {{ $url }} --name mine --manifest mine.yaml
+  linea runtime default mine --server {{ $url }}
+{{- end }}
+{{- end }}
+{{- if include "linea.acceptsWorkers" . }}
+
+More workers join with the registration token:
+
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "linea.workerSecret" . }} -o jsonpath='{.data.token}' | base64 -d
+{{- end }}
+{{- if include "linea.acceptsBuilds" . }}
+
+More builders join with the build token:
+
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "linea.builderSecret" . }} -o jsonpath='{.data.token}' | base64 -d
+{{- end }}

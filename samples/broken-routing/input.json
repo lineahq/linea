@@ -1,0 +1,30 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          { "key": "service.name", "value": { "stringValue": "payments" } }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": { "name": "payments.log" },
+          "logRecords": [
+            {
+              "timeUnixNano": "1760000000000000000",
+              "severityNumber": 17,
+              "severityText": "ERROR",
+              "body": { "stringValue": "card authorization failed" }
+            },
+            {
+              "timeUnixNano": "1760000001000000000",
+              "severityNumber": 9,
+              "severityText": "INFO",
+              "body": { "stringValue": "payment accepted" }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

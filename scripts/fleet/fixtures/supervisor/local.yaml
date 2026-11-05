@@ -1,0 +1,9 @@
+receivers:
+  nop:
+exporters:
+  nop:
+service:
+  pipelines:
+    traces/local:
+      receivers: [nop]
+      exporters: [nop]

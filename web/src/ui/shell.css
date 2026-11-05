@@ -1,0 +1,15 @@
+/* App-level additions to the design system (ds/components.css). */
+html, body, #root { height: 100%; }
+body { margin: 0; background: var(--bg-canvas); }
+.od-root { height: 100%; }
+.od-root .od-shell { height: 100%; }
+.od-main { min-height: 0; overflow: hidden; }
+.od-rail__settings { position: relative; display: contents; }
+.od-rail button.od-rail__item { border: 0; background: transparent; cursor: pointer; font: inherit; }
+.od-rail__project { max-width: calc(var(--size-rail) - 8px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.od-rail__menu { position: fixed; left: calc(var(--size-rail) + 4px); bottom: 12px; min-width: 180px; z-index: 50; }
+.od-rail__who { padding: 2px 8px 6px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 13px/18px var(--font-sans); color: var(--fg); }
+.od-signin { max-width: 440px; margin: 15vh auto 0; padding: 0 16px; display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
+.od-signin h1 { margin: 0; font: 600 20px/28px var(--font-sans); }
+.od-signin p { margin: 0; color: var(--fg-muted); }
+.audit-filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }

@@ -1,0 +1,31 @@
+# The forward connector joins two logs pipelines; the second drops info
+# logs and exports over OTLP/HTTP.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  filter/info:
+    error_mode: ignore
+    logs:
+      log_record:
+        - severity_number < SEVERITY_NUMBER_WARN
+
+connectors:
+  forward:
+
+exporters:
+  otlphttp:
+    endpoint: https://backend.example.invalid:4318
+
+service:
+  pipelines:
+    logs/in:
+      receivers: [otlp]
+      exporters: [forward]
+    logs/out:
+      receivers: [forward]
+      processors: [filter/info]
+      exporters: [otlphttp]

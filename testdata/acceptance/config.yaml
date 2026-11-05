@@ -1,0 +1,64 @@
+# Acceptance suite configuration. Each processor exists for specific
+# acceptance tests; see internal/debugger/engine/acceptance_test.go. Endpoints are
+# environment references so the network-isolation tests can point them at
+# local listeners without changing this file.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: ${env:RECEIVER_ENDPOINT:-127.0.0.1:4317}
+
+processors:
+  # Adds an attribute, has a condition that is false for every span, and a
+  # statement that fails on every span, under error_mode ignore.
+  transform/add:
+    error_mode: ignore
+    trace_statements:
+      - context: span
+        statements:
+          - set(span.attributes["stage"], "add")
+          - set(span.attributes["vip"], true) where span.attributes["customer.tier"] == "gold"
+          - merge_maps(span.attributes, span.attributes["http.route"], "insert")
+  # Drops the health check span.
+  filter/health:
+    error_mode: ignore
+    traces:
+      span:
+        - attributes["http.route"] == "/health"
+  # Changes an attribute and deletes one; with transform/add, each change
+  # is attributed to its stage.
+  transform/change:
+    trace_statements:
+      - context: span
+        statements:
+          - set(span.attributes["http.method"], "POST") where span.attributes["http.method"] == "GET"
+          - delete_key(span.attributes, "user.password")
+  # Follows one log record through every boundary.
+  attributes/logs:
+    actions:
+      - key: checked
+        value: true
+        action: insert
+  # Delays output until shutdown.
+  batch:
+    timeout: 1h
+
+exporters:
+  # The original OTLP exporter stays configured.
+  otlp/backend:
+    endpoint: ${env:BACKEND_ENDPOINT:-collector.example.invalid:4317}
+    tls:
+      insecure: true
+    headers:
+      authorization: Bearer acceptance-secret-token
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [transform/add, filter/health, transform/change, batch]
+      exporters: [otlp/backend]
+    logs:
+      receivers: [otlp]
+      processors: [attributes/logs, batch]
+      exporters: [otlp/backend]

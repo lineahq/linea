@@ -1,0 +1,43 @@
+{
+  "resourceMetrics": [
+    {
+      "resource": {
+        "attributes": [
+          { "key": "service.name", "value": { "stringValue": "checkout" } }
+        ]
+      },
+      "scopeMetrics": [
+        {
+          "scope": { "name": "checkout.metrics" },
+          "metrics": [
+            {
+              "name": "orders",
+              "sum": {
+                "aggregationTemporality": 1,
+                "isMonotonic": true,
+                "dataPoints": [
+                  {
+                    "startTimeUnixNano": "1760000000000000000",
+                    "timeUnixNano": "1760000010000000000",
+                    "asInt": "3",
+                    "attributes": [
+                      { "key": "region", "value": { "stringValue": "eu" } }
+                    ]
+                  },
+                  {
+                    "startTimeUnixNano": "1760000010000000000",
+                    "timeUnixNano": "1760000020000000000",
+                    "asInt": "4",
+                    "attributes": [
+                      { "key": "region", "value": { "stringValue": "eu" } }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

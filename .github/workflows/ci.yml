@@ -1,0 +1,30 @@
+name: CI
+# Pull requests only: a plain push builds nothing. workflow_dispatch adds a
+# manual "Run workflow" button in the Actions tab for any branch.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# CI only builds the product images, the ones release.yml publishes. Tests
+# and the test-only images are checked locally: see "Before a release" in
+# docs/internals/development.md.
+jobs:
+  images:
+    name: Image (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - linea-server
+          - linea-worker
+          - linea-builder
+          - linea-fleet
+          - linea-fleet-livecapture
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - name: Build
+        run: docker build --file deploy/docker/${{ matrix.image }}.Dockerfile --tag ${{ matrix.image }}:ci .

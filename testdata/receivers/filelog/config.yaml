@@ -1,0 +1,24 @@
+# Kubernetes container logs read by the filelog receiver: the container
+# parser takes the namespace, pod and container from the file path.
+receivers:
+  filelog:
+    include: [/var/log/pods/*/*/*.log]
+    exclude: [/var/log/pods/*/otel-collector/*.log]
+    include_file_path: true
+    operators:
+      - type: container
+        id: container-parser
+
+processors:
+  batch: {}
+
+exporters:
+  otlp/backend:
+    endpoint: backend.example.com:4317
+
+service:
+  pipelines:
+    logs:
+      receivers: [filelog]
+      processors: [batch]
+      exporters: [otlp/backend]

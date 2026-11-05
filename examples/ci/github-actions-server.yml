@@ -1,0 +1,110 @@
+# Collector regression checks on a shared team server (see docs/debugger/ci.md).
+#
+# Copy this file to .github/workflows/ in the repository that holds your
+# Collector configuration, then set the paths below. Unlike
+# github-actions.yml, the runs execute on your team server's workers: the
+# runner only installs the linea CLI, sends the configuration and scenarios
+# (with the files they name, inlined) and waits for the reports.
+#
+# Set in the repository (Settings, Secrets and variables, Actions):
+#   vars.LINEA_SERVER    the server's https URL, such as https://linea.example.com
+#   secrets.LINEA_TOKEN  an API token of a service principal that may submit
+#                        runs, made with `linea token create --label ci --service ci`
+#
+# The runner must reach the server. The token is sent only over https (or to a
+# loopback URL), and the CLI never prints it.
+name: collector-regression-server
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  # The linea release to install; pin one, and update it deliberately. An
+  # exported scenario reproduces its source run's outcome only with the same
+  # release.
+  LINEA_VERSION: 0.1.0
+  # The Collector configuration, the regression scenarios and the scenario
+  # both configurations of a pull request run.
+  CONFIG: collector/config.yaml
+  TESTS: collector/tests
+  SCENARIO: collector/tests/regression.scenario.yaml
+  # Optional: a runtime registered on the server (linea runtime register),
+  # such as the one built from your OCB manifest. Empty uses the server's
+  # default runtime.
+  LINEA_RUNTIME: ""
+  LINEA_SERVER: ${{ vars.LINEA_SERVER }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install linea
+        working-directory: ${{ runner.temp }}
+        run: |
+          name="linea_${LINEA_VERSION}_linux_amd64"
+          base="https://github.com/lineahq/linea/releases/download/v$LINEA_VERSION"
+          curl -fsSL -O "$base/$name.tar.gz" -O "$base/SHA256SUMS"
+          grep -E " [ *]$name.tar.gz$" SHA256SUMS | sha256sum -c -
+          tar -xzf "$name.tar.gz"
+          mv "$name/linea" linea
+      - name: Run the regression scenarios on the server
+        env:
+          LINEA_TOKEN: ${{ secrets.LINEA_TOKEN }}
+        # Exit codes: 0 pass, 1 error, 3 fail, 4 inconclusive. Any of 1, 3
+        # and 4 fails the job. The server reads no host environment
+        # variable, so --import-env is not used: declare the values a
+        # scenario needs in the scenario.
+        run: |
+          LINEA="$RUNNER_TEMP/linea"
+          "$LINEA" test --server "$LINEA_SERVER" \
+            ${LINEA_RUNTIME:+--runtime "$LINEA_RUNTIME"} \
+            --config "$CONFIG" --tests "$TESTS" --report junit.xml
+      - name: Keep the JUnit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: collector-regression-junit
+          path: junit.xml
+
+  diff:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install linea
+        working-directory: ${{ runner.temp }}
+        run: |
+          name="linea_${LINEA_VERSION}_linux_amd64"
+          base="https://github.com/lineahq/linea/releases/download/v$LINEA_VERSION"
+          curl -fsSL -O "$base/$name.tar.gz" -O "$base/SHA256SUMS"
+          grep -E " [ *]$name.tar.gz$" SHA256SUMS | sha256sum -c -
+          tar -xzf "$name.tar.gz"
+          mv "$name/linea" linea
+      - name: Compare the base and pull request configurations on the server
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          LINEA_TOKEN: ${{ secrets.LINEA_TOKEN }}
+        # Exit codes: 0 same, 2 different, 4 inconclusive, 1 error. A pull
+        # request that changes behavior is expected to be different: the
+        # summary shows how, and only an inconclusive comparison or an error
+        # fails the job.
+        run: |
+          LINEA="$RUNNER_TEMP/linea"
+          git show "origin/$BASE_REF:$CONFIG" > "$RUNNER_TEMP/base-config.yaml"
+          set +e
+          "$LINEA" diff --server "$LINEA_SERVER" \
+            ${LINEA_RUNTIME:+--runtime "$LINEA_RUNTIME"} \
+            --before "$RUNNER_TEMP/base-config.yaml" --after "$CONFIG" --scenario "$SCENARIO" --format markdown > comparison.md
+          code=$?
+          set -e
+          cat comparison.md >> "$GITHUB_STEP_SUMMARY"
+          case "$code" in
+            0) echo "The pull request does not change what the exporters receive." ;;
+            2) echo "The pull request changes what the exporters receive; see the job summary." ;;
+            *) echo "The comparison was inconclusive or failed (exit $code)."; exit 1 ;;
+          esac

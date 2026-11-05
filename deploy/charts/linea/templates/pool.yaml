@@ -1,0 +1,141 @@
+{{- if .Values.pool.enabled }}
+{{- $fullname := include "linea.fullname" . -}}
+{{- if .Values.networkPolicy.enabled }}{{ include "linea.checkObjectStorage" . }}{{ end -}}
+# The default worker pool, with the limits of the
+# dedicated worker: a read-only root, user 65534, no capabilities. It dials
+# the server (linea-worker --connect --pool) and listens on no port, so it has
+# no Service. It downloads the runtime binaries the server built through
+# presigned object-storage URLs into /cache and starts them as child
+# processes. /cache is an emptyDir (writable, and executable: the root
+# filesystem stays read-only), bounded by --cache; /tmp is scratch space.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $fullname }}-pool
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-pool
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pool
+spec:
+  replicas: {{ .Values.pool.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "linea.poolSelector" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "linea.poolSelector" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ $fullname }}-pool
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: pool
+          image: "{{ .Values.pool.image.repository }}:{{ .Values.pool.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.pool.image.pullPolicy }}
+          # The image's entrypoint is the worker.
+          args:
+            - --connect={{ include "linea.serverURL" . }}
+            - --pool
+            - --name={{ .Values.pool.name }}
+            - --capacity={{ .Values.pool.capacity }}
+            - --warm={{ .Values.pool.warm }}
+            - --idle={{ .Values.pool.idle }}
+            - --cache={{ .Values.pool.cache.size }}
+            - --cache-dir=/cache
+            {{- if .Values.pool.caSecret }}
+            - --ca-file=/etc/linea/ca/ca.crt
+            {{- end }}
+          env:
+            # No GOMAXPROCS or GOMEMLIMIT: the children inherit the
+            # environment, and the container limits are the bound.
+            - name: LINEA_WORKER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "linea.workerSecret" . }}
+                  key: token
+          resources:
+            {{- toYaml .Values.pool.resources | nindent 12 }}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: cache
+              mountPath: /cache
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.pool.caSecret }}
+            - name: ca
+              mountPath: /etc/linea/ca
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: cache
+          emptyDir:
+            sizeLimit: {{ .Values.pool.cache.volumeSizeLimit }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        {{- if .Values.pool.caSecret }}
+        - name: ca
+          secret:
+            secretName: {{ .Values.pool.caSecret }}
+            items: [{key: {{ .Values.pool.caKey | quote }}, path: ca.crt}]
+        {{- end }}
+      {{- with .Values.pool.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.pool.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.pool.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- if .Values.networkPolicy.enabled }}
+---
+# The pool accepts no connection and reaches only the server, DNS to find it
+# and the object store: a run's Collector exports nowhere outside the pod,
+# and the pool has no route to the module proxy. With worker.serverURL
+# pointing outside the release, allow that egress yourself.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-pool
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "linea.poolSelector" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    {{- include "linea.egressCommon" . | nindent 4 }}
+{{- end }}
+{{- end }}

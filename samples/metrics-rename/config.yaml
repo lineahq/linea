@@ -1,0 +1,34 @@
+# Bring Prometheus-style metrics in line with semantic conventions.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  filter/debug:
+    error_mode: ignore
+    metrics:
+      metric:
+        - IsMatch(name, "^debug_")
+  transform/units:
+    error_mode: ignore
+    metric_statements:
+      - context: datapoint
+        statements:
+          - set(datapoint.value_double, datapoint.value_double / 1000) where metric.name == "http_server_duration_ms"
+      - context: metric
+        statements:
+          - set(metric.unit, "s") where metric.name == "http_server_duration_ms"
+          - set(metric.name, "http.server.request.duration") where metric.name == "http_server_duration_ms"
+
+exporters:
+  otlp/backend:
+    endpoint: backend.example.invalid:4317
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [filter/debug, transform/units]
+      exporters: [otlp/backend]

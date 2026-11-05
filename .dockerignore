@@ -1,0 +1,25 @@
+# Every image builds from the repository root; keep local state, builds and
+# dependencies out of the context.
+.git
+.tools
+.cache
+.artifacts
+.local
+dist
+tmp
+**/node_modules
+web/tsconfig.tsbuildinfo
+internal/debugger/webui/static/app
+internal/debugger/workersrc/static/*.tar.gz
+.linea
+.env
+.env.*
+**/*.pem
+**/*.key
+**/*.p12
+**/*.prof
+*.exe
+*.log
+*.test
+.idea
+.vscode

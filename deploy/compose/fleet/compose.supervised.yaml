@@ -1,0 +1,45 @@
+# Optional config management (M6): the fleet with --config-management and one
+# supervised Collector, the official OpAMP supervisor running the unmodified
+# contrib Collector. Use with compose.yaml:
+#   docker compose -f compose.yaml -f compose.supervised.yaml up -d --wait fleet
+# Create an agent credential with remote_config: true once the fleet runs,
+# then start the Collector with its token (docs/fleet/config-management.md):
+#   LINEA_FLEET_AGENT_TOKEN=... docker compose -f compose.yaml -f compose.supervised.yaml up -d collector
+# With a credential without the opt-in, the Collector only reports.
+services:
+  fleet:
+    command: [--server-id, "${FLEET_SERVER_ID:-local-fleet}", --management-listen, "0.0.0.0:8080", --agent-listen, "0.0.0.0:4320", --allow-insecure-remote, --config-management]
+
+  collector:
+    image: ghcr.io/lineahq/linea-fleet-supervised-collector:0.163.2
+    build:
+      context: ../../..
+      dockerfile: deploy/docker/linea-fleet-supervised-collector.Dockerfile
+    command: [--config, /etc/otelcol/supervisor.yaml]
+    environment:
+      LINEA_FLEET_AGENT_TOKEN: ${LINEA_FLEET_AGENT_TOKEN:-}
+    volumes:
+      - ${FLEET_SUPERVISOR_CONFIG:-./supervisor/supervisor.yaml}:/etc/otelcol/supervisor.yaml:ro
+      - ${FLEET_COLLECTOR_LOCAL_CONFIG:-./supervisor/local.yaml}:/etc/otelcol/local.yaml:ro
+      # Instance UID and the last applied config, kept across restarts.
+      - collector-storage:/home/opampsupervisor
+    networks: [ingress]
+    depends_on:
+      fleet:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: 1
+    mem_limit: 512m
+    pids_limit: 256
+    restart: "no"
+    logging:
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  collector-storage:

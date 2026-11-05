@@ -1,0 +1,47 @@
+# Optional example plugin overlay. From the repository root, after the
+# fleet installation (docs/fleet/deployment.md):
+#
+#   sh scripts/fleet/new-plugin-secrets.sh .local/agent-summary
+#   docker compose -f deploy/compose/fleet/compose.yaml -f examples/fleet-agent-summary-plugin/compose.yaml up -d --wait fleet agent-summary-plugin
+#
+# Relative paths resolve from deploy/compose/fleet (the first file's directory).
+services:
+  fleet:
+    # The base command plus the registration file and the private host listener.
+    command: [--server-id, "${FLEET_SERVER_ID:-local-fleet}", --management-listen, "0.0.0.0:8080", --agent-listen, "0.0.0.0:4320", --allow-insecure-remote, --plugins-config, /etc/linea-fleet/plugins.json, --plugin-listen, "0.0.0.0:8081"]
+    secrets: [summary_host_token, summary_service_token]
+    volumes:
+      - ../../../examples/fleet-agent-summary-plugin/registration.json:/etc/linea-fleet/plugins.json:ro
+    networks: [plugins]
+
+  agent-summary-plugin:
+    image: agent-summary-plugin:dev
+    build:
+      context: ../../..
+      dockerfile: deploy/docker/linea-fleet-agent-summary-plugin.Dockerfile
+    command: [-listen, "0.0.0.0:8090", -host-endpoint, "http://fleet:8081", -allow-insecure-host,
+              -host-token-file, /run/secrets/summary_host_token, -service-token-file, /run/secrets/summary_service_token]
+    environment:
+      GOMAXPROCS: "2"
+      GOMEMLIMIT: 48MiB
+    secrets: [summary_host_token, summary_service_token]
+    # Only fleet reaches the plugin; it publishes no port.
+    networks: [plugins]
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: 0.5
+    mem_limit: 64m
+    pids_limit: 64
+    restart: "no"
+
+secrets:
+  summary_host_token:
+    file: ${FLEET_SUMMARY_SECRET_DIR:-../../../.local/agent-summary}/host_token
+  summary_service_token:
+    file: ${FLEET_SUMMARY_SECRET_DIR:-../../../.local/agent-summary}/service_token
+
+networks:
+  plugins:
+    internal: true

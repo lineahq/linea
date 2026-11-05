@@ -1,0 +1,17 @@
+# Two of the three spans leave, named after their route.
+version: 1
+name: traces-redact
+inputs:
+  - receiver: otlp
+    file: input.json
+assertions:
+  - name: the health check is dropped
+    target: {exporter: otlp/backend, signal: traces}
+    count: {equals: 2}
+  - name: the redaction drops nothing
+    target: {processor: transform/redact, signal: traces}
+    dropped: {equals: 0}
+  - name: URLs are kept
+    target: {exporter: otlp/backend, signal: traces}
+    attributes:
+      present: [url.full, http.route]

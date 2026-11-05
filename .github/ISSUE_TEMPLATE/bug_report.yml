@@ -1,0 +1,45 @@
+name: Bug report
+description: Something does not behave as documented.
+labels: [bug]
+body:
+  - type: dropdown
+    id: part
+    attributes:
+      label: Part
+      options:
+        - Debugger (CLI)
+        - Debugger (web client)
+        - Debugger (HTTP API or MCP)
+        - Fleet server
+        - Fleet plugin
+        - Collector components (capture processor, livecapture extension)
+        - Documentation
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `linea version`, the image tag, or the commit.
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: >-
+        The smallest Collector configuration, scenario or fixture that shows it,
+        and the command you ran. Remove credentials, endpoints and real
+        telemetry before you paste anything.
+      render: yaml
+  - type: textarea
+    id: output
+    attributes:
+      label: Output or logs
+      render: text

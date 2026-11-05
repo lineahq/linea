@@ -1,0 +1,183 @@
+{
+  "lineage": [
+    {
+      "id": "1:resource[0].scope[0].log_record[0]",
+      "signal": "logs",
+      "receiver": "otlp",
+      "name": "request",
+      "hops": [
+        {
+          "parent": -1,
+          "seq": 1,
+          "kind": "input.injected",
+          "component": "otlp",
+          "ref": "resource[0].scope[0].log_record[0]"
+        },
+        {
+          "parent": 0,
+          "seq": 2,
+          "kind": "stage.input",
+          "component": "batch",
+          "pipeline": "logs",
+          "ref": "resource[0].scope[0].log_record[0]",
+          "end": "unresolved",
+          "note": "no output record matches it with confidence; it may have been changed, merged or removed"
+        }
+      ],
+      "stops": [
+        {
+          "component": "batch",
+          "pipeline": "logs",
+          "hop": 1,
+          "end": "unresolved"
+        }
+      ]
+    },
+    {
+      "id": "1:resource[0].scope[0].log_record[1]",
+      "signal": "logs",
+      "receiver": "otlp",
+      "name": "request",
+      "hops": [
+        {
+          "parent": -1,
+          "seq": 1,
+          "kind": "input.injected",
+          "component": "otlp",
+          "ref": "resource[0].scope[0].log_record[1]"
+        },
+        {
+          "parent": 0,
+          "seq": 2,
+          "kind": "stage.input",
+          "component": "batch",
+          "pipeline": "logs",
+          "ref": "resource[0].scope[0].log_record[1]",
+          "end": "unresolved",
+          "note": "no output record matches it with confidence; it may have been changed, merged or removed"
+        }
+      ],
+      "stops": [
+        {
+          "component": "batch",
+          "pipeline": "logs",
+          "hop": 1,
+          "end": "unresolved"
+        }
+      ]
+    },
+    {
+      "id": "3:resource[0].scope[0].log_record[0]",
+      "signal": "logs",
+      "receiver": "otlp",
+      "name": "request",
+      "hops": [
+        {
+          "parent": -1,
+          "seq": 3,
+          "kind": "input.injected",
+          "component": "otlp",
+          "ref": "resource[0].scope[0].log_record[0]"
+        },
+        {
+          "parent": 0,
+          "seq": 4,
+          "kind": "stage.input",
+          "component": "batch",
+          "pipeline": "logs",
+          "ref": "resource[0].scope[0].log_record[0]",
+          "end": "unresolved",
+          "note": "no output record matches it with confidence; it may have been changed, merged or removed"
+        }
+      ],
+      "stops": [
+        {
+          "component": "batch",
+          "pipeline": "logs",
+          "hop": 1,
+          "end": "unresolved"
+        }
+      ]
+    },
+    {
+      "id": "3:resource[0].scope[0].log_record[1]",
+      "signal": "logs",
+      "receiver": "otlp",
+      "name": "request",
+      "hops": [
+        {
+          "parent": -1,
+          "seq": 3,
+          "kind": "input.injected",
+          "component": "otlp",
+          "ref": "resource[0].scope[0].log_record[1]"
+        },
+        {
+          "parent": 0,
+          "seq": 4,
+          "kind": "stage.input",
+          "component": "batch",
+          "pipeline": "logs",
+          "ref": "resource[0].scope[0].log_record[1]",
+          "end": "unresolved",
+          "note": "no output record matches it with confidence; it may have been changed, merged or removed"
+        }
+      ],
+      "stops": [
+        {
+          "component": "batch",
+          "pipeline": "logs",
+          "hop": 1,
+          "end": "unresolved"
+        }
+      ]
+    }
+  ],
+  "stages": [
+    {
+      "component": "batch",
+      "pipeline": "logs",
+      "kind": "processor",
+      "type": "batch",
+      "signal": "logs",
+      "emission": "asynchronous",
+      "inputs": [
+        {
+          "seq": 2,
+          "outcome": "deferred"
+        },
+        {
+          "seq": 4,
+          "outcome": "deferred"
+        }
+      ],
+      "emissions": [
+        5
+      ],
+      "reconciliation": {
+        "identity": "content",
+        "before": {
+          "resources": 2,
+          "scopes": 2,
+          "items": 4
+        },
+        "after": {
+          "resources": 2,
+          "scopes": 2,
+          "items": 4
+        },
+        "matching": {
+          "object": 0,
+          "exact": 0,
+          "high": 0,
+          "medium": 0,
+          "unmatched_before": 4,
+          "unmatched_after": 4
+        },
+        "unresolved": [
+          "4 record(s) before and 4 after could not be matched; they may have been changed, removed or added"
+        ]
+      }
+    }
+  ]
+}

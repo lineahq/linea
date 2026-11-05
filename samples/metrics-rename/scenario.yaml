@@ -1,0 +1,13 @@
+# The debug metric is dropped; the duration is renamed and converted.
+version: 1
+name: metrics-rename
+inputs:
+  - receiver: otlp
+    file: input.json
+assertions:
+  - name: three data points remain
+    target: {exporter: otlp/backend, signal: metrics}
+    count: {equals: 3}
+  - name: the debug metric is dropped
+    target: {processor: filter/debug, signal: metrics}
+    dropped: {equals: 1}

@@ -1,0 +1,24 @@
+# Masks e-mail addresses in span attributes and keeps every key.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  redaction:
+    allow_all_keys: true
+    blocked_values:
+      - '[a-z]+@example\.com'
+    summary: info
+
+exporters:
+  otlp:
+    endpoint: backend.example.invalid:4317
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [redaction]
+      exporters: [otlp]

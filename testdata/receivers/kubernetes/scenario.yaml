@@ -1,0 +1,33 @@
+version: 1
+name: pod-enrichment
+mocks:
+  kubernetes:
+    files: [cluster.yaml]
+inputs:
+  # Sent from the checkout pod: associated by the connection's address.
+  - client_address: 10.42.0.17
+    data:
+      resourceSpans:
+        - resource:
+            attributes:
+              - {key: service.name, value: {stringValue: checkout}}
+          scopeSpans:
+            - spans:
+                - traceId: 5b8efff798038103d269b633813fc60c
+                  spanId: eee19b7ec3c1b174
+                  name: POST /orders
+                  kind: 2
+                  startTimeUnixNano: "1791626400000000000"
+                  endTimeUnixNano: "1791626400120000000"
+assertions:
+  - target: {exporter: otlp/backend, signal: traces}
+    count: {equals: 1}
+  - target: {exporter: otlp/backend, signal: traces}
+    resource_attributes:
+      equals:
+        k8s.pod.name: checkout-7d9f8b6c4-x2x9q
+        k8s.namespace.name: shop
+        k8s.deployment.name: checkout
+        k8s.node.name: worker-2
+        app.component: api
+        team: payments

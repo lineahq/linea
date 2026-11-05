@@ -1,0 +1,16 @@
+# Local config of the second supervised Collector in the two-wave phase: it
+# already binds the OTLP gRPC port that port.yaml binds again, so that
+# managed config crashes only this Collector.
+receivers:
+  nop:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+exporters:
+  nop:
+service:
+  pipelines:
+    traces/local:
+      receivers: [nop, otlp]
+      exporters: [nop]

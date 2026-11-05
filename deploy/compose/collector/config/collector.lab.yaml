@@ -1,0 +1,53 @@
+# Local synthetic test lab only. Its helper shares this container's loopback.
+extensions:
+  livecapture:
+    enabled: true
+    environment: development
+    collector_group: testlab
+    pod: lab-collector
+    cluster: local-docker
+    local_control:
+      enabled: true
+      endpoint: 127.0.0.1:17777
+      allow_raw: true
+    delivery:
+      endpoint: 127.0.0.1:14317
+      tls:
+        insecure: true
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 127.0.0.1:4317
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 128
+    spike_limit_mib: 32
+  capture/ingress:
+    sensitivity: raw
+  capture/egress:
+    sensitivity: redacted
+  batch:
+    timeout: 1s
+exporters:
+  debug:
+    verbosity: basic
+service:
+  extensions: [livecapture]
+  telemetry:
+    metrics:
+      level: none
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, capture/ingress, capture/egress, batch]
+      exporters: [debug]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, capture/ingress, capture/egress, batch]
+      exporters: [debug]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, capture/ingress, capture/egress, batch]
+      exporters: [debug]

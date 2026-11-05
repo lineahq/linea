@@ -1,0 +1,16 @@
+# Trace scenario: replays the trace fixture through
+# config.yaml with a controlled environment.
+version: 1
+name: checkout-traces
+
+inputs:
+  - receiver: otlp
+    signal: traces
+    file: traces.json
+    format: otlp-json
+
+environment:
+  CHECKOUT_DEPLOYMENT_ENV: scenario
+
+execution:
+  timeout: 30s

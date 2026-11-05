@@ -1,0 +1,293 @@
+{{- $fullname := include "linea.fullname" . -}}
+{{- $tls := .Values.server.tls.secretName -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  # Instances share the run queue, events and sign-ins through PostgreSQL: a
+  # rollout replaces them one at a time.
+  replicas: {{ .Values.server.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "linea.serverSelector" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "linea.serverSelector" . | nindent 8 }}
+      annotations:
+        # The server config is read at startup; a change restarts the server.
+        checksum/config: {{ include "linea.serverConfig" . | sha256sum }}
+    spec:
+      serviceAccountName: {{ $fullname }}
+      automountServiceAccountToken: false
+      # The drain, handing unfinished runs back and the HTTP shutdown.
+      terminationGracePeriodSeconds: {{ add .Values.server.drainSeconds 20 }}
+      {{- with .Values.server.hostAliases }}
+      hostAliases:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: server
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --config=/etc/linea/config/config.yaml
+            - --addr=0.0.0.0:7070
+            - --drain-timeout={{ .Values.server.drainSeconds }}s
+            {{- if include "linea.serverMetrics" . }}
+            - --metrics-listen=0.0.0.0:{{ .Values.server.metrics.port }}
+            {{- end }}
+            {{- if $tls }}
+            - --tls-cert-file=/etc/linea/tls/tls.crt
+            - --tls-key-file=/etc/linea/tls/tls.key
+            {{- else }}
+            # TLS ends at the ingress in front of the server.
+            - --allow-http
+            {{- end }}
+            {{- if .Values.server.mcp }}
+            - --mcp
+            {{- end }}
+            {{- if .Values.fleet.url }}
+            - --fleet-url={{ .Values.fleet.url }}
+            - --fleet-token-file=/etc/linea/fleet/token
+            {{- if .Values.fleet.allowHTTP }}
+            - --fleet-allow-http
+            {{- end }}
+            {{- end }}
+            {{- range .Values.server.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          env:
+            # Nothing is kept in a home directory; point it at scratch space.
+            - name: HOME
+              value: /tmp
+            {{- if .Values.server.caSecret }}
+            # Go reads every file in SSL_CERT_DIR besides its default bundle,
+            # so the private CA adds to the system roots.
+            - name: SSL_CERT_DIR
+              value: /etc/linea/ca
+            {{- end }}
+            {{- with .Values.server.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 7070
+            {{- if include "linea.serverMetrics" . }}
+            - name: metrics
+              containerPort: {{ .Values.server.metrics.port }}
+            {{- end }}
+          # Every route but the web client's assets needs a credential, so
+          # the probes check that the server accepts connections.
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 30
+            failureThreshold: 4
+          resources:
+            {{- toYaml .Values.server.resources | nindent 12 }}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/linea/config
+              readOnly: true
+            - name: store
+              mountPath: /etc/linea/store
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            {{- if $tls }}
+            - name: tls
+              mountPath: /etc/linea/tls
+              readOnly: true
+            {{- end }}
+            {{- if .Values.server.caSecret }}
+            - name: ca
+              mountPath: /etc/linea/ca
+              readOnly: true
+            {{- end }}
+            {{- if .Values.fleet.url }}
+            - name: fleet
+              mountPath: /etc/linea/fleet
+              readOnly: true
+            {{- end }}
+            {{- if include "linea.hasOIDCSecret" . }}
+            - name: oidc
+              mountPath: /etc/linea/oidc
+              readOnly: true
+            {{- end }}
+            {{- if include "linea.acceptsWorkers" . }}
+            - name: worker-token
+              mountPath: /etc/linea/worker-token
+              readOnly: true
+            {{- end }}
+            {{- if include "linea.acceptsBuilds" . }}
+            - name: builder-token
+              mountPath: /etc/linea/builder-token
+              readOnly: true
+            {{- end }}
+            {{- with .Values.server.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $fullname }}-config
+        - name: store
+          secret:
+            secretName: {{ include "linea.storeSecret" . }}
+            items:
+              - {key: database-url, path: database-url}
+              - {key: access-key, path: access-key}
+              - {key: secret-key, path: secret-key}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        {{- if $tls }}
+        - name: tls
+          secret:
+            secretName: {{ $tls }}
+        {{- end }}
+        {{- if .Values.server.caSecret }}
+        - name: ca
+          secret:
+            secretName: {{ .Values.server.caSecret }}
+            items: [{key: {{ .Values.server.caKey | quote }}, path: ca.crt}]
+        {{- end }}
+        {{- if .Values.fleet.url }}
+        - name: fleet
+          secret:
+            secretName: {{ include "linea.fleetSecret" . }}
+            items: [{key: token, path: token}]
+        {{- end }}
+        {{- if include "linea.hasOIDCSecret" . }}
+        - name: oidc
+          secret:
+            secretName: {{ include "linea.oidcSecret" . }}
+            items: [{key: client-secret, path: client-secret}]
+        {{- end }}
+        {{- if include "linea.acceptsWorkers" . }}
+        - name: worker-token
+          secret:
+            secretName: {{ include "linea.workerSecret" . }}
+            items: [{key: token, path: token}]
+        {{- end }}
+        {{- if include "linea.acceptsBuilds" . }}
+        - name: builder-token
+          secret:
+            secretName: {{ include "linea.builderSecret" . }}
+            items: [{key: token, path: token}]
+        {{- end }}
+        {{- with .Values.server.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.server.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.server.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.server.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "linea.serverSelector" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+{{- if include "linea.serverMetrics" . }}
+---
+# The build metrics: counts only, without credentials, apart
+# from the API Service and never behind the ingress. Every instance reports
+# the same queue, so any one answers.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-metrics
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "linea.serverSelector" . | nindent 4 }}
+  ports:
+    - name: metrics
+      port: {{ .Values.server.metrics.port }}
+      targetPort: metrics
+{{- if .Values.networkPolicy.enabled }}
+---
+# Admits the metrics port only from server.metrics.allowFrom. The API port
+# stays open to every client, as without this policy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-server
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "linea.serverSelector" . | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - port: http
+    {{- with .Values.server.metrics.allowFrom }}
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - port: metrics
+    {{- end }}
+{{- end }}
+{{- end }}

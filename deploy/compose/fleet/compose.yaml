@@ -1,0 +1,121 @@
+name: linea-fleet
+
+x-fleet: &fleet
+  image: ghcr.io/lineahq/linea-fleet:${FLEET_VERSION:-0.1.0}
+  build:
+    context: ../../..
+    dockerfile: deploy/docker/linea-fleet.Dockerfile
+  user: "65532:65532"
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=16m
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  cpus: 2
+  mem_limit: 512m
+  pids_limit: 128
+  environment: &fleet-env
+    GOMAXPROCS: "2"
+    GOMEMLIMIT: 384MiB
+  restart: "no"
+  logging:
+    options:
+      max-size: 10m
+      max-file: "3"
+
+services:
+  postgres:
+    image: postgres:17@sha256:b8faeff7712663c2773a190181e1246e37e364b887611c04658c28b44e2408fe
+    environment:
+      POSTGRES_DB: fleet
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password, migrate_password, runtime_password]
+    volumes:
+      - fleet-data:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/10-fleet.sh:ro
+    networks: [database]
+    cpus: 1
+    mem_limit: 512m
+    pids_limit: 128
+    restart: "no"
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -h 127.0.0.1 -U postgres -d fleet"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    logging:
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  migrate:
+    <<: *fleet
+    profiles: [admin]
+    command: [migrate, --runtime-role, fleet_app]
+    environment:
+      <<: *fleet-env
+      LINEA_FLEET_DATABASE_URL_FILE: /run/secrets/migrate_url
+    secrets: [migrate_url]
+    networks: [database]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  bootstrap:
+    <<: *fleet
+    profiles: [admin]
+    command: [bootstrap, --server-id, "${FLEET_SERVER_ID:-local-fleet}"]
+    environment:
+      <<: *fleet-env
+      LINEA_FLEET_DATABASE_URL_FILE: /run/secrets/runtime_url
+    secrets: [runtime_url]
+    networks: [database]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  fleet:
+    <<: *fleet
+    # Agents are closed gradually over --drain-timeout (20 s) before exit.
+    stop_grace_period: 30s
+    command: [--server-id, "${FLEET_SERVER_ID:-local-fleet}", --management-listen, "0.0.0.0:8080", --agent-listen, "0.0.0.0:4320", --allow-insecure-remote]
+    # 10,000 sessions measured at about 340 MiB; budget 64 KiB per agent.
+    mem_limit: 1g
+    environment:
+      <<: *fleet-env
+      GOMEMLIMIT: 768MiB
+      LINEA_FLEET_DATABASE_URL_FILE: /run/secrets/runtime_url
+    secrets: [runtime_url]
+    ports:
+      - "127.0.0.1:${FLEET_API_PORT:-8080}:8080"
+      - "127.0.0.1:${FLEET_AGENT_PORT:-4320}:4320"
+    networks: [database, ingress]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, /linea-fleet, probe]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+secrets:
+  postgres_password:
+    file: ${FLEET_SECRET_DIR:-../../../.local/deployment}/postgres_password
+  migrate_password:
+    file: ${FLEET_SECRET_DIR:-../../../.local/deployment}/migrate_password
+  runtime_password:
+    file: ${FLEET_SECRET_DIR:-../../../.local/deployment}/runtime_password
+  migrate_url:
+    file: ${FLEET_SECRET_DIR:-../../../.local/deployment}/migrate_url
+  runtime_url:
+    file: ${FLEET_SECRET_DIR:-../../../.local/deployment}/runtime_url
+
+volumes:
+  fleet-data:
+
+networks:
+  database:
+    internal: true
+  ingress:

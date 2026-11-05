@@ -1,0 +1,40 @@
+# Smoke fixture: a reporting Collector whose exporter cannot reach its broker,
+# so OpAMP health carries an unhealthy component. Never use as a deployment example.
+extensions:
+  opamp:
+    server:
+      ws:
+        endpoint: ${env:LINEA_FLEET_OPAMP_ENDPOINT}
+        headers:
+          Authorization: "Bearer ${env:LINEA_FLEET_AGENT_TOKEN}"
+    capabilities:
+      reports_effective_config: false
+      reports_health: true
+      reports_available_components: false
+      accepts_restart_command: false
+    reports_raw_config: false
+
+receivers:
+  hostmetrics:
+    collection_interval: 1s
+    scrapers:
+      memory: {}
+exporters:
+  # The kafka exporter reports a recoverable error status while none of its
+  # brokers is reachable; nothing listens on this port.
+  kafka/unreachable:
+    brokers: [127.0.0.1:1]
+    timeout: 2s
+    retry_on_failure:
+      enabled: false
+    sending_queue:
+      enabled: false
+service:
+  extensions: [opamp]
+  telemetry:
+    logs:
+      level: error
+  pipelines:
+    metrics:
+      receivers: [hostmetrics]
+      exporters: [kafka/unreachable]

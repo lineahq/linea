@@ -1,0 +1,32 @@
+name: livecapture-lab
+services:
+  collector:
+    image: linea-collector:dev
+    build:
+      context: ../../..
+      dockerfile: deploy/docker/linea-collector.Dockerfile
+      target: runtime
+    command: [--config, /etc/otelcol/lab.yaml]
+    volumes:
+      - ./config/collector.lab.yaml:/etc/otelcol/lab.yaml:ro
+    ports:
+      - "127.0.0.1:8080:8080"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    stop_grace_period: 10s
+  lab:
+    image: linea-collector:lab
+    build:
+      context: ../../..
+      dockerfile: deploy/docker/linea-collector.Dockerfile
+      target: lab
+    depends_on: [collector]
+    # The extension's development control remains bound to literal loopback.
+    network_mode: service:collector
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    stop_grace_period: 10s

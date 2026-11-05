@@ -1,0 +1,90 @@
+# Recommended availability tier (deployment.md "High
+# availability"): identical fleet replicas behind a plain TCP load balancer,
+# and a PostgreSQL hot standby fed by streaming replication. Replicas find the
+# writable server through a multi-host URL, so promoting the standby needs no
+# fleet change. Use together with compose.yaml:
+#
+#   docker compose -f compose.yaml -f compose.ha.yaml up -d --wait fleet lb
+#
+# FLEET_REPLICAS (default 3) sets the replica count; the load balancer has
+# slots for up to eight.
+#
+# Failover is an operator action (or Patroni / a managed service): stop the
+# old primary for good, then run SELECT pg_promote() on the standby.
+x-postgres-flags: &postgres-flags
+  [postgres, -c, max_wal_senders=4, -c, max_replication_slots=4, -c, max_slot_wal_keep_size=1GB, -c, hot_standby=on]
+
+services:
+  postgres:
+    command: *postgres-flags
+    secrets: [postgres_password, migrate_password, runtime_password, replication_password]
+    volumes:
+      - ./init-replication.sh:/docker-entrypoint-initdb.d/20-replication.sh:ro
+
+  postgres-standby:
+    image: postgres:17@sha256:b8faeff7712663c2773a190181e1246e37e364b887611c04658c28b44e2408fe
+    entrypoint: [/bin/sh, /usr/local/bin/fleet-standby.sh]
+    command: *postgres-flags
+    secrets: [replication_password]
+    volumes:
+      - fleet-standby-data:/var/lib/postgresql/data
+      - ./standby.sh:/usr/local/bin/fleet-standby.sh:ro
+    networks: [database]
+    cpus: 1
+    mem_limit: 512m
+    pids_limit: 128
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -h 127.0.0.1 -U postgres -d fleet"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+    logging:
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  fleet:
+    # Replicas are reached only through the load balancer. A replica that
+    # fences itself after losing the database exits and comes back under a
+    # new replica ID.
+    ports: !reset []
+    restart: unless-stopped
+    scale: ${FLEET_REPLICAS:-3}
+
+  lb:
+    image: haproxy:3.2-alpine@sha256:5893840576071e6217cd52ebdcc14f454c6f7a631056fa6f4e0f40d3cac4215b
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: 1 # keep equal to nbthread in deploy/compose/fleet/haproxy.cfg
+    mem_limit: 512m
+    pids_limit: 64
+    ulimits:
+      nofile: 131072
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "127.0.0.1:${FLEET_API_PORT:-8080}:8080"
+      - "127.0.0.1:${FLEET_AGENT_PORT:-4320}:4320"
+    networks: [ingress]
+    restart: unless-stopped
+    depends_on: [fleet]
+    logging:
+      options:
+        max-size: 10m
+        max-file: "3"
+
+secrets:
+  replication_password:
+    file: ${FLEET_SECRET_DIR:-../../../.local/deployment}/replication_password
+  migrate_url:
+    file: ${FLEET_SECRET_DIR:-../../../.local/deployment}/migrate_ha_url
+  runtime_url:
+    file: ${FLEET_SECRET_DIR:-../../../.local/deployment}/runtime_ha_url
+
+volumes:
+  fleet-standby-data:

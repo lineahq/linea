@@ -1,0 +1,2 @@
+# The worker token kustomize reads into the Secret linea-runtime-token.
+token

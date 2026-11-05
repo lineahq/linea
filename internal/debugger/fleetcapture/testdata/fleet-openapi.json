@@ -1,0 +1,4442 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "linea-fleet reporting API",
+    "version": "0.3.0-dev",
+    "description": "Standalone single-organization reporting and fleet administration. PostgreSQL durability by default; explicit S1 memory development mode has no credential/group/event administration. Any number of replicas may share one database. Draining refuses new mutations with HTTP 503. Optional config management (--config-management) stores Collector config versions and assignments and delivers them over OpAMP to opted-in supervised agents; reporting-only is the default."
+  },
+  "security": [
+    {
+      "managementBearer": []
+    }
+  ],
+  "paths": {
+    "/healthz": {
+      "get": {
+        "operationId": "health",
+        "security": [],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Status"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "operationId": "readiness",
+        "security": [],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Status"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/server": {
+      "get": {
+        "operationId": "getServer",
+        "responses": {
+          "200": {
+            "description": "Server discovery",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Server"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/openapi.json": {
+      "get": {
+        "operationId": "getOpenAPI",
+        "responses": {
+          "200": {
+            "description": "This OpenAPI document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/agents": {
+      "get": {
+        "operationId": "listAgents",
+        "description": "Current-state keyset pages sorted by ID, or by a promoted attribute then ID. Pages omit components. Concurrent changes can affect membership. Reuse the same filters and sort with next_after. No snapshot or event replay guarantee.",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "description": "next_after of the previous page."
+          },
+          {
+            "name": "connected",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "healthy",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Agents that never reported health match neither value."
+          },
+          {
+            "name": "selector",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/Selector"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/PromotedAttribute"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bounded inventory page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "maxItems": 500,
+                      "items": {
+                        "$ref": "#/components/schemas/Agent"
+                      }
+                    },
+                    "next_after": {
+                      "type": "string",
+                      "maxLength": 1024,
+                      "description": "Pass as after. An agent ID without sort, an opaque position with sort."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/agents/{id}": {
+      "get": {
+        "operationId": "getAgent",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/AgentID"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Agent report. Health observation age is independent of connectivity.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Agent"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/summary": {
+      "get": {
+        "operationId": "getSummary",
+        "responses": {
+          "200": {
+            "description": "Current inventory summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Summary"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "group_by",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/PromotedAttribute"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/credentials": {
+      "get": {
+        "operationId": "listCredentials",
+        "responses": {
+          "200": {
+            "description": "Admin-only metadata; never includes hashes or tokens",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/AgentID"
+            }
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createCredential",
+        "description": "Admin only. ID conflict returns 409 without disclosing the secret again. JSON body limit 64 KiB; unknown fields and trailing JSON rejected.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CredentialRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Credential created; one-time token disclosure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Issued"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "415": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/credentials/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/AgentID"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getCredential",
+        "responses": {
+          "200": {
+            "description": "Admin-only metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Credential"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "revokeCredential",
+        "description": "Admin only. Idempotent for known revoked IDs. Cannot explicitly revoke last active admin. Blocks reporting publication and disconnects idle peers within periodic authority check.",
+        "responses": {
+          "204": {
+            "description": "Credential revoked"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateCredential",
+        "description": "Admin only. Changes the remote_config opt-in of an active agent credential; no other field is mutable. Replicas refresh their policy on notification.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "remote_config"
+                ],
+                "properties": {
+                  "remote_config": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Credential updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Credential"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "415": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/groups": {
+      "get": {
+        "operationId": "listGroups",
+        "responses": {
+          "200": {
+            "description": "Paged group metadata; detail resolves exact static UID membership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/AgentID"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/groups/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/AgentID"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getGroup",
+        "responses": {
+          "200": {
+            "description": "Group detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Group"
+                }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Quoted group revision"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "operationId": "replaceGroup",
+        "description": "Admin only. If-Match quoted zero creates; otherwise replace at the exact current revision. A static group lists known inventory UIDs, at most 1000, sorted and deduplicated. A selector group stores a canonical selector that is evaluated whenever the group is read.",
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\"[0-9]+\"$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Group replaced",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Group"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Group created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Group"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "412": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "415": {
+            "$ref": "#/components/responses/Error"
+          },
+          "428": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteGroup",
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\"[0-9]+\"$"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted at the matched revision"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "412": {
+            "$ref": "#/components/responses/Error"
+          },
+          "428": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/groups/{id}/agents": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/AgentID"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "listGroupAgents",
+        "description": "Current members as agent pages in ID order: the explicit members of a static group, or the agents a selector group matches now.",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/AgentID"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bounded inventory page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "maxItems": 500,
+                      "items": {
+                        "$ref": "#/components/schemas/Agent"
+                      }
+                    },
+                    "next_after": {
+                      "type": "string",
+                      "maxLength": 1024,
+                      "description": "Pass as after. An agent ID without sort, an opaque position with sort."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/events": {
+      "get": {
+        "operationId": "listEvents",
+        "responses": {
+          "200": {
+            "description": "Redacted meaningful changes, not every heartbeat, in commit order. Cursors survive restarts and work on any replica. They expire on retention gaps, on restore into another cluster and once on upgrade from v1; after 410 refresh snapshots and poll without a cursor. An empty page returns the same cursor. No command replay or cross-resource snapshot guarantee.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          {
+            "name": "wait",
+            "in": "query",
+            "description": "Long-poll: when no event is available, wait up to this many seconds for one. At most 64 readers wait per replica; others return at once.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 30,
+              "default": 0
+            }
+          }
+        ]
+      }
+    },
+    "/metrics": {
+      "get": {
+        "operationId": "getMetrics",
+        "responses": {
+          "200": {
+            "description": "Authenticated fixed-cardinality inventory gauges and HTTP counters",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "description": "Authenticated fixed-cardinality Prometheus inventory/request/report latency, database wait/query/transaction and pool, TCP admission, generic plugin availability and opaque API metrics. No identities, paths, query text, credentials or domain payload labels. Counters reset on restart."
+      }
+    },
+    "/api/v1/plugins": {
+      "get": {
+        "operationId": "listPlugins",
+        "description": "Reader/admin only. No client-provided registration URLs or arbitrary proxy paths. Plugin readiness does not affect core readiness. No query parameters.",
+        "responses": {
+          "200": {
+            "description": "Operator-registered plugin discovery or bounded status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/plugins/{id}": {
+      "get": {
+        "operationId": "getPlugin",
+        "description": "Reader/admin only. No client-provided registration URLs or arbitrary proxy paths. Plugin readiness does not affect core readiness. No query parameters.",
+        "responses": {
+          "200": {
+            "description": "Operator-registered plugin discovery or bounded status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginInfo"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9-]{1,64}$"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/plugins/{id}/status": {
+      "get": {
+        "operationId": "getPluginStatus",
+        "description": "Reader/admin only. No client-provided registration URLs or arbitrary proxy paths. Plugin readiness does not affect core readiness. No query parameters.",
+        "responses": {
+          "200": {
+            "description": "Operator-registered plugin discovery or bounded status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9-]{1,64}$"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/plugins/{id}/lifecycle": {
+      "post": {
+        "operationId": "setPluginLifecycle",
+        "description": "Admin only. If-Match carries the lifecycle revision; every change rotates the plugin epoch and fences admitted plugin calls.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9-]{1,64}$"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\"[0-9]+\"$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bounded plugin result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginInfo"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "412": {
+            "$ref": "#/components/responses/Error"
+          },
+          "428": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PluginLifecycleRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plugins/{id}/api/{plugin_path}": {
+      "get": {
+        "summary": "Invoke an operator-granted plugin-owned JSON API",
+        "description": "Opaque plugin contract; path may contain multiple validated segments. Requests cap at 64 KiB; responses at 1 MiB. Plugin publishes its own schemas and authorization. No application-selected service URL.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "plugin_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plugin-owned JSON response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "201": {
+            "description": "Plugin-owned resource created"
+          },
+          "202": {
+            "description": "Plugin-owned operation admitted"
+          },
+          "204": {
+            "description": "No content"
+          },
+          "400": {
+            "description": "Malformed or ambiguous request"
+          },
+          "401": {
+            "description": "Inactive management credential"
+          },
+          "403": {
+            "description": "Plugin authorization refused"
+          },
+          "404": {
+            "description": "Plugin, route or API grant absent"
+          },
+          "409": {
+            "description": "Plugin-owned conflict"
+          },
+          "410": {
+            "description": "Plugin-owned expired resource"
+          },
+          "412": {
+            "description": "Plugin-owned precondition failed"
+          },
+          "413": {
+            "description": "Request exceeds bound"
+          },
+          "428": {
+            "description": "Plugin requires precondition"
+          },
+          "429": {
+            "description": "Plugin capacity bound reached"
+          },
+          "503": {
+            "description": "Unavailable, busy or bounded transport failed"
+          }
+        }
+      },
+      "post": {
+        "summary": "Invoke an operator-granted plugin-owned JSON API",
+        "description": "Opaque plugin contract; path may contain multiple validated segments. Requests cap at 64 KiB; responses at 1 MiB. Plugin publishes its own schemas and authorization. No application-selected service URL.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "plugin_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plugin-owned JSON response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "201": {
+            "description": "Plugin-owned resource created"
+          },
+          "202": {
+            "description": "Plugin-owned operation admitted"
+          },
+          "204": {
+            "description": "No content"
+          },
+          "400": {
+            "description": "Malformed or ambiguous request"
+          },
+          "401": {
+            "description": "Inactive management credential"
+          },
+          "403": {
+            "description": "Plugin authorization refused"
+          },
+          "404": {
+            "description": "Plugin, route or API grant absent"
+          },
+          "409": {
+            "description": "Plugin-owned conflict"
+          },
+          "410": {
+            "description": "Plugin-owned expired resource"
+          },
+          "412": {
+            "description": "Plugin-owned precondition failed"
+          },
+          "413": {
+            "description": "Request exceeds bound"
+          },
+          "428": {
+            "description": "Plugin requires precondition"
+          },
+          "429": {
+            "description": "Plugin capacity bound reached"
+          },
+          "503": {
+            "description": "Unavailable, busy or bounded transport failed"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Invoke an operator-granted plugin-owned JSON API",
+        "description": "Opaque plugin contract; path may contain multiple validated segments. Requests cap at 64 KiB; responses at 1 MiB. Plugin publishes its own schemas and authorization. No application-selected service URL.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "plugin_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plugin-owned JSON response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "201": {
+            "description": "Plugin-owned resource created"
+          },
+          "202": {
+            "description": "Plugin-owned operation admitted"
+          },
+          "204": {
+            "description": "No content"
+          },
+          "400": {
+            "description": "Malformed or ambiguous request"
+          },
+          "401": {
+            "description": "Inactive management credential"
+          },
+          "403": {
+            "description": "Plugin authorization refused"
+          },
+          "404": {
+            "description": "Plugin, route or API grant absent"
+          },
+          "409": {
+            "description": "Plugin-owned conflict"
+          },
+          "410": {
+            "description": "Plugin-owned expired resource"
+          },
+          "412": {
+            "description": "Plugin-owned precondition failed"
+          },
+          "413": {
+            "description": "Request exceeds bound"
+          },
+          "428": {
+            "description": "Plugin requires precondition"
+          },
+          "429": {
+            "description": "Plugin capacity bound reached"
+          },
+          "503": {
+            "description": "Unavailable, busy or bounded transport failed"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Invoke an operator-granted plugin-owned JSON API",
+        "description": "Opaque plugin contract; path may contain multiple validated segments. Requests cap at 64 KiB; responses at 1 MiB. Plugin publishes its own schemas and authorization. No application-selected service URL.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "plugin_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plugin-owned JSON response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "201": {
+            "description": "Plugin-owned resource created"
+          },
+          "202": {
+            "description": "Plugin-owned operation admitted"
+          },
+          "204": {
+            "description": "No content"
+          },
+          "400": {
+            "description": "Malformed or ambiguous request"
+          },
+          "401": {
+            "description": "Inactive management credential"
+          },
+          "403": {
+            "description": "Plugin authorization refused"
+          },
+          "404": {
+            "description": "Plugin, route or API grant absent"
+          },
+          "409": {
+            "description": "Plugin-owned conflict"
+          },
+          "410": {
+            "description": "Plugin-owned expired resource"
+          },
+          "412": {
+            "description": "Plugin-owned precondition failed"
+          },
+          "413": {
+            "description": "Request exceeds bound"
+          },
+          "428": {
+            "description": "Plugin requires precondition"
+          },
+          "429": {
+            "description": "Plugin capacity bound reached"
+          },
+          "503": {
+            "description": "Unavailable, busy or bounded transport failed"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Invoke an operator-granted plugin-owned JSON API",
+        "description": "Opaque plugin contract; path may contain multiple validated segments. Requests cap at 64 KiB; responses at 1 MiB. Plugin publishes its own schemas and authorization. No application-selected service URL.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "plugin_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plugin-owned JSON response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "201": {
+            "description": "Plugin-owned resource created"
+          },
+          "202": {
+            "description": "Plugin-owned operation admitted"
+          },
+          "204": {
+            "description": "No content"
+          },
+          "400": {
+            "description": "Malformed or ambiguous request"
+          },
+          "401": {
+            "description": "Inactive management credential"
+          },
+          "403": {
+            "description": "Plugin authorization refused"
+          },
+          "404": {
+            "description": "Plugin, route or API grant absent"
+          },
+          "409": {
+            "description": "Plugin-owned conflict"
+          },
+          "410": {
+            "description": "Plugin-owned expired resource"
+          },
+          "412": {
+            "description": "Plugin-owned precondition failed"
+          },
+          "413": {
+            "description": "Request exceeds bound"
+          },
+          "428": {
+            "description": "Plugin requires precondition"
+          },
+          "429": {
+            "description": "Plugin capacity bound reached"
+          },
+          "503": {
+            "description": "Unavailable, busy or bounded transport failed"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/configs": {
+      "get": {
+        "operationId": "listConfigs",
+        "description": "Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/AgentID"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Configs by ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createConfig",
+        "description": "Admin only. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Config created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Config"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "415": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/configs/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/AgentID"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getConfig",
+        "description": "ETag carries the revision. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "responses": {
+          "200": {
+            "description": "Config",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Config"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateConfig",
+        "description": "Admin only. Renames or redescribes at the exact current revision. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\"[0-9]+\"$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Config updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Config"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "412": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "415": {
+            "$ref": "#/components/responses/Error"
+          },
+          "428": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteConfig",
+        "description": "Admin only. Deletes the config and its versions; 409 while an assignment references it. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\"[0-9]+\"$"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Config deleted"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "412": {
+            "$ref": "#/components/responses/Error"
+          },
+          "428": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/configs/{id}/versions": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/AgentID"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "listConfigVersions",
+        "description": "Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*$"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Versions, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigVersionPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createConfigVersion",
+        "description": "Admin only. Creates the next immutable version. The newest 100 versions and every version an assignment references are kept; older ones are pruned. Request bodies up to 1 MiB of JSON are accepted. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigVersionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Version created, without body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigVersion"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "415": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/configs/{id}/versions/{version}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/AgentID"
+          }
+        },
+        {
+          "name": "version",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*$"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getConfigVersion",
+        "description": "The body is included only for admin. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "responses": {
+          "200": {
+            "description": "Version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigVersion"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/config-assignments": {
+      "get": {
+        "operationId": "listConfigAssignments",
+        "description": "Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/AgentID"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Assignments by ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigAssignmentPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createConfigAssignment",
+        "description": "Admin only. Stores the assignment without an active version and starts the rollout that introduces it; only the rollout's released targets receive the layer until it completes. Assignments change or are removed only through rollouts (POST /api/v1/rollouts). Answers 409 rollout_conflict when a targeted agent is already in an active rollout and 409 too_many_targets above 20000 targets. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigAssignmentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Assignment created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigAssignment"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "415": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/config-assignments/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/AgentID"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getConfigAssignment",
+        "description": "ETag carries the revision. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "responses": {
+          "200": {
+            "description": "Assignment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigAssignment"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/config-assignments/{id}:preview": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/AgentID"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "previewConfigAssignment",
+        "description": "Agents the assignment targets now, with the desired config each would receive from every assignment it matches. No request body. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/AgentID"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching agents",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigPreviewPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/agents/{id}/config": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/AgentID"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getAgentConfig",
+        "description": "Desired layers and hash next to the reported status, hash and hold. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "responses": {
+          "200": {
+            "description": "Agent config",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentConfig"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/agents/{id}/config:retry": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/AgentID"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "retryAgentConfig",
+        "description": "Admin only. Clears the agent's failure hold so its desired config is sent again. Idempotent. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "responses": {
+          "204": {
+            "description": "Hold cleared"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/rollouts": {
+      "get": {
+        "operationId": "listRollouts",
+        "description": "Active rollouts and the newest 100 finished ones, by ID. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/AgentID"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Rollouts by ID, without wave progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RolloutPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createRollout",
+        "description": "Admin only. Snapshots the eligible agents the assignment targets (credential with remote_config and matching labels, AcceptsRemoteConfig) and releases them in waves; the leader's controller records outcomes, pauses or rolls back on a threshold breach, and on completion moves the assignment to to_version or deletes it. 409 rollout_conflict: the assignment or a target is in an active rollout; 409 too_many_targets above 20000; 409 capacity_exceeded at 50 active rollouts. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RolloutRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Rollout started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Rollout"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "415": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/rollouts/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/AgentID"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getRollout",
+        "description": "Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "responses": {
+          "200": {
+            "description": "Rollout with per-wave progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Rollout"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/rollouts/{id}/targets": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/AgentID"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "listRolloutTargets",
+        "description": "Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/AgentID"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          },
+          {
+            "name": "outcome",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/RolloutOutcome"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Targets by agent ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RolloutTargetPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/rollouts/{id}:pause": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/AgentID"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "pauseRollout",
+        "description": "Admin only. running → paused. 409 invalid_state when the state does not allow it. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "responses": {
+          "200": {
+            "description": "Rollout after the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Rollout"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/rollouts/{id}:resume": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/AgentID"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "resumeRollout",
+        "description": "Admin only. paused → running. Failures seen so far are accepted and stop counting against the thresholds. 409 invalid_state when the state does not allow it. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "responses": {
+          "200": {
+            "description": "Rollout after the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Rollout"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/rollouts/{id}:rollback": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/AgentID"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "rollbackRollout",
+        "description": "Admin only. running or paused → rolling_back: released targets return to the assignment's version; the rollout ends rolled_back once every connected released target reports it, or after the wave timeout. A creating rollout removes its assignment. 409 invalid_state when the state does not allow it. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "responses": {
+          "200": {
+            "description": "Rollout after the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Rollout"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/rollouts/{id}:cancel": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/AgentID"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "cancelRollout",
+        "description": "Admin only. Any active state → cancelled at once; released targets return to the assignment's version without waiting. A creating rollout removes its assignment. 409 invalid_state when the state does not allow it. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "responses": {
+          "200": {
+            "description": "Rollout after the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Rollout"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "managementBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Generated database credential with reader or admin role; agent tokens never authorize this API. Memory development uses LINEA_FLEET_API_TOKEN for read-only access. A delegating client may also send X-Fleet-Acting-ID (required with the others, at most 256 bytes), X-Fleet-Acting-Name (at most 128 bytes) and X-Fleet-Acting-Request (at most 128 bytes), each once, printable UTF-8 without surrounding space, to name the user it acts for; fleet records them on the request's events and forwards them on plugin API calls, never authorizes on them, and refuses malformed values with HTTP 400 invalid_acting_for."
+      }
+    },
+    "responses": {
+      "Status": {
+        "description": "Process status",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "status"
+              ],
+              "properties": {
+                "status": {
+                  "enum": [
+                    "ok",
+                    "ready"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "Error": {
+        "description": "Error; 401 includes WWW-Authenticate: Bearer. All responses use Cache-Control: no-store.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "AgentID": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{32}$",
+        "description": "Canonical 16-byte OpAMP instance UID as lowercase hex"
+      },
+      "UInt64": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Unsigned 64-bit value; clients must preserve integer precision.",
+        "format": "uint64"
+      },
+      "Agent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "generation",
+          "connected",
+          "first_seen_at",
+          "connected_at",
+          "capabilities",
+          "presence",
+          "identity_conflict",
+          "attributes"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/AgentID"
+          },
+          "generation": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "connected": {
+            "type": "boolean",
+            "description": "The agent holds a management session on a live replica. Derived at read time from the owning replica heartbeat; not a telemetry delivery claim."
+          },
+          "first_seen_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "First registration of this instance UID."
+          },
+          "connected_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "disconnected_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Last message from the agent. Unchanged heartbeats are persisted in bulk, so this may lag by up to 10 seconds."
+          },
+          "last_report_at": {
+            "type": "string",
+            "format": "date-time",
+            "deprecated": true,
+            "description": "Alias of last_seen_at, kept for v1 clients."
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "health": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "healthy",
+              "observed_at",
+              "components_unhealthy"
+            ],
+            "properties": {
+              "healthy": {
+                "type": "boolean"
+              },
+              "observed_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Server receipt time of the last health change, preserved across omitted reports and reconnects."
+              },
+              "status": {
+                "type": "string",
+                "maxLength": 64,
+                "description": "Top-level Collector status, e.g. StatusOK."
+              },
+              "error": {
+                "type": "string",
+                "maxLength": 256,
+                "description": "Redacted and truncated; stored only with --store-health-errors."
+              },
+              "components_unhealthy": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 256
+              }
+            }
+          },
+          "presence": {
+            "enum": [
+              "connected",
+              "disconnected"
+            ],
+            "description": "connected while the owning replica is alive; disconnected after a close, a crash detected by heartbeat expiry, or takeover cleanup."
+          },
+          "identity_conflict": {
+            "type": "boolean",
+            "description": "Set after repeated takeovers of one instance UID within a minute, which indicates cloned identities. The newest connection still wins."
+          },
+          "credential_id": {
+            "$ref": "#/components/schemas/AgentID",
+            "description": "Credential of the newest session."
+          },
+          "attributes": {
+            "type": "object",
+            "maxProperties": 64,
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "description": "Allowlisted agent description attributes: service.*, host.name, host.arch, os.type, os.description, k8s.* workload names, cloud.provider/region/availability_zone and operator keys from --agent-attributes. Identifying attributes win over non-identifying ones. Everything else is dropped."
+          },
+          "components": {
+            "type": "array",
+            "maxItems": 256,
+            "items": {
+              "$ref": "#/components/schemas/Component"
+            },
+            "description": "Detail reads only. Components from the effective configuration merged with reported component health."
+          },
+          "config_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA-256 of the effective configuration. The configuration itself is never stored."
+          },
+          "remote_config": {
+            "$ref": "#/components/schemas/RemoteConfigStatus"
+          },
+          "available_components_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{2,128}$",
+            "description": "Hex hash of the agent build's AvailableComponents report. Inventory only; component lists are fetched and stored only with config management."
+          }
+        }
+      },
+      "Server": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "server_id",
+          "version",
+          "api_version",
+          "storage",
+          "plugins",
+          "limits",
+          "config_management"
+        ],
+        "properties": {
+          "server_id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "api_version": {
+            "const": "v1"
+          },
+          "storage": {
+            "enum": [
+              "memory",
+              "postgres"
+            ]
+          },
+          "limits": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "max_agents",
+              "max_connections",
+              "max_message_bytes",
+              "max_pending_sessions"
+            ],
+            "properties": {
+              "max_agents": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100000
+              },
+              "max_connections": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10000,
+                "description": "Per replica."
+              },
+              "max_message_bytes": {
+                "type": "integer",
+                "minimum": 1024,
+                "maximum": 16777216
+              },
+              "max_events": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000000
+              },
+              "max_pending_sessions": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10000,
+                "description": "Agent handshakes per replica between admission and their first commit."
+              }
+            }
+          },
+          "replica_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$",
+            "description": "Identifies the answering replica; changes on every start. Absent for memory storage."
+          },
+          "plugins": {
+            "type": "array",
+            "maxItems": 0,
+            "items": {
+              "type": "string"
+            },
+            "description": "Operator-configured plugin IDs, including disabled/unavailable registrations. Read plugin discovery for current state."
+          },
+          "config_management": {
+            "type": "boolean",
+            "description": "Whether the config management API is enabled."
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "enum": [
+                  "unauthorized",
+                  "forbidden",
+                  "method_not_allowed",
+                  "not_ready",
+                  "not_found",
+                  "invalid_argument",
+                  "conflict",
+                  "capacity_exceeded",
+                  "precondition_failed",
+                  "precondition_required",
+                  "cursor_expired",
+                  "unsupported_media_type",
+                  "payload_too_large",
+                  "unavailable",
+                  "config_management_disabled",
+                  "invalid_config",
+                  "inline_secret"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "description": "For invalid_argument, names the field and the rule it broke after \"invalid request: \"; never a submitted value."
+              }
+            }
+          }
+        }
+      },
+      "Summary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "total",
+          "connected",
+          "disconnected",
+          "unknown"
+        ],
+        "properties": {
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "connected": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "disconnected": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "unknown": {
+            "type": "integer",
+            "minimum": 0,
+            "deprecated": true,
+            "description": "Always 0. Presence is derived from replica liveness and is never unknown."
+          },
+          "groups": {
+            "type": "array",
+            "maxItems": 100,
+            "description": "With group_by: the largest groups, then by value. \"\" collects agents without the attribute.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "value",
+                "total",
+                "connected"
+              ],
+              "properties": {
+                "value": {
+                  "type": "string"
+                },
+                "total": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "connected": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          }
+        }
+      },
+      "Credential": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "role",
+          "created_at",
+          "expires_at",
+          "remote_config"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/AgentID"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "role": {
+            "enum": [
+              "admin",
+              "reader",
+              "agent"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revoked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "labels": {
+            "$ref": "#/components/schemas/CredentialLabels"
+          },
+          "remote_config": {
+            "type": "boolean",
+            "description": "Config management may send configuration to agents using this credential. Agent credentials only; default false."
+          }
+        }
+      },
+      "CredentialRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "role",
+          "expires_at"
+        ],
+        "description": "Caller chooses a unique credential ID for lost-response reconciliation. Agent bearer tokens are reusable across Collectors: no UID binding or pre-registration. Expiry must be future and within 365 days.",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/AgentID"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "role": {
+            "enum": [
+              "admin",
+              "reader",
+              "agent"
+            ]
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "labels": {
+            "$ref": "#/components/schemas/CredentialLabels"
+          },
+          "remote_config": {
+            "type": "boolean",
+            "default": false,
+            "description": "Opt agents using this credential in to remote config. Agent role only."
+          }
+        }
+      },
+      "Issued": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "credential",
+          "token"
+        ],
+        "properties": {
+          "credential": {
+            "$ref": "#/components/schemas/Credential"
+          },
+          "token": {
+            "type": "string",
+            "pattern": "^of1_[0-9a-f]{32}_[0-9a-f]{64}$",
+            "description": "One-time disclosure. Never returned again; revoke/reissue if this response is lost."
+          }
+        }
+      },
+      "Group": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "revision"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/AgentID"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "kind": {
+            "enum": [
+              "static",
+              "selector"
+            ]
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "member_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Current members. Omitted for selector groups on list pages."
+          },
+          "agent_ids": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": {
+              "$ref": "#/components/schemas/AgentID"
+            },
+            "description": "Static groups: returned by detail when non-empty, sorted and deduplicated."
+          },
+          "selector": {
+            "$ref": "#/components/schemas/Selector",
+            "description": "Selector groups: canonical selector, evaluated at read time."
+          }
+        }
+      },
+      "GroupRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name"
+        ],
+        "description": "Exactly one of agent_ids or selector.",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "agent_ids": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": {
+              "$ref": "#/components/schemas/AgentID"
+            }
+          },
+          "selector": {
+            "$ref": "#/components/schemas/Selector"
+          }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "agent_ids"
+            ]
+          },
+          {
+            "required": [
+              "selector"
+            ]
+          }
+        ]
+      },
+      "Event": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "kind",
+          "subject_id",
+          "actor_id",
+          "occurred_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*$",
+            "description": "Decimal event identifier. Order follows commit order, not identifier order; gaps are permitted."
+          },
+          "kind": {
+            "type": "string",
+            "description": "agent.registered, agent.connected, agent.changed, agent.disconnected, agent.identity_conflict, agents.expired, replica.started, replica.stopped, credential.*, group.*, plugin.*"
+          },
+          "subject_id": {
+            "type": "string"
+          },
+          "actor_id": {
+            "type": "string"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "detail": {
+            "type": "object",
+            "description": "Redacted change detail, at most 1 KiB. agent.changed carries {\"changed\":[capabilities|health|attributes|components]}; agent.connected may carry {\"takeover\":true}; agents.expired (subject \"agents\") carries {\"count\":n} and {\"reason\":\"capacity\"} for eviction. Never contains configuration, attribute values or telemetry."
+          },
+          "acting_for": {
+            "$ref": "#/components/schemas/ActingFor"
+          }
+        }
+      },
+      "ActingFor": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id"
+        ],
+        "description": "The user a delegating management credential acted for, from its X-Fleet-Acting-* headers. Attribution only; actor_id stays the authority.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "request_id": {
+            "type": "string",
+            "maxLength": 128
+          }
+        }
+      },
+      "CredentialPage": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 500,
+            "items": {
+              "$ref": "#/components/schemas/Credential"
+            }
+          },
+          "next_after": {
+            "$ref": "#/components/schemas/AgentID"
+          }
+        }
+      },
+      "GroupPage": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 500,
+            "items": {
+              "$ref": "#/components/schemas/Group"
+            }
+          },
+          "next_after": {
+            "$ref": "#/components/schemas/AgentID"
+          }
+        }
+      },
+      "EventPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 500,
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            }
+          },
+          "next_cursor": {
+            "type": "string",
+            "maxLength": 256
+          }
+        }
+      },
+      "PluginInfo": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "version",
+          "protocol_version",
+          "enabled",
+          "permissions",
+          "state",
+          "epoch",
+          "desired",
+          "revision"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9-]{1,64}$"
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "protocol_version": {
+            "const": "2"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Operator-configured ceiling. Consult desired/state for durable runtime enablement."
+          },
+          "permissions": {
+            "type": "array",
+            "maxItems": 1,
+            "items": {
+              "enum": [
+                "inventory.read"
+              ]
+            }
+          },
+          "state": {
+            "enum": [
+              "disabled",
+              "draining",
+              "unavailable",
+              "incompatible",
+              "ready"
+            ]
+          },
+          "checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "instance_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "epoch": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "desired": {
+            "enum": [
+              "enabled",
+              "draining",
+              "disabled"
+            ]
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "api_version": {
+            "type": "string",
+            "description": "Operator-granted, manifest-matched plugin API version; omitted when no public plugin API is granted."
+          }
+        }
+      },
+      "PluginPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "$ref": "#/components/schemas/PluginInfo"
+            }
+          }
+        }
+      },
+      "PluginStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "plugin_id",
+          "data"
+        ],
+        "properties": {
+          "plugin_id": {
+            "type": "string"
+          },
+          "data": {
+            "type": "object",
+            "description": "Plugin-owned bounded status object. See the installed plugin schema."
+          }
+        }
+      },
+      "PluginLifecycleRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "enum": [
+              "drain",
+              "disable",
+              "enable"
+            ]
+          }
+        }
+      },
+      "Selector": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4096,
+        "description": "Comma-separated AND of up to 8 terms over stored attributes: key=value, key in (v1,v2) with up to 32 values, or a bare key (attribute present). Values containing , ( ) \" = or edge spaces are written as JSON strings. Keys outside the attribute allowlist match nothing.",
+        "examples": [
+          "k8s.namespace.name=shop,service.name in (cart,checkout)"
+        ]
+      },
+      "PromotedAttribute": {
+        "enum": [
+          "service.name",
+          "service.version",
+          "host.name",
+          "k8s.namespace.name",
+          "k8s.pod.name"
+        ],
+        "description": "Attribute with an indexed column, usable for sort and group_by."
+      },
+      "Component": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "kind:name, e.g. receiver:otlp. Kinds: receiver, processor, exporter, connector, extension."
+          },
+          "pipelines": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "type": "string"
+            }
+          },
+          "healthy": {
+            "type": "boolean",
+            "description": "Omitted when the component appears only in the effective configuration."
+          },
+          "status": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "error": {
+            "type": "string",
+            "maxLength": 256,
+            "description": "Redacted and truncated; stored only with --store-health-errors."
+          }
+        }
+      },
+      "CredentialLabels": {
+        "type": "object",
+        "maxProperties": 16,
+        "propertyNames": {
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.\\-/]+$"
+        },
+        "additionalProperties": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "description": "Agent credentials only. Bounded, admin-set metadata verified by the server. Config assignments can require labels (credential_labels); plugins with credentials.introspect read labels of active agent credentials and may interpret them (for example a plugin-defined allowance)."
+      },
+      "RemoteConfigStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Last remote config status the agent reported. Error text is stored only with --store-health-errors, redacted and truncated to 256 bytes.",
+        "properties": {
+          "hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{2,128}$"
+          },
+          "status": {
+            "enum": [
+              "applying",
+              "applied",
+              "failed"
+            ]
+          },
+          "error": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "held_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{2,128}$",
+            "description": "Desired hash withheld after a failure until desired state changes or a retry clears it."
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Config": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "description",
+          "revision",
+          "latest_version",
+          "created_at",
+          "created_by"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/AgentID"
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "latest_version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "$ref": "#/components/schemas/AgentID"
+          }
+        }
+      },
+      "ConfigRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name"
+        ],
+        "description": "Caller chooses a unique ID for lost-response reconciliation. At most 1000 configs.",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/AgentID"
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        }
+      },
+      "ConfigPatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        }
+      },
+      "ConfigPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Config"
+            }
+          },
+          "next_after": {
+            "$ref": "#/components/schemas/AgentID"
+          }
+        }
+      },
+      "ConfigVersion": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "config_id",
+          "version",
+          "sha256",
+          "size",
+          "message",
+          "created_at",
+          "created_by"
+        ],
+        "properties": {
+          "config_id": {
+            "$ref": "#/components/schemas/AgentID"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 131072
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "$ref": "#/components/schemas/AgentID"
+          },
+          "body": {
+            "type": "string",
+            "description": "Collector YAML. Returned only to admin reads of a single version."
+          }
+        }
+      },
+      "ConfigVersionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "body"
+        ],
+        "description": "Collector YAML, at most 128 KiB, top-level keys limited to receivers, processors, exporters, connectors, extensions and service. Values under secret-looking keys, header values and URL passwords must be ${env:...} or ${file:...} references (422 inline_secret). With --config-allowed-components, other component types are rejected (422 invalid_config). The supervisor validates the config against the real Collector on the host.",
+        "properties": {
+          "body": {
+            "type": "string",
+            "minLength": 1
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        }
+      },
+      "ConfigVersionPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items"
+        ],
+        "description": "Newest first, without bodies.",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigVersion"
+            }
+          },
+          "next_after": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*$"
+          }
+        }
+      },
+      "ConfigAssignment": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "config_id",
+          "layer",
+          "revision",
+          "created_at",
+          "created_by"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/AgentID"
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+          },
+          "config_id": {
+            "$ref": "#/components/schemas/AgentID"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The active version. Absent while the rollout creating the assignment runs."
+          },
+          "layer": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 99,
+            "description": "Higher layers override lower ones. The entry is named NN-<name>."
+          },
+          "group_id": {
+            "$ref": "#/components/schemas/AgentID"
+          },
+          "selector": {
+            "$ref": "#/components/schemas/Selector"
+          },
+          "credential_labels": {
+            "$ref": "#/components/schemas/CredentialLabels"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "$ref": "#/components/schemas/AgentID"
+          },
+          "rollout_id": {
+            "$ref": "#/components/schemas/AgentID",
+            "description": "The active rollout of this assignment, if any."
+          }
+        }
+      },
+      "ConfigAssignmentRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "config_id",
+          "version",
+          "layer"
+        ],
+        "description": "Exactly one of group_id or selector. credential_labels narrow the target to agents whose server-verified credential carries all of them; agent attributes are self-reported, so assignments that matter should require labels. At most 1000 assignments; at most 8 may match one agent.",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/AgentID"
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+          },
+          "config_id": {
+            "$ref": "#/components/schemas/AgentID"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "layer": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 99,
+            "description": "Higher layers override lower ones. The entry is named NN-<name>."
+          },
+          "group_id": {
+            "$ref": "#/components/schemas/AgentID"
+          },
+          "selector": {
+            "$ref": "#/components/schemas/Selector"
+          },
+          "credential_labels": {
+            "$ref": "#/components/schemas/CredentialLabels"
+          },
+          "rollout": {
+            "$ref": "#/components/schemas/RolloutPolicy",
+            "description": "Policy of the creating rollout; defaults apply to omitted fields, and the rollout ID is generated when omitted."
+          }
+        }
+      },
+      "ConfigAssignmentPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigAssignment"
+            }
+          },
+          "next_after": {
+            "$ref": "#/components/schemas/AgentID"
+          }
+        }
+      },
+      "DesiredConfig": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "layers",
+          "hash"
+        ],
+        "properties": {
+          "layers": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "sha256"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "assignment_id": {
+                  "$ref": "#/components/schemas/AgentID"
+                },
+                "config_id": {
+                  "$ref": "#/components/schemas/AgentID"
+                },
+                "version": {
+                  "type": "integer"
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              }
+            }
+          },
+          "hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA-256 of the name-sorted (entry name, body SHA-256) pairs; sent as config_hash and echoed by the supervisor."
+          },
+          "unmanaged": {
+            "type": "boolean",
+            "description": "The single 00-unmanaged entry that releases a formerly managed agent to its local config."
+          }
+        }
+      },
+      "AgentConfig": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "agent_id",
+          "credential_remote_config",
+          "accepts_remote_config",
+          "desired",
+          "reported",
+          "in_sync"
+        ],
+        "properties": {
+          "agent_id": {
+            "$ref": "#/components/schemas/AgentID"
+          },
+          "credential_remote_config": {
+            "type": "boolean"
+          },
+          "accepts_remote_config": {
+            "type": "boolean"
+          },
+          "desired": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DesiredConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when the agent matches nothing and was never managed."
+          },
+          "error": {
+            "enum": [
+              "too_many_layers"
+            ]
+          },
+          "reported": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RemoteConfigStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "in_sync": {
+            "type": "boolean",
+            "description": "The reported hash equals the desired hash and was applied."
+          },
+          "missing_components": {
+            "type": "array",
+            "maxItems": 32,
+            "items": {
+              "type": "string"
+            },
+            "description": "Component types (for example receiver:kafka) that the desired layers use and the agent's build lacks. The config is withheld while any are missing. Omitted when none are missing or the build is unknown."
+          }
+        }
+      },
+      "ConfigPreviewPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items"
+        ],
+        "description": "Agents excluded by credential labels are skipped, so a page may hold fewer than limit items; continue with next_after.",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "agent_id",
+                "desired"
+              ],
+              "properties": {
+                "agent_id": {
+                  "$ref": "#/components/schemas/AgentID"
+                },
+                "desired": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/DesiredConfig"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "error": {
+                  "enum": [
+                    "too_many_layers"
+                  ]
+                }
+              }
+            }
+          },
+          "next_after": {
+            "$ref": "#/components/schemas/AgentID"
+          }
+        }
+      },
+      "RolloutWave": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Cumulative number of targets released by the end of this wave."
+          },
+          "percent": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Cumulative percentage of targets released by the end of this wave."
+          }
+        },
+        "description": "A cumulative wave boundary; set count or percent. Empty waves collapse and the last wave takes the remainder."
+      },
+      "RolloutPolicy": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/AgentID"
+          },
+          "waves": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 10,
+            "items": {
+              "$ref": "#/components/schemas/RolloutWave"
+            },
+            "description": "Default [1, 5%, 25%, 100%]. Targets are ordered within a wave by a hash of the rollout and agent IDs."
+          },
+          "canary_group_id": {
+            "$ref": "#/components/schemas/AgentID",
+            "description": "Targets in this group form wave 0, before the waves."
+          },
+          "bake_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 86400,
+            "default": 120,
+            "description": "How long a target must stay applied and healthy before it succeeds."
+          },
+          "wave_timeout_seconds": {
+            "type": "integer",
+            "minimum": 60,
+            "maximum": 86400,
+            "default": 900,
+            "description": "Connected targets of the current wave that have not applied by then time out."
+          },
+          "max_failures": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "max_failure_percent": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "default": 5,
+            "description": "The rollout breaches when failures exceed max(max_failures, max_failure_percent of settled targets), per wave or in total."
+          },
+          "on_failure": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "rollback"
+            ],
+            "default": "pause"
+          }
+        }
+      },
+      "RolloutRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "assignment_id"
+        ],
+        "description": "Set to_version to move the assignment, or delete to remove it.",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/AgentID",
+            "description": "Generated when omitted."
+          },
+          "assignment_id": {
+            "$ref": "#/components/schemas/AgentID"
+          },
+          "to_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "delete": {
+            "type": "boolean"
+          },
+          "waves": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 10,
+            "items": {
+              "$ref": "#/components/schemas/RolloutWave"
+            },
+            "description": "Default [1, 5%, 25%, 100%]. Targets are ordered within a wave by a hash of the rollout and agent IDs."
+          },
+          "canary_group_id": {
+            "$ref": "#/components/schemas/AgentID",
+            "description": "Targets in this group form wave 0, before the waves."
+          },
+          "bake_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 86400,
+            "default": 120,
+            "description": "How long a target must stay applied and healthy before it succeeds."
+          },
+          "wave_timeout_seconds": {
+            "type": "integer",
+            "minimum": 60,
+            "maximum": 86400,
+            "default": 900,
+            "description": "Connected targets of the current wave that have not applied by then time out."
+          },
+          "max_failures": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "max_failure_percent": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "default": 5,
+            "description": "The rollout breaches when failures exceed max(max_failures, max_failure_percent of settled targets), per wave or in total."
+          },
+          "on_failure": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "rollback"
+            ],
+            "default": "pause"
+          }
+        }
+      },
+      "RolloutOutcome": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "released",
+          "baking",
+          "offline",
+          "succeeded",
+          "failed",
+          "unhealthy",
+          "timed_out",
+          "unmatched",
+          "incompatible"
+        ],
+        "description": "failed, unhealthy and timed_out count against the thresholds until accepted by resume; offline targets do not block waves. incompatible targets run a build that lacks a component type of the version; they are not released, do not block waves and do not count against the thresholds."
+      },
+      "Rollout": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "assignment_id",
+          "config_id",
+          "state",
+          "current_wave",
+          "wave_count",
+          "policy",
+          "targets",
+          "created_at",
+          "created_by",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/AgentID"
+          },
+          "assignment_id": {
+            "$ref": "#/components/schemas/AgentID"
+          },
+          "config_id": {
+            "$ref": "#/components/schemas/AgentID"
+          },
+          "from_version": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Absent for a rollout creating its assignment."
+          },
+          "to_version": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Absent for a rollout deleting its assignment."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "running",
+              "paused",
+              "rolling_back",
+              "completed",
+              "rolled_back",
+              "cancelled"
+            ]
+          },
+          "current_wave": {
+            "type": "integer",
+            "minimum": -1,
+            "maximum": 10,
+            "description": "-1 before the first wave is released."
+          },
+          "wave_count": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 11
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "operator",
+              "threshold"
+            ],
+            "description": "Why the rollout was paused or rolled back."
+          },
+          "policy": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "waves": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 10,
+                "items": {
+                  "$ref": "#/components/schemas/RolloutWave"
+                },
+                "description": "Default [1, 5%, 25%, 100%]. Targets are ordered within a wave by a hash of the rollout and agent IDs."
+              },
+              "canary_group_id": {
+                "$ref": "#/components/schemas/AgentID",
+                "description": "Targets in this group form wave 0, before the waves."
+              },
+              "bake_seconds": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 86400,
+                "default": 120,
+                "description": "How long a target must stay applied and healthy before it succeeds."
+              },
+              "wave_timeout_seconds": {
+                "type": "integer",
+                "minimum": 60,
+                "maximum": 86400,
+                "default": 900,
+                "description": "Connected targets of the current wave that have not applied by then time out."
+              },
+              "max_failures": {
+                "type": "integer",
+                "minimum": 0,
+                "default": 0
+              },
+              "max_failure_percent": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100,
+                "default": 5,
+                "description": "The rollout breaches when failures exceed max(max_failures, max_failure_percent of settled targets), per wave or in total."
+              },
+              "on_failure": {
+                "type": "string",
+                "enum": [
+                  "pause",
+                  "rollback"
+                ],
+                "default": "pause"
+              }
+            }
+          },
+          "targets": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 20000,
+            "description": "Eligible agents snapshotted at admission."
+          },
+          "waves": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RolloutWaveProgress"
+            },
+            "description": "Only on GET /api/v1/rollouts/{id}."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "$ref": "#/components/schemas/AgentID"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RolloutWaveProgress": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "wave",
+          "targets",
+          "outcomes"
+        ],
+        "properties": {
+          "wave": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "targets": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "released_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "outcomes": {
+            "type": "object",
+            "propertyNames": {
+              "$ref": "#/components/schemas/RolloutOutcome"
+            },
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      },
+      "RolloutPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Rollout"
+            }
+          },
+          "next_after": {
+            "$ref": "#/components/schemas/AgentID"
+          }
+        }
+      },
+      "RolloutTarget": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "agent_id",
+          "wave",
+          "outcome",
+          "accepted"
+        ],
+        "properties": {
+          "agent_id": {
+            "$ref": "#/components/schemas/AgentID"
+          },
+          "wave": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/RolloutOutcome"
+          },
+          "released_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "accepted": {
+            "type": "boolean"
+          }
+        }
+      },
+      "RolloutTargetPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RolloutTarget"
+            }
+          },
+          "next_after": {
+            "$ref": "#/components/schemas/AgentID"
+          }
+        }
+      }
+    }
+  }
+}

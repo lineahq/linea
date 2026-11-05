@@ -1,0 +1,28 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  tail_sampling:
+    decision_wait: 1s
+    # Pending traces are dropped at shutdown instead of being decided, so
+    # the run must wait until decision_wait has passed.
+    drop_pending_traces_on_shutdown: true
+    policies:
+      - name: errors
+        type: status_code
+        status_code:
+          status_codes: [ERROR]
+
+exporters:
+  otlp/tempo:
+    endpoint: tempo.observability:4317
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [tail_sampling]
+      exporters: [otlp/tempo]

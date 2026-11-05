@@ -1,0 +1,15 @@
+{{- if gt (int .Values.server.replicas) 1 }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "linea.fullname" . }}
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  # A drained node keeps at least one instance serving.
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "linea.serverSelector" . | nindent 6 }}
+{{- end }}

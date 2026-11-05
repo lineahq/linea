@@ -1,0 +1,29 @@
+# A connecting worker of a runtime on Kubernetes (see
+# docs/debugger/remote-workers.md). The debugger never applies this:
+# deploying the worker is yours, under your cluster's policies. The worker
+# dials the team server, so it needs no Service, Ingress or gateway.
+#
+#   linea runtime push mine registry.example.com/team/linea-runtime:mine
+#   # the token the server's worker_token_file holds (at least 32 characters)
+#   cp /path/to/worker-token examples/kubernetes/base/token
+#   kubectl create namespace linea
+#   kubectl apply -k examples/kubernetes/base
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: linea
+resources:
+  - worker.yaml
+  - networkpolicy.yaml
+secretGenerator:
+  # The registration token, from the file `token` beside this one (ignored
+  # by git). The worker reads the Secret's `token` key.
+  - name: linea-runtime-token
+    files:
+      - token
+    options:
+      disableNameSuffixHash: true
+images:
+  # The runtime image you pushed.
+  - name: linea-runtime
+    newName: registry.example.com/team/linea-runtime
+    newTag: mine

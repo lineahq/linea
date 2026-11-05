@@ -1,0 +1,15 @@
+# Binds the OTLP gRPC port: fine on a Collector whose local config does not,
+# a crash on one whose local config already does (local-port.yaml).
+receivers:
+  nop/managed:
+  otlp/managed:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+exporters:
+  nop/managed:
+service:
+  pipelines:
+    traces/managed:
+      receivers: [nop/managed, otlp/managed]
+      exporters: [nop/managed]

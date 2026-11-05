@@ -1,0 +1,34 @@
+# Regression test for testdata/multisignal/config.yaml: credentials are scrubbed,
+# health checks are filtered, and the environment is stamped on resources.
+version: 1
+name: scrubbing
+inputs:
+  - receiver: otlp
+    file: ../traces.json
+  - receiver: otlp
+    file: ../logs.json
+environment:
+  DEPLOY_ENV: test
+execution:
+  timeout: 30s
+assertions:
+  - name: backend receives one log record
+    target: {exporter: otlp/backend, signal: logs}
+    count: {equals: 1}
+  - name: log credentials are scrubbed
+    target: {exporter: otlp/backend, signal: logs}
+    attributes:
+      absent: [user.password]
+      present: [enduser.id]
+      types: {enduser.id: string}
+    resource_attributes:
+      equals: {deployment.environment: test, service.name: accounts}
+  - name: health check log is filtered
+    target: {processor: filter/health, pipeline: logs, signal: logs}
+    dropped: {equals: 1}
+  - name: only the login span is exported
+    target: {exporter: otlp/backend, signal: traces}
+    count: {min: 1, max: 1}
+    attributes:
+      equals: {http.route: /login}
+      absent: [user.password]

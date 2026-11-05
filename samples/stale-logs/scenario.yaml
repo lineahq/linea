@@ -1,0 +1,20 @@
+# The logs were recorded over almost three hours in October 2025. Rebased,
+# the latest log falls at the run's start: the logs from the last hour and
+# the two-hour-old error are kept, and the three-hour-old info log is
+# dropped. As recorded, every info log would be stale whenever the run is,
+# which is what a quick run of the input shows.
+version: 1
+name: stale-logs
+inputs:
+  - receiver: otlp
+    file: input.json
+execution:
+  timeout: 30s
+  timestamps: rebase
+assertions:
+  - name: recent logs and the old error reach Loki
+    target: {exporter: otlp/loki, signal: logs}
+    count: {equals: 3}
+  - name: only the three-hour-old info log is stale
+    target: {processor: filter/stale, signal: logs}
+    dropped: {equals: 1}

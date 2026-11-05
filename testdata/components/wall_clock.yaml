@@ -1,0 +1,25 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  # Drops logs older than an hour: the outcome depends on when the run
+  # happens unless the input timestamps are rebased.
+  filter/stale:
+    error_mode: ignore
+    logs:
+      log_record:
+        - 'time < Now() - Duration("1h")'
+
+exporters:
+  otlp/loki:
+    endpoint: loki.observability:4317
+
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [filter/stale]
+      exporters: [otlp/loki]

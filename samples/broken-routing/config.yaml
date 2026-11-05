@@ -1,0 +1,40 @@
+# A transformation problem to investigate
+# and correct in the web UI. Error logs are meant to be routed to the pager,
+# but the where clause compares severity_text with "error" while the
+# telemetry says "ERROR", so nothing ever reaches otlp/pager.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  transform/route:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        statements:
+          - set(log.attributes["route"], "pager") where log.severity_text == "error"
+          - set(log.attributes["route"], "archive") where log.attributes["route"] == nil
+  filter/pager:
+    error_mode: ignore
+    logs:
+      log_record:
+        - attributes["route"] != "pager"
+
+exporters:
+  otlp/archive:
+    endpoint: archive.example.invalid:4317
+  otlp/pager:
+    endpoint: pager.example.invalid:4317
+
+service:
+  pipelines:
+    logs/archive:
+      receivers: [otlp]
+      processors: [transform/route]
+      exporters: [otlp/archive]
+    logs/pager:
+      receivers: [otlp]
+      processors: [transform/route, filter/pager]
+      exporters: [otlp/pager]

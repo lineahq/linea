@@ -1,0 +1,53 @@
+name: livecapture
+services:
+  collector:
+    image: linea-collector:dev
+    build:
+      context: ../../..
+      dockerfile: deploy/docker/linea-collector.Dockerfile
+      target: runtime
+    ports:
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    stop_grace_period: 10s
+  tests:
+    image: linea-collector:test
+    profiles: [test]
+    build:
+      context: ../../..
+      dockerfile: deploy/docker/linea-collector.Dockerfile
+      target: test
+    network_mode: none
+    volumes:
+      - go-test-cache:/root/.cache/go-build
+    init: true
+  smoke:
+    image: linea-collector:smoke
+    profiles: [test]
+    build:
+      context: ../../..
+      dockerfile: deploy/docker/linea-collector.Dockerfile
+      target: smoke
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+  capture-smoke:
+    image: linea-collector:capture-smoke
+    profiles: [test]
+    build:
+      context: ../../..
+      dockerfile: deploy/docker/linea-collector.Dockerfile
+      target: capture-smoke
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+volumes:
+  go-test-cache:

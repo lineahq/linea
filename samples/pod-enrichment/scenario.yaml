@@ -1,0 +1,72 @@
+# Spans sent from the checkout pod are enriched from a mocked cluster: the
+# real k8sattributes processor lists and watches these objects through an
+# in-process API server, never a real cluster.
+version: 1
+name: pod-enrichment
+mocks:
+  kubernetes:
+    # As `kubectl get pod,namespace -o yaml` prints them (trimmed).
+    objects:
+      - apiVersion: v1
+        kind: Pod
+        metadata:
+          name: checkout-7d9f8b6c4-x2x9q
+          namespace: shop
+          uid: 0b7c3f52-1d2e-4f6a-9b8c-7d6e5f4a3b2c
+          labels:
+            app.kubernetes.io/name: checkout
+            app.kubernetes.io/component: api
+            pod-template-hash: 7d9f8b6c4
+          ownerReferences:
+            - apiVersion: apps/v1
+              kind: ReplicaSet
+              name: checkout-7d9f8b6c4
+              uid: 5e1d3c2b-0a9f-4e8d-8c7b-6a5f4e3d2c1b
+              controller: true
+        spec:
+          nodeName: worker-2
+          containers:
+            - name: checkout
+              image: registry.example/checkout:1.8.2
+        status:
+          phase: Running
+          podIP: 10.42.0.17
+          podIPs:
+            - ip: 10.42.0.17
+          startTime: "2026-10-10T08:00:00Z"
+      - apiVersion: v1
+        kind: Pod
+        metadata:
+          name: cart-5c8d7b9f6-k4m2n
+          namespace: shop
+          uid: 7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d
+        spec:
+          nodeName: worker-1
+        status:
+          phase: Running
+          podIP: 10.42.0.23
+      - apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: shop
+          labels:
+            team: payments
+inputs:
+  # Sent from the checkout pod's IP: associated by the connection.
+  - receiver: otlp
+    file: input.json
+    client_address: 10.42.0.17
+assertions:
+  - name: the span is exported once
+    target: {exporter: otlp/backend, signal: traces}
+    count: {equals: 1}
+  - name: pod, owner, node and labels are added
+    target: {exporter: otlp/backend, signal: traces}
+    resource_attributes:
+      equals:
+        k8s.pod.name: checkout-7d9f8b6c4-x2x9q
+        k8s.namespace.name: shop
+        k8s.deployment.name: checkout
+        k8s.node.name: worker-2
+        app.component: api
+        team: payments

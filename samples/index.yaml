@@ -1,0 +1,99 @@
+# Samples offered by the web client (GET /api/v1/samples). Each directory
+# holds config.yaml, input.json and scenario.yaml. A scenario with inputs
+# reads input.json, and mock fixtures are inline, so the CLI runs the samples
+# as they are, for example:
+#   linea test --config samples/logs-cleanup/config.yaml --scenario samples/logs-cleanup/scenario.yaml
+# The CLI embeds them: linea samples get <id> writes one to disk.
+# expect is the outcome of the sample's assertions as shipped; a test keeps
+# it true.
+- id: logs-cleanup
+  title: "Logs: scrub secrets and drop health checks"
+  description: >-
+    Adds a resource attribute, deletes a password and hashes a user ID,
+    drops health-check logs and upper-cases severity text.
+  receiver: otlp
+  expect: pass
+- id: traces-redact
+  title: "Traces: drop health checks and redact URLs"
+  description: >-
+    Filters health-check spans, strips the query string from url.full and
+    names spans after their method and route.
+  receiver: otlp
+  expect: pass
+- id: metrics-rename
+  title: "Metrics: rename, convert units and drop"
+  description: >-
+    Renames a Prometheus-style duration metric, converts milliseconds to
+    seconds and drops debug metrics.
+  receiver: otlp
+  expect: pass
+- id: broken-routing
+  title: "Debug me: error logs never page"
+  description: >-
+    A routing bug to find with the OTTL debugger. The where clause compares
+    severity text with "error", but the logs say "ERROR", so the pager
+    assertion fails until the statement is fixed.
+  receiver: otlp
+  expect: fail
+- id: container-logs
+  title: "Mocked node: container logs read by filelog"
+  description: >-
+    The real filelog receiver reads the scenario's files at their kubelet
+    paths from an isolated directory. The container parser joins a partial
+    line and names the pod from the path, and the collector's own logs are
+    excluded. A quick run injects the input after the receiver instead.
+  receiver: filelog
+  expect: pass
+- id: pod-enrichment
+  title: "Mocked cluster: Kubernetes pod enrichment"
+  description: >-
+    The real k8sattributes processor reads pods and namespaces from a mocked
+    API server and associates the span by its client address. A quick run
+    has no objects, so it shows the span passing unenriched.
+  receiver: otlp
+  expect: pass
+- id: log-routing
+  title: "Routing: page on errors, split audit logs"
+  description: >-
+    The routing connector copies error logs to a pager pipeline that
+    redacts them, moves audit logs to their own exporter and sends the rest
+    to an archive that drops debug logs. Follow a record to see where it
+    went.
+  receiver: otlp
+  expect: pass
+- id: log-metrics
+  title: "Aggregation: count logs into metrics"
+  description: >-
+    The count connector turns logs into error and per-service metrics on a
+    second pipeline. Open the connector to see which records each data
+    point counts, and follow a point back to its logs.
+  receiver: otlp
+  expect: pass
+- id: trace-sampling
+  title: "Tail sampling: keep failed and slow traces"
+  description: >-
+    The tail_sampling processor decides each trace two to three seconds
+    after its first span and keeps those that failed or took over 500ms. A
+    second input arrives four seconds later on the scenario timeline: its late
+    spans follow their trace's decision. The run waits for pending
+    decisions before it stops.
+  receiver: otlp
+  expect: pass
+- id: span-metrics
+  title: "Span metrics: RED metrics from traces"
+  description: >-
+    The spanmetrics connector turns spans into call counts and duration
+    histograms per method and status code. It flushes on a timer; the
+    debugger runs it on a simulated clock that flushes when the run ends,
+    so the metrics appear without waiting.
+  receiver: otlp
+  expect: pass
+- id: stale-logs
+  title: "Wall clock: drop stale info logs"
+  description: >-
+    A filter drops info logs older than an hour by comparing with Now().
+    The scenario rebases the recorded timestamps to the run's start, so the
+    outcome is the same on any day. A quick run keeps the recorded times,
+    drops every info log and warns about the wall-clock read.
+  receiver: otlp
+  expect: pass

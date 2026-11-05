@@ -1,0 +1,42 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  k8sattributes:
+    auth_type: serviceAccount
+    passthrough: false
+    extract:
+      metadata:
+        - k8s.namespace.name
+        - k8s.pod.name
+        - k8s.pod.uid
+        - k8s.deployment.name
+        - k8s.node.name
+      labels:
+        - tag_name: app.component
+          key: app.kubernetes.io/component
+          from: pod
+        - tag_name: team
+          key: team
+          from: namespace
+    pod_association:
+      - sources:
+          - from: resource_attribute
+            name: k8s.pod.ip
+      - sources:
+          - from: connection
+  batch: {}
+
+exporters:
+  otlp/backend:
+    endpoint: tempo.observability:4317
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [k8sattributes, batch]
+      exporters: [otlp/backend]

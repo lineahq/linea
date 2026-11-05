@@ -1,0 +1,41 @@
+# Two buffering traces pipelines share one exporter. The Collector stops
+# independent pipelines in nondeterministic order, so their batch flushes
+# reach otlp/backend in varying order (normalization, order-insensitive
+# reference comparison).
+receivers:
+  otlp:
+    protocols:
+      grpc: {}
+
+processors:
+  attributes/all:
+    actions:
+      - key: route
+        value: all
+        action: insert
+  attributes/web:
+    actions:
+      - key: route
+        value: web
+        action: insert
+  filter/health:
+    traces:
+      span:
+        - 'attributes["http.route"] == "/health"'
+  batch:
+    timeout: 200ms
+
+exporters:
+  otlp/backend:
+    endpoint: collector.example.invalid:4317
+
+service:
+  pipelines:
+    traces/all:
+      receivers: [otlp]
+      processors: [attributes/all, batch]
+      exporters: [otlp/backend]
+    traces/web:
+      receivers: [otlp]
+      processors: [filter/health, attributes/web, batch]
+      exporters: [otlp/backend]

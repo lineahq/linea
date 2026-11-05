@@ -1,0 +1,345 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "accounts"
+            }
+          }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": {
+            "name": "a"
+          },
+          "logRecords": [
+            {
+              "timeUnixNano": "1760000000000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "request 0"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "u0"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "request 1"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "u1"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "request 2"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "u2"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "request 3"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "u3"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "request 4"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "u4"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "request 0"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "u5"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "request 1"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "u6"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "request 2"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "u7"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "request 3"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "u8"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "request 4"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "u9"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "request 0"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "u10"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "request 1"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "u11"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "request 2"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "u12"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "request 3"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "u13"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "request 4"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "u14"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "request 0"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "u15"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "request 1"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "u16"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "request 2"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "u17"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "request 3"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "u18"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1760000000000000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": {
+                "stringValue": "request 4"
+              },
+              "attributes": [
+                {
+                  "key": "enduser.id",
+                  "value": {
+                    "stringValue": "u19"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

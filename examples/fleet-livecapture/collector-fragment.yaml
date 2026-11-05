@@ -1,0 +1,46 @@
+# Merge into your existing Collector configuration. Keep its production pipeline
+# and exporters; insert capture/egress at the intended named capture point in
+# each selected pipeline. Requires the distribution's existing capture components.
+#
+# The livecapture extension is unchanged: it presents the Collector's fleet
+# agent credential to the plugin. That credential needs the label
+# capture=<collector_group>[,...] (or *). To address the Collector by fleet
+# agent, group or selector, report the same pod identity over OpAMP; the
+# plugin links the two when exactly one connected agent matches.
+extensions:
+  opamp:
+    server:
+      ws:
+        endpoint: ${env:LINEA_FLEET_OPAMP_ENDPOINT}
+        headers:
+          Authorization: "Bearer ${env:LINEA_FLEET_AGENT_TOKEN}"
+    agent_description:
+      non_identifying_attributes:
+        k8s.pod.name: ${env:POD_NAME}
+        k8s.namespace.name: ${env:POD_NAMESPACE}
+        k8s.cluster.name: ${env:CLUSTER_NAME}
+  livecapture:
+    enabled: true
+    environment: production
+    collector_group: ${env:OTEL_CAPTURE_GROUP}
+    pod: ${env:POD_NAME}
+    cluster: ${env:CLUSTER_NAME}
+    namespace: ${env:POD_NAMESPACE}
+    control:
+      endpoint: ${env:OTEL_CAPTURE_CONTROL_ENDPOINT}
+      headers:
+        Authorization: "Bearer ${env:LINEA_FLEET_AGENT_TOKEN}"
+      tls:
+        ca_file: /certs/capture-ca.pem
+    delivery:
+      endpoint: ${env:OTEL_CAPTURE_DELIVERY_ENDPOINT}
+      headers:
+        Authorization: "Bearer ${env:LINEA_FLEET_AGENT_TOKEN}"
+      tls:
+        ca_file: /certs/capture-ca.pem
+processors:
+  capture/egress:
+    sensitivity: redacted
+# Also add opamp and livecapture to service.extensions and capture/egress to the desired
+# pipeline processor lists. A sensitivity label identifies an operator-chosen
+# point; review the component's actual redaction policy for your data.

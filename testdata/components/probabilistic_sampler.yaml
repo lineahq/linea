@@ -1,0 +1,21 @@
+# Samples no traces: every span is dropped.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  probabilistic_sampler:
+    sampling_percentage: 0
+
+exporters:
+  otlp:
+    endpoint: backend.example.invalid:4317
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [probabilistic_sampler]
+      exporters: [otlp]

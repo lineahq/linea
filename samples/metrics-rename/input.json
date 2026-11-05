@@ -1,0 +1,64 @@
+{
+  "resourceMetrics": [
+    {
+      "resource": {
+        "attributes": [
+          { "key": "service.name", "value": { "stringValue": "api" } }
+        ]
+      },
+      "scopeMetrics": [
+        {
+          "scope": { "name": "api.metrics" },
+          "metrics": [
+            {
+              "name": "http_server_duration_ms",
+              "unit": "ms",
+              "gauge": {
+                "dataPoints": [
+                  {
+                    "timeUnixNano": "1760000000000000000",
+                    "asDouble": 250,
+                    "attributes": [
+                      { "key": "http.route", "value": { "stringValue": "/orders" } }
+                    ]
+                  },
+                  {
+                    "timeUnixNano": "1760000000000000000",
+                    "asDouble": 40,
+                    "attributes": [
+                      { "key": "http.route", "value": { "stringValue": "/cart" } }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "name": "orders_total",
+              "unit": "1",
+              "sum": {
+                "aggregationTemporality": 2,
+                "isMonotonic": true,
+                "dataPoints": [
+                  {
+                    "startTimeUnixNano": "1759999990000000000",
+                    "timeUnixNano": "1760000000000000000",
+                    "asInt": "42"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "debug_goroutines",
+              "unit": "1",
+              "gauge": {
+                "dataPoints": [
+                  { "timeUnixNano": "1760000000000000000", "asInt": "17" }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+version: 1
+name: accounts
+inputs:
+  - receiver: otlp
+    file: traces.json
+  - receiver: otlp
+    file: logs.json
+environment:
+  DEPLOY_ENV: test
+execution:
+  timeout: 30s

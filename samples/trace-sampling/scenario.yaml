@@ -1,0 +1,44 @@
+# The failed order and the slow search are kept; the fast lookup and the
+# health check are dropped. Four seconds later, after every decision, a
+# late child span of two of those traces arrives. The failed order's child
+# is forwarded on its own; the fast lookup's child is dropped like its trace.
+version: 1
+name: trace-sampling
+inputs:
+  - receiver: otlp
+    file: input.json
+  - receiver: otlp
+    # The processor decides a trace on its one-second ticker once
+    # decision_wait (2s) has passed: up to three seconds after its first
+    # span. Four seconds keeps the late spans clear of that tick.
+    after: 4s
+    data:
+      resourceSpans:
+        - resource:
+            attributes:
+              - {key: service.name, value: {stringValue: checkout}}
+          scopeSpans:
+            - scope: {name: checkout.http}
+              spans:
+                - traceId: 6c9f00a8a9149214e37ac744d2fd71d0
+                  spanId: c2c5d3bf07051a8b
+                  parentSpanId: fff2a08cd4d2c285
+                  name: charge card
+                  startTimeUnixNano: "1791626401010000000"
+                  endTimeUnixNano: "1791626401390000000"
+                  status: {code: 2}
+                - traceId: 8eb122cacb36b436059ce966f3f93f02
+                  spanId: d3d6e4c018162b9c
+                  parentSpanId: b1b4c2aef6f4e4a7
+                  name: SELECT orders
+                  startTimeUnixNano: "1791626403005000000"
+                  endTimeUnixNano: "1791626403030000000"
+execution:
+  timeout: 30s
+assertions:
+  - name: the failed order, its late child and the slow search are kept
+    target: {exporter: otlp/tempo, signal: traces}
+    count: {equals: 3}
+  - name: the fast lookup, its late child and the health check are dropped
+    target: {processor: tail_sampling, signal: traces}
+    dropped: {equals: 3}

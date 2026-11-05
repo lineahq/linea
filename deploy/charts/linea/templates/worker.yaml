@@ -1,0 +1,127 @@
+{{- if .Values.worker.enabled }}
+{{- $fullname := include "linea.fullname" . -}}
+# A dedicated runtime worker, with the limits of the debugger's local worker
+# container: a read-only root, user 65534, no capabilities and /tmp as
+# scratch space. It dials the server (linea-worker --connect) and listens on
+# no port, so it has no Service.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $fullname }}-worker
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-worker
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  # Any number of workers can serve one runtime name; each one dials the
+  # server and runs up to its capacity at once.
+  replicas: {{ .Values.worker.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "linea.workerSelector" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "linea.workerSelector" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ $fullname }}-worker
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: "{{ required "worker.image.repository is required: a runtime image from linea runtime build" .Values.worker.image.repository }}:{{ required "worker.image.tag is required" .Values.worker.image.tag }}"
+          imagePullPolicy: {{ .Values.worker.image.pullPolicy }}
+          # The image's entrypoint is the worker.
+          args:
+            - --connect={{ include "linea.serverURL" . }}
+            - --name={{ .Values.worker.name }}
+            - --capacity={{ .Values.worker.capacity }}
+            {{- if .Values.worker.caSecret }}
+            - --ca-file=/etc/linea/ca/ca.crt
+            {{- end }}
+          env:
+            - name: LINEA_WORKER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "linea.workerSecret" . }}
+                  key: token
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.worker.caSecret }}
+            - name: ca
+              mountPath: /etc/linea/ca
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        {{- if .Values.worker.caSecret }}
+        - name: ca
+          secret:
+            secretName: {{ .Values.worker.caSecret }}
+            items: [{key: {{ .Values.worker.caKey | quote }}, path: ca.crt}]
+        {{- end }}
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- if .Values.networkPolicy.enabled }}
+---
+# The worker accepts no connection and reaches only the server, DNS to find
+# it and the object store, whose presigned URLs carry bundles over the inline
+# limit: a run's Collector exports nowhere outside the pod. With
+# worker.serverURL pointing outside the release, allow that egress yourself.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-worker
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "linea.workerSelector" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    {{- include "linea.egressCommon" . | nindent 4 }}
+{{- end }}
+{{- end }}

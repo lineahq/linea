@@ -1,0 +1,19 @@
+go 1.27.0
+
+toolchain go1.27.3
+
+use (
+	.
+	./collector/distribution
+	./collector/livecapture
+	./collector/provider
+	./collector/tools/testlab
+	./examples/fleet-agent-summary-plugin
+	./pluginsdk
+)
+
+// The root and distribution modules replace these with different relative
+// paths; the workspace needs one replacement to settle the conflict.
+replace github.com/lineahq/linea/collector/livecapture v0.0.0 => ./collector/livecapture
+
+replace github.com/lineahq/linea/collector/provider v0.1.0 => ./collector/provider

@@ -1,0 +1,30 @@
+/* The OTTL playground: the debugger's panes (workspace/panes.css) with the
+   input on the left and the statements above the result. */
+.pg-head-actions { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+
+.pg-page { flex: 1; min-height: 0; display: flex; flex-direction: column; border-top: 1px solid var(--border); }
+.pg-ask { margin: 8px 12px; }
+
+.pg-page .od-wbpanes__graph > .od-pane { flex: 1; }
+.pg-page .od-pane__head { font-size: 12.5px; }
+.pg-mode { display: inline-flex; align-items: center; gap: 6px; }
+.pg-mode .od-select { height: 26px; }
+.pg-result__note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pg-result__body { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.pg-summary { display: flex; flex-wrap: wrap; gap: 6px; }
+.pg-summary:empty { display: none; }
+.pg-table code { white-space: pre-wrap; word-break: break-word; }
+.pg-key { display: inline-block; min-width: 26px; margin-right: 8px; font: 600 11px/16px var(--font-mono); color: var(--fg-muted); }
+.pg-diagnostics { margin: 0; padding-left: 18px; font-size: 12.5px; word-break: break-word; }
+
+/* Narrow screens stack the panes and scroll the page instead. */
+@media (max-width: 900px) {
+  .pg-page { overflow: auto; }
+  .pg-page .od-wbpanes { flex: none; flex-direction: column; }
+  .pg-page .od-wbpanes__left { width: auto; height: 320px; }
+  .pg-page .od-wbpanes__graph--sized { height: 220px; border-top: 1px solid var(--border); }
+  .pg-page .od-wbpanes__bottom { min-height: 360px; overflow: visible; border-top: 1px solid var(--border); }
+  .pg-page .pane-splitter { display: none; }
+  .pg-head-actions { flex-wrap: wrap; }
+  .pg-hint { display: none; }
+}

@@ -1,0 +1,24 @@
+# Errors page and are archived, audit logs stay separate, and debug logs
+# are not archived.
+version: 1
+name: log-routing
+inputs:
+  - receiver: otlp
+    file: input.json
+execution:
+  timeout: 30s
+assertions:
+  - name: the error pages with high priority and no email
+    target: {exporter: otlp/pager, signal: logs}
+    count: {equals: 1}
+    attributes:
+      equals: {page.priority: high}
+      absent: [user.email]
+  - name: errors and info logs are archived, debug logs are not
+    target: {exporter: otlp/archive, signal: logs}
+    count: {equals: 2}
+  - name: audit logs reach only the audit exporter
+    target: {exporter: otlp/audit, signal: logs}
+    count: {equals: 1}
+    resource_attributes:
+      equals: {service.name: audit, deployment.environment: prod}

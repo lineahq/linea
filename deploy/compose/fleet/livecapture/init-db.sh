@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+CAPTURE_MIGRATE_PASSWORD=$(cat /run/secrets/capture_migrate_password)
+CAPTURE_RUNTIME_PASSWORD=$(cat /run/secrets/capture_runtime_password)
+export CAPTURE_MIGRATE_PASSWORD CAPTURE_RUNTIME_PASSWORD
+psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=1 <<'SQL'
+\getenv migrate_password CAPTURE_MIGRATE_PASSWORD
+\getenv runtime_password CAPTURE_RUNTIME_PASSWORD
+CREATE ROLE capture_migrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD :'migrate_password';
+CREATE ROLE capture_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD :'runtime_password';
+REVOKE ALL ON DATABASE livecapture FROM PUBLIC;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+GRANT CONNECT,CREATE ON DATABASE livecapture TO capture_migrator;
+GRANT CONNECT ON DATABASE livecapture TO capture_app;
+SQL
+unset CAPTURE_MIGRATE_PASSWORD CAPTURE_RUNTIME_PASSWORD

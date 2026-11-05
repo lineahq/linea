@@ -1,0 +1,36 @@
+# Official otel/opentelemetry-collector-contrib:0.162.0 reporting example.
+# Set LINEA_FLEET_OPAMP_ENDPOINT and LINEA_FLEET_AGENT_TOKEN in the environment.
+extensions:
+  opamp:
+    # Omit instance_uid: each Collector generates its own identity automatically.
+    # For a stable identity across process restarts, provision a unique UID per
+    # instance locally; no UID registration with fleet is required.
+    server:
+      ws:
+        endpoint: ${env:LINEA_FLEET_OPAMP_ENDPOINT}
+        headers:
+          Authorization: "Bearer ${env:LINEA_FLEET_AGENT_TOKEN}"
+    capabilities:
+      reports_effective_config: false
+      reports_health: true
+      reports_available_components: false
+      accepts_restart_command: false
+    reports_raw_config: false
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 127.0.0.1:4317
+exporters:
+  debug:
+    verbosity: basic
+service:
+  extensions: [opamp]
+  telemetry:
+    logs:
+      level: error
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [debug]

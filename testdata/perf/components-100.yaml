@@ -1,0 +1,531 @@
+# W1: 100 components (1 receiver, 96 processors in 8 pipelines of 12,
+# 3 exporters). Generated; see README.md.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  attributes/p0:
+    actions:
+      - key: k0
+        value: v0
+        action: upsert
+  attributes/p1:
+    actions:
+      - key: k1
+        value: v1
+        action: upsert
+  attributes/p2:
+    actions:
+      - key: k2
+        value: v2
+        action: upsert
+  attributes/p3:
+    actions:
+      - key: k3
+        value: v3
+        action: upsert
+  attributes/p4:
+    actions:
+      - key: k4
+        value: v4
+        action: upsert
+  attributes/p5:
+    actions:
+      - key: k5
+        value: v5
+        action: upsert
+  attributes/p6:
+    actions:
+      - key: k6
+        value: v6
+        action: upsert
+  attributes/p7:
+    actions:
+      - key: k7
+        value: v7
+        action: upsert
+  attributes/p8:
+    actions:
+      - key: k8
+        value: v8
+        action: upsert
+  attributes/p9:
+    actions:
+      - key: k9
+        value: v9
+        action: upsert
+  attributes/p10:
+    actions:
+      - key: k10
+        value: v10
+        action: upsert
+  attributes/p11:
+    actions:
+      - key: k11
+        value: v11
+        action: upsert
+  attributes/p12:
+    actions:
+      - key: k12
+        value: v12
+        action: upsert
+  attributes/p13:
+    actions:
+      - key: k13
+        value: v13
+        action: upsert
+  attributes/p14:
+    actions:
+      - key: k14
+        value: v14
+        action: upsert
+  attributes/p15:
+    actions:
+      - key: k15
+        value: v15
+        action: upsert
+  attributes/p16:
+    actions:
+      - key: k16
+        value: v16
+        action: upsert
+  attributes/p17:
+    actions:
+      - key: k17
+        value: v17
+        action: upsert
+  attributes/p18:
+    actions:
+      - key: k18
+        value: v18
+        action: upsert
+  attributes/p19:
+    actions:
+      - key: k19
+        value: v19
+        action: upsert
+  attributes/p20:
+    actions:
+      - key: k20
+        value: v20
+        action: upsert
+  attributes/p21:
+    actions:
+      - key: k21
+        value: v21
+        action: upsert
+  attributes/p22:
+    actions:
+      - key: k22
+        value: v22
+        action: upsert
+  attributes/p23:
+    actions:
+      - key: k23
+        value: v23
+        action: upsert
+  attributes/p24:
+    actions:
+      - key: k24
+        value: v24
+        action: upsert
+  attributes/p25:
+    actions:
+      - key: k25
+        value: v25
+        action: upsert
+  attributes/p26:
+    actions:
+      - key: k26
+        value: v26
+        action: upsert
+  attributes/p27:
+    actions:
+      - key: k27
+        value: v27
+        action: upsert
+  attributes/p28:
+    actions:
+      - key: k28
+        value: v28
+        action: upsert
+  attributes/p29:
+    actions:
+      - key: k29
+        value: v29
+        action: upsert
+  attributes/p30:
+    actions:
+      - key: k30
+        value: v30
+        action: upsert
+  attributes/p31:
+    actions:
+      - key: k31
+        value: v31
+        action: upsert
+  attributes/p32:
+    actions:
+      - key: k32
+        value: v32
+        action: upsert
+  attributes/p33:
+    actions:
+      - key: k33
+        value: v33
+        action: upsert
+  attributes/p34:
+    actions:
+      - key: k34
+        value: v34
+        action: upsert
+  attributes/p35:
+    actions:
+      - key: k35
+        value: v35
+        action: upsert
+  attributes/p36:
+    actions:
+      - key: k36
+        value: v36
+        action: upsert
+  attributes/p37:
+    actions:
+      - key: k37
+        value: v37
+        action: upsert
+  attributes/p38:
+    actions:
+      - key: k38
+        value: v38
+        action: upsert
+  attributes/p39:
+    actions:
+      - key: k39
+        value: v39
+        action: upsert
+  attributes/p40:
+    actions:
+      - key: k40
+        value: v40
+        action: upsert
+  attributes/p41:
+    actions:
+      - key: k41
+        value: v41
+        action: upsert
+  attributes/p42:
+    actions:
+      - key: k42
+        value: v42
+        action: upsert
+  attributes/p43:
+    actions:
+      - key: k43
+        value: v43
+        action: upsert
+  attributes/p44:
+    actions:
+      - key: k44
+        value: v44
+        action: upsert
+  attributes/p45:
+    actions:
+      - key: k45
+        value: v45
+        action: upsert
+  attributes/p46:
+    actions:
+      - key: k46
+        value: v46
+        action: upsert
+  attributes/p47:
+    actions:
+      - key: k47
+        value: v47
+        action: upsert
+  attributes/p48:
+    actions:
+      - key: k48
+        value: v48
+        action: upsert
+  attributes/p49:
+    actions:
+      - key: k49
+        value: v49
+        action: upsert
+  attributes/p50:
+    actions:
+      - key: k50
+        value: v50
+        action: upsert
+  attributes/p51:
+    actions:
+      - key: k51
+        value: v51
+        action: upsert
+  attributes/p52:
+    actions:
+      - key: k52
+        value: v52
+        action: upsert
+  attributes/p53:
+    actions:
+      - key: k53
+        value: v53
+        action: upsert
+  attributes/p54:
+    actions:
+      - key: k54
+        value: v54
+        action: upsert
+  attributes/p55:
+    actions:
+      - key: k55
+        value: v55
+        action: upsert
+  attributes/p56:
+    actions:
+      - key: k56
+        value: v56
+        action: upsert
+  attributes/p57:
+    actions:
+      - key: k57
+        value: v57
+        action: upsert
+  attributes/p58:
+    actions:
+      - key: k58
+        value: v58
+        action: upsert
+  attributes/p59:
+    actions:
+      - key: k59
+        value: v59
+        action: upsert
+  attributes/p60:
+    actions:
+      - key: k60
+        value: v60
+        action: upsert
+  attributes/p61:
+    actions:
+      - key: k61
+        value: v61
+        action: upsert
+  attributes/p62:
+    actions:
+      - key: k62
+        value: v62
+        action: upsert
+  attributes/p63:
+    actions:
+      - key: k63
+        value: v63
+        action: upsert
+  attributes/p64:
+    actions:
+      - key: k64
+        value: v64
+        action: upsert
+  attributes/p65:
+    actions:
+      - key: k65
+        value: v65
+        action: upsert
+  attributes/p66:
+    actions:
+      - key: k66
+        value: v66
+        action: upsert
+  attributes/p67:
+    actions:
+      - key: k67
+        value: v67
+        action: upsert
+  attributes/p68:
+    actions:
+      - key: k68
+        value: v68
+        action: upsert
+  attributes/p69:
+    actions:
+      - key: k69
+        value: v69
+        action: upsert
+  attributes/p70:
+    actions:
+      - key: k70
+        value: v70
+        action: upsert
+  attributes/p71:
+    actions:
+      - key: k71
+        value: v71
+        action: upsert
+  attributes/p72:
+    actions:
+      - key: k72
+        value: v72
+        action: upsert
+  attributes/p73:
+    actions:
+      - key: k73
+        value: v73
+        action: upsert
+  attributes/p74:
+    actions:
+      - key: k74
+        value: v74
+        action: upsert
+  attributes/p75:
+    actions:
+      - key: k75
+        value: v75
+        action: upsert
+  attributes/p76:
+    actions:
+      - key: k76
+        value: v76
+        action: upsert
+  attributes/p77:
+    actions:
+      - key: k77
+        value: v77
+        action: upsert
+  attributes/p78:
+    actions:
+      - key: k78
+        value: v78
+        action: upsert
+  attributes/p79:
+    actions:
+      - key: k79
+        value: v79
+        action: upsert
+  attributes/p80:
+    actions:
+      - key: k80
+        value: v80
+        action: upsert
+  attributes/p81:
+    actions:
+      - key: k81
+        value: v81
+        action: upsert
+  attributes/p82:
+    actions:
+      - key: k82
+        value: v82
+        action: upsert
+  attributes/p83:
+    actions:
+      - key: k83
+        value: v83
+        action: upsert
+  attributes/p84:
+    actions:
+      - key: k84
+        value: v84
+        action: upsert
+  attributes/p85:
+    actions:
+      - key: k85
+        value: v85
+        action: upsert
+  attributes/p86:
+    actions:
+      - key: k86
+        value: v86
+        action: upsert
+  attributes/p87:
+    actions:
+      - key: k87
+        value: v87
+        action: upsert
+  attributes/p88:
+    actions:
+      - key: k88
+        value: v88
+        action: upsert
+  attributes/p89:
+    actions:
+      - key: k89
+        value: v89
+        action: upsert
+  attributes/p90:
+    actions:
+      - key: k90
+        value: v90
+        action: upsert
+  attributes/p91:
+    actions:
+      - key: k91
+        value: v91
+        action: upsert
+  attributes/p92:
+    actions:
+      - key: k92
+        value: v92
+        action: upsert
+  attributes/p93:
+    actions:
+      - key: k93
+        value: v93
+        action: upsert
+  attributes/p94:
+    actions:
+      - key: k94
+        value: v94
+        action: upsert
+  attributes/p95:
+    actions:
+      - key: k95
+        value: v95
+        action: upsert
+
+exporters:
+  otlp/a:
+    endpoint: a.example.invalid:4317
+  otlp/b:
+    endpoint: b.example.invalid:4317
+  debug:
+
+service:
+  pipelines:
+    logs/0:
+      receivers: [otlp]
+      processors: [attributes/p0, attributes/p1, attributes/p2, attributes/p3, attributes/p4, attributes/p5, attributes/p6, attributes/p7, attributes/p8, attributes/p9, attributes/p10, attributes/p11]
+      exporters: [otlp/a, otlp/b, debug]
+    logs/1:
+      receivers: [otlp]
+      processors: [attributes/p12, attributes/p13, attributes/p14, attributes/p15, attributes/p16, attributes/p17, attributes/p18, attributes/p19, attributes/p20, attributes/p21, attributes/p22, attributes/p23]
+      exporters: [otlp/a, otlp/b, debug]
+    logs/2:
+      receivers: [otlp]
+      processors: [attributes/p24, attributes/p25, attributes/p26, attributes/p27, attributes/p28, attributes/p29, attributes/p30, attributes/p31, attributes/p32, attributes/p33, attributes/p34, attributes/p35]
+      exporters: [otlp/a, otlp/b, debug]
+    logs/3:
+      receivers: [otlp]
+      processors: [attributes/p36, attributes/p37, attributes/p38, attributes/p39, attributes/p40, attributes/p41, attributes/p42, attributes/p43, attributes/p44, attributes/p45, attributes/p46, attributes/p47]
+      exporters: [otlp/a, otlp/b, debug]
+    logs/4:
+      receivers: [otlp]
+      processors: [attributes/p48, attributes/p49, attributes/p50, attributes/p51, attributes/p52, attributes/p53, attributes/p54, attributes/p55, attributes/p56, attributes/p57, attributes/p58, attributes/p59]
+      exporters: [otlp/a, otlp/b, debug]
+    logs/5:
+      receivers: [otlp]
+      processors: [attributes/p60, attributes/p61, attributes/p62, attributes/p63, attributes/p64, attributes/p65, attributes/p66, attributes/p67, attributes/p68, attributes/p69, attributes/p70, attributes/p71]
+      exporters: [otlp/a, otlp/b, debug]
+    logs/6:
+      receivers: [otlp]
+      processors: [attributes/p72, attributes/p73, attributes/p74, attributes/p75, attributes/p76, attributes/p77, attributes/p78, attributes/p79, attributes/p80, attributes/p81, attributes/p82, attributes/p83]
+      exporters: [otlp/a, otlp/b, debug]
+    logs/7:
+      receivers: [otlp]
+      processors: [attributes/p84, attributes/p85, attributes/p86, attributes/p87, attributes/p88, attributes/p89, attributes/p90, attributes/p91, attributes/p92, attributes/p93, attributes/p94, attributes/p95]
+      exporters: [otlp/a, otlp/b, debug]

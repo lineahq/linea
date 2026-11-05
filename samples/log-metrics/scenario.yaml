@@ -1,0 +1,20 @@
+# Five logs are exported and counted; the debug log is neither.
+version: 1
+name: log-metrics
+inputs:
+  - receiver: otlp
+    file: input.json
+execution:
+  timeout: 30s
+assertions:
+  - name: every log but the debug log is exported
+    target: {exporter: otlp/logs, signal: logs}
+    count: {equals: 5}
+  - name: three error series and two per-service totals are emitted
+    target: {exporter: otlp/metrics, signal: metrics}
+    count: {equals: 5}
+    resource_attributes:
+      equals: {telemetry.source: log-counts}
+  - name: the debug log is dropped before counting
+    target: {processor: filter/debug, signal: logs}
+    dropped: {equals: 1}

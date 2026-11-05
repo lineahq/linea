@@ -1,0 +1,35 @@
+# Tail sampling keeps whole traces that failed or were slow and drops the
+# rest. A trace is decided on the processor's one-second ticker once
+# decision_wait has passed since its first span arrived.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  tail_sampling:
+    decision_wait: 2s
+    # Traces still pending at shutdown are dropped rather than decided, so
+    # the debugger waits until every decision has been made.
+    drop_pending_traces_on_shutdown: true
+    policies:
+      - name: errors
+        type: status_code
+        status_code:
+          status_codes: [ERROR]
+      - name: slow
+        type: latency
+        latency:
+          threshold_ms: 500
+
+exporters:
+  otlp/tempo:
+    endpoint: tempo.example.invalid:4317
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [tail_sampling]
+      exporters: [otlp/tempo]

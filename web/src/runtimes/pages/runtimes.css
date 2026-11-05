@@ -1,0 +1,46 @@
+/* Layout of the Runtimes destination pages. Colours come from ds/tokens.css. */
+.rt-grow { flex: 1; }
+.rt-note { font-size: 12px; }
+.rt-split { display: flex; flex: 1; min-height: 0; }
+.rt-split__main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.rt-detail { width: 420px; flex: none; border-left: 1px solid var(--border); }
+.rt-detail__body { padding: 14px; display: flex; flex-direction: column; gap: 14px; }
+.rt-card { overflow: hidden; }
+.rt-panel .od-card__body { display: flex; flex-direction: column; gap: 10px; }
+.rt-cli { padding: 8px 12px; }
+.rt-hint { font-size: 12px; display: flex; gap: 6px; align-items: center; }
+.rt-rowbtn { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; text-align: left; }
+.rt-rowbtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.rt-default { margin-left: 6px; }
+.rt-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.rt-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.rt-stack { max-width: 1180px; width: 100%; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+.rt-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.rt-fields { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+.rt-fields .od-field { min-width: 220px; }
+/* Build facts and the log share the first row; the manifest spans the full
+   width below so long component lines do not need horizontal scrolling. */
+.rt-build { max-width: 1680px; margin: 0 auto; display: grid; grid-template-columns: minmax(320px, 2fr) minmax(0, 3fr); gap: 16px; }
+.rt-build > section, .rt-build__side, .rt-build__manifest { min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.rt-build__manifest { grid-column: 1 / -1; }
+.rt-log { max-height: 520px; }
+.rt-diag { display: flex; flex-direction: column; gap: 8px; }
+.rt-storage { max-width: 980px; display: flex; flex-direction: column; gap: 16px; }
+.rt-legend { display: flex; gap: 18px; font-size: 12.5px; flex-wrap: wrap; }
+.rt-legend > span { display: inline-flex; gap: 6px; align-items: center; }
+.rt-swatch { width: 10px; height: 10px; border-radius: 2px; }
+@media (max-width: 1100px) {
+  .rt-build { grid-template-columns: minmax(0, 1fr); }
+  .rt-split { flex-direction: column; }
+  .rt-detail { width: auto; border-left: 0; border-top: 1px solid var(--border); }
+}
+.rt-checkbar { padding: 12px 14px; }
+.rt-components { display: flex; flex-direction: column; gap: 8px; }
+.rt-components__kind summary { display: flex; justify-content: space-between; gap: 8px; cursor: pointer; font-size: 12.5px; font-weight: 600; text-transform: capitalize; padding: 2px 0; }
+.rt-components__kind .rt-chips { gap: 4px; padding: 4px 0 6px; }
+.rt-components__kind .od-chip { font-size: 11.5px; }
+.rt-chips .od-chip { max-width: 100%; height: auto; min-height: 20px; padding-block: 2px; line-height: 16px; white-space: normal; overflow-wrap: anywhere; }
+.source-slot { display: flex; flex-direction: column; gap: 4px; align-self: stretch; padding: 8px 10px; border: 1px dashed var(--border); border-radius: var(--radius-lg); }
+.source-slot--over { border-color: var(--accent); background: var(--bg-surface); }
+.source-slot__head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.runtime-form fieldset.source-slots { border: 1px solid var(--border); padding: 10px 12px; align-items: stretch; }

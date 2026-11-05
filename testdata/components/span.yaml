@@ -1,0 +1,22 @@
+# Names database spans after their database system.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  span:
+    name:
+      from_attributes: [db.system]
+
+exporters:
+  otlp:
+    endpoint: backend.example.invalid:4317
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [span]
+      exporters: [otlp]

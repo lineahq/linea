@@ -1,0 +1,21 @@
+version: 1
+name: stale logs are dropped relative to the run's time
+# Recorded on 2024-06-01, two hours apart. Rebased, the latest log falls at
+# the run's start and the earlier one is two hours old.
+inputs:
+  - data:
+      resourceLogs:
+        - resource:
+            attributes:
+              - {key: service.name, value: {stringValue: checkout}}
+          scopeLogs:
+            - logRecords:
+                - timeUnixNano: "1717228800000000000"
+                  body: {stringValue: two hours earlier}
+                - timeUnixNano: "1717236000000000000"
+                  body: {stringValue: latest}
+execution:
+  timestamps: rebase
+assertions:
+  - target: {exporter: otlp/loki, signal: logs}
+    count: {equals: 1}

@@ -1,0 +1,55 @@
+# Example for a Collector you build with the livecapture components
+# (docs/collector-components/README.md). No local-control listener.
+extensions:
+  livecapture:
+    enabled: true
+    environment: test
+    collector_group: s4
+    pod: ${env:POD_NAME}
+    cluster: s4
+    namespace: telemetry
+    control:
+      endpoint: livecapture-plugin:4340
+      headers:
+        Authorization: "Bearer ${env:LINEA_FLEET_AGENT_TOKEN}"
+      tls:
+        ca_file: /certs/ca.pem
+    delivery:
+      endpoint: livecapture-plugin:4341
+      headers:
+        Authorization: "Bearer ${env:LINEA_FLEET_AGENT_TOKEN}"
+      tls:
+        ca_file: /certs/ca.pem
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+processors:
+  capture/ingress:
+    sensitivity: raw
+  capture/egress:
+    sensitivity: redacted
+exporters:
+  debug:
+    verbosity: basic
+service:
+  extensions: [livecapture]
+  telemetry:
+    logs:
+      level: warn
+    metrics:
+      level: none
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [capture/ingress, capture/egress]
+      exporters: [debug]
+    logs:
+      receivers: [otlp]
+      processors: [capture/ingress, capture/egress]
+      exporters: [debug]
+    metrics:
+      receivers: [otlp]
+      processors: [capture/ingress, capture/egress]
+      exporters: [debug]

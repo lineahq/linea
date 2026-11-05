@@ -1,0 +1,39 @@
+# Trace pipeline: otlp -> transform -> filter -> batch -> otlp.
+# This file is treated as user input and must never be modified by the debugger.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  transform:
+    error_mode: ignore
+    trace_statements:
+      - context: resource
+        statements:
+          - set(attributes["deployment.environment"], "${env:CHECKOUT_DEPLOYMENT_ENV:-staging}")
+      - context: span
+        statements:
+          - set(attributes["http.route"], "/checkout") where name == "POST /checkout"
+          - delete_key(attributes, "user.email")
+          - set(name, Concat(["failed", name], " ")) where attributes["http.status_code"] >= 500
+  filter:
+    error_mode: ignore
+    traces:
+      span:
+        - name == "SELECT orders"
+  batch:
+    timeout: 200ms
+    send_batch_size: 8192
+
+exporters:
+  otlp:
+    endpoint: collector.example.invalid:4317
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [transform, filter, batch]
+      exporters: [otlp]

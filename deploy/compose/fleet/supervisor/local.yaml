@@ -1,0 +1,12 @@
+# What runs regardless of the fleet: the base that remote layers merge over.
+# The Collector needs at least one pipeline, so this placeholder runs one
+# that does nothing. Replace it with pipelines that must survive unmanaging.
+receivers:
+  nop:
+exporters:
+  nop:
+service:
+  pipelines:
+    traces/local:
+      receivers: [nop]
+      exporters: [nop]

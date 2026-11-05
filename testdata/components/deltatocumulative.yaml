@@ -1,0 +1,21 @@
+# Accumulates delta sums into cumulative ones per stream. The second delta
+# of a stream carries the running total; non-delta metrics pass unchanged.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  deltatocumulative:
+
+exporters:
+  otlp:
+    endpoint: backend.example.invalid:4317
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [deltatocumulative]
+      exporters: [otlp]

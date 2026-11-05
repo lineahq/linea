@@ -1,0 +1,43 @@
+# Traces go to Tempo and are also turned into request, error and duration
+# (RED) metrics by the spanmetrics connector. Health checks are dropped
+# before either.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  filter/health:
+    error_mode: ignore
+    traces:
+      span:
+        - 'attributes["url.path"] == "/health"'
+
+connectors:
+  spanmetrics:
+    histogram:
+      explicit:
+        buckets: [50ms, 250ms, 1s]
+    dimensions:
+      - name: http.request.method
+      - name: http.response.status_code
+    # Metrics are exported on this timer. The debugger runs the connector
+    # on a simulated clock that flushes when the run ends.
+    metrics_flush_interval: 15s
+
+exporters:
+  otlp/tempo:
+    endpoint: tempo.example.invalid:4317
+  otlp/mimir:
+    endpoint: mimir.example.invalid:4317
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [filter/health]
+      exporters: [otlp/tempo, spanmetrics]
+    metrics/red:
+      receivers: [spanmetrics]
+      exporters: [otlp/mimir]

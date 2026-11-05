@@ -1,0 +1,9 @@
+version: 1
+name: acceptance
+inputs:
+  - receiver: otlp
+    file: traces.json
+  - receiver: otlp
+    file: logs.json
+execution:
+  timeout: 30s

@@ -1,0 +1,10 @@
+# Known component types, so the compatibility preflight passes; the unknown
+# setting fails the supervisor's config validation.
+receivers:
+  nop/bad:
+    nosuchsetting: true
+service:
+  pipelines:
+    logs/bad:
+      receivers: [nop/bad]
+      exporters: [nop]

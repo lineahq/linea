@@ -1,0 +1,23 @@
+# What the debugger leaves out of the 0.164.0 release manifest (manifest.yaml,
+# upstream's otelcol-contrib manifest, unchanged). Verified by building it
+# (docs/internals/runtime-builds.md). The catalog lists every component, with
+# the reason for these.
+#
+# excluded: not in the dependency set; a build naming one resolves it
+# through the user's module source as a custom module.
+excluded:
+  go.opentelemetry.io/obi/collector: >-
+    the OBI receiver builds only from a source tree upstream's release script
+    prepares (a local replace)
+# unsupported: in the dependency set, but left out of the "all core and
+# contrib" preset.
+unsupported:
+  github.com/open-telemetry/opentelemetry-collector-contrib/extension/asapauthextension: >-
+    its worker panics at start under Go 1.27 (crypto: RegisterHash of unknown
+    hash function, in github.com/SermoDigital/jose)
+# replaces: release manifest replaces the dependency set is resolved without.
+replaces:
+  go.opentelemetry.io/obi: a local source tree for the OBI receiver
+# types: component types of modules without a metadata.yaml.
+types:
+  go.opentelemetry.io/obi/collector: obi

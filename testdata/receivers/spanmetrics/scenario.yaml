@@ -1,0 +1,48 @@
+version: 1
+name: span-metrics
+# The spanmetrics connector exports on a timer (metrics_flush_interval).
+# The run gives it a simulated clock that starts at the latest span time
+# and advances when the run ends, so the aggregated metrics are exported.
+inputs:
+  - data:
+      resourceSpans:
+        - resource:
+            attributes:
+              - {key: service.name, value: {stringValue: checkout}}
+          scopeSpans:
+            - spans:
+                - traceId: 5b8efff798038103d269b633813fc60c
+                  spanId: eee19b7ec3c1b174
+                  name: POST /orders
+                  kind: 2
+                  startTimeUnixNano: "1791626400000000000"
+                  endTimeUnixNano: "1791626400120000000"
+                  attributes:
+                    - {key: http.request.method, value: {stringValue: POST}}
+                - traceId: 6c9f00a8a9149214e37ac744d2fd71d0
+                  spanId: fff2a08cd4d2c285
+                  name: POST /orders
+                  kind: 2
+                  startTimeUnixNano: "1791626401000000000"
+                  endTimeUnixNano: "1791626401400000000"
+                  attributes:
+                    - {key: http.request.method, value: {stringValue: POST}}
+                  status: {code: 2}
+                - traceId: 7da011b9ba25a325f48bd855e30e82e1
+                  spanId: a0a3b19de5e3d396
+                  name: GET /orders/{id}
+                  kind: 2
+                  startTimeUnixNano: "1791626402000000000"
+                  endTimeUnixNano: "1791626402030000000"
+                  attributes:
+                    - {key: http.request.method, value: {stringValue: GET}}
+assertions:
+  - target: {exporter: otlp/tempo, signal: traces}
+    count: {equals: 3}
+  # Two flushes of three series (two span names, one with an error status),
+  # each with a calls sum and a duration histogram.
+  - target: {exporter: otlp/mimir, signal: metrics}
+    count: {equals: 12}
+  - target: {exporter: otlp/mimir, signal: metrics}
+    attributes:
+      present: [service.name, span.name, status.code, http.request.method]

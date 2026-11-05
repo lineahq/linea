@@ -1,0 +1,52 @@
+# Multi-signal fixture: two signal pipelines sharing processors,
+# the basic processors, and an exporter carrying a sensitive header.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  resource:
+    attributes:
+      - key: deployment.environment
+        value: ${env:DEPLOY_ENV:-dev}
+        action: upsert
+  attributes/scrub:
+    actions:
+      - key: user.password
+        action: delete
+      - key: enduser.id
+        action: hash
+  filter/health:
+    error_mode: ignore
+    traces:
+      span:
+        - attributes["http.route"] == "/health"
+    logs:
+      log_record:
+        - IsMatch(body, "^healthcheck")
+  transform/logs:
+    log_statements:
+      - context: log
+        statements:
+          - set(log.severity_text, "WARN") where log.severity_number == SEVERITY_NUMBER_WARN
+  batch:
+
+exporters:
+  otlp/backend:
+    endpoint: backend.example.invalid:4317
+    headers:
+      authorization: Bearer secret-token
+  debug:
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [resource, attributes/scrub, filter/health, batch]
+      exporters: [otlp/backend]
+    logs:
+      receivers: [otlp]
+      processors: [resource, attributes/scrub, filter/health, transform/logs, batch]
+      exporters: [otlp/backend, debug]

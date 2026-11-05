@@ -1,0 +1,51 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          { "key": "service.name", "value": { "stringValue": "checkout" } }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": { "name": "checkout.http" },
+          "spans": [
+            {
+              "traceId": "6c9f00a8a9149214e37ac744d2fd71d0",
+              "spanId": "fff2a08cd4d2c285",
+              "name": "POST /orders",
+              "kind": 2,
+              "startTimeUnixNano": "1791626401000000000",
+              "endTimeUnixNano": "1791626401400000000",
+              "status": { "code": 2, "message": "payment declined" }
+            },
+            {
+              "traceId": "7da011b9ba25a325f48bd855e30e82e1",
+              "spanId": "a0a3b19de5e3d396",
+              "name": "GET /search",
+              "kind": 2,
+              "startTimeUnixNano": "1791626402000000000",
+              "endTimeUnixNano": "1791626402850000000"
+            },
+            {
+              "traceId": "8eb122cacb36b436059ce966f3f93f02",
+              "spanId": "b1b4c2aef6f4e4a7",
+              "name": "GET /orders/{id}",
+              "kind": 2,
+              "startTimeUnixNano": "1791626403000000000",
+              "endTimeUnixNano": "1791626403040000000"
+            },
+            {
+              "traceId": "5b8efff798038103d269b633813fc60c",
+              "spanId": "eee19b7ec3c1b174",
+              "name": "GET /health",
+              "kind": 2,
+              "startTimeUnixNano": "1791626400000000000",
+              "endTimeUnixNano": "1791626400002000000"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

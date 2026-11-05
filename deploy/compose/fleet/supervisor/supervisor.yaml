@@ -1,0 +1,26 @@
+# OpAMP supervisor for compose.supervised.yaml. The agent token comes from the
+# environment and is never written here. Remote config from the fleet is
+# merged over local.yaml; the supervisor validates it before restarting the
+# Collector and rolls back locally if the Collector does not stay healthy.
+# Outside this Compose project, use wss:// through TLS.
+server:
+  endpoint: ws://fleet:4320/v1/opamp
+  headers:
+    Authorization: "Bearer ${env:LINEA_FLEET_AGENT_TOKEN}"
+capabilities:
+  accepts_remote_config: true
+  reports_effective_config: true
+  reports_health: true
+  reports_heartbeat: true
+  reports_available_components: true
+  accepts_restart_command: false
+  accepts_opamp_connection_settings: false
+agent:
+  executable: /otelcol-contrib
+  config_files: [/etc/otelcol/local.yaml]
+  validate_config: true
+  automatic_config_rollback: true
+  # A config is APPLIED only after the Collector stayed healthy this long.
+  config_apply_timeout: 30s
+storage:
+  directory: /home/opampsupervisor/storage

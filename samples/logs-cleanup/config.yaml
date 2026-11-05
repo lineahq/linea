@@ -1,0 +1,43 @@
+# Clean application logs before they leave the Collector.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  resource:
+    attributes:
+      - key: deployment.environment
+        value: demo
+        action: upsert
+  attributes/scrub:
+    actions:
+      - key: user.password
+        action: delete
+      - key: enduser.id
+        action: hash
+  filter/health:
+    error_mode: ignore
+    logs:
+      log_record:
+        - IsMatch(body, "^healthcheck")
+  transform/severity:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        statements:
+          - set(log.severity_text, ConvertCase(log.severity_text, "upper"))
+  batch:
+
+exporters:
+  otlp/backend:
+    endpoint: backend.example.invalid:4317
+  debug:
+
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [resource, attributes/scrub, filter/health, transform/severity, batch]
+      exporters: [otlp/backend, debug]

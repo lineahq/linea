@@ -1,0 +1,30 @@
+# The worker accepts no connection and reaches only the team server and DNS:
+# a run's inputs arrive over the connection it dialed and its exporters are
+# captured. Set the server's namespace and labels (or an ipBlock for a
+# server outside the cluster) to match yours.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: linea-runtime
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: linea-runtime
+  policyTypes: ["Ingress", "Egress"]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: linea
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: linea
+              app.kubernetes.io/component: server
+      ports:
+        - port: 7070
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - {port: 53, protocol: UDP}
+        - {port: 53, protocol: TCP}

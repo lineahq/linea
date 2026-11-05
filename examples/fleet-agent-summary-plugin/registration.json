@@ -1,0 +1,15 @@
+{
+  "plugins": [
+    {
+      "id": "agent-summary",
+      "version": "0.1.0",
+      "api_version": "1",
+      "endpoint": "http://agent-summary-plugin:8090",
+      "allow_insecure_http": true,
+      "enabled": true,
+      "permissions": ["agents.read"],
+      "host_token_file": "/run/secrets/summary_host_token",
+      "service_token_file": "/run/secrets/summary_service_token"
+    }
+  ]
+}

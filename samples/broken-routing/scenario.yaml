@@ -1,0 +1,17 @@
+# Error logs must reach the pager; everything is archived.
+version: 1
+name: broken-routing
+inputs:
+  - receiver: otlp
+    file: input.json
+execution:
+  timeout: 30s
+assertions:
+  - name: the error log pages
+    target: {exporter: otlp/pager, signal: logs}
+    count: {equals: 1}
+    attributes:
+      equals: {route: pager}
+  - name: every log is archived
+    target: {exporter: otlp/archive, signal: logs}
+    count: {equals: 2}

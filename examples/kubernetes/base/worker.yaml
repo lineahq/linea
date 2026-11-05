@@ -1,0 +1,77 @@
+# A connecting worker of a runtime image. It dials the team server
+# (linea-worker --connect) and listens on no port, so it has no Service and
+# no probe. It runs with the limits of the debugger's local worker
+# container: a read-only root, user 65534, no capabilities, /tmp as scratch
+# space and a 2 GiB memory limit; networkpolicy.yaml allows it only the
+# server and DNS.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: linea-runtime
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: linea-runtime
+  labels:
+    app.kubernetes.io/name: linea-runtime
+spec:
+  # Any number of workers can serve one runtime name; each runs up to
+  # --capacity requests at once.
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: linea-runtime
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: linea-runtime
+    spec:
+      serviceAccountName: linea-runtime
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: linea-runtime
+          # The image's entrypoint is the worker. Set --connect to your
+          # team server's URL and --name to the runtime name its users
+          # pick; the token comes from LINEA_WORKER_TOKEN.
+          args:
+            - --connect=https://linea.example.com
+            - --name=team-runtime
+            - --capacity=1
+          env:
+            - name: LINEA_WORKER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: linea-runtime-token
+                  key: token
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 2Gi
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi

@@ -1,0 +1,86 @@
+{{- if .Values.builder.enabled }}
+{{- $fullname := include "linea.fullname" . -}}
+{{- $a := .Values.builder.autoscaling -}}
+{{- $pvc := .Values.builder.cache.persistentVolumeClaim -}}
+{{- if eq $a.kind "keda" }}
+# Scales the builders with the build queue: one builder per
+# builder.capacity unfinished builds, read from the server's /metrics.
+# Running builds count, so the builders are not scaled below what the builds
+# in progress need; a builder that is scaled in finishes its builds first.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ $fullname }}-builder
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+    app.kubernetes.io/component: builder
+spec:
+  scaleTargetRef:
+    name: {{ $fullname }}-builder
+  minReplicaCount: {{ $a.minReplicas }}
+  maxReplicaCount: {{ $a.maxReplicas }}
+  cooldownPeriod: {{ $a.cooldownPeriod }}
+  pollingInterval: {{ $a.pollingInterval }}
+  triggers:
+    - type: metrics-api
+      metricType: AverageValue
+      metadata:
+        url: {{ printf "http://%s-metrics.%s.svc:%v/metrics" $fullname .Release.Namespace .Values.server.metrics.port | quote }}
+        format: prometheus
+        valueLocation: linea_runtime_builds_unfinished
+        targetValue: {{ .Values.builder.capacity | quote }}
+{{- else if eq $a.kind "hpa" }}
+# Scales the builders with the build queue on an external
+# metric that the cluster's metrics adapter serves from the server's
+# /metrics: one builder per builder.capacity unfinished builds. The HPA
+# keeps at least one builder.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $fullname }}-builder
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+    app.kubernetes.io/component: builder
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ $fullname }}-builder
+  minReplicas: {{ max 1 (int $a.minReplicas) }}
+  maxReplicas: {{ $a.maxReplicas }}
+  metrics:
+    - type: External
+      external:
+        metric:
+          name: {{ $a.hpa.metricName }}
+          {{- with $a.hpa.selector }}
+          selector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        target:
+          type: AverageValue
+          averageValue: {{ .Values.builder.capacity | quote }}
+{{- end }}
+{{- if and $pvc.create (not $pvc.existingClaim) }}
+---
+# The builder's persistent work volume: module and build
+# caches that outlive the pod. Kept when the release is uninstalled.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-builder-cache
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+    app.kubernetes.io/component: builder
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [{{ $pvc.accessMode }}]
+  {{- with $pvc.storageClassName }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $pvc.size }}
+{{- end }}
+{{- end }}

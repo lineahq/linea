@@ -1,0 +1,26 @@
+# Drops informational logs older than an hour; warnings and errors are kept
+# whatever their age. The filter compares with Now(), so its outcome depends
+# on when the pipeline runs.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  filter/stale:
+    error_mode: ignore
+    logs:
+      log_record:
+        - 'time < Now() - Duration("1h") and severity_number < SEVERITY_NUMBER_WARN'
+
+exporters:
+  otlp/loki:
+    endpoint: loki.example.invalid:4317
+
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [filter/stale]
+      exporters: [otlp/loki]

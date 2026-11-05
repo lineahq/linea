@@ -1,0 +1,33 @@
+# Drop noise and redact URLs in HTTP server spans.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  filter/health:
+    error_mode: ignore
+    traces:
+      span:
+        - attributes["http.route"] == "/health"
+  transform/redact:
+    error_mode: ignore
+    trace_statements:
+      - context: span
+        statements:
+          # Query strings can carry tokens: keep the scheme, host and path.
+          - replace_pattern(span.attributes["url.full"], "[?].*$", "")
+          - set(span.name, Concat([span.attributes["http.request.method"], span.attributes["http.route"]], " ")) where span.attributes["http.route"] != nil
+  batch:
+
+exporters:
+  otlp/backend:
+    endpoint: backend.example.invalid:4317
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [filter/health, transform/redact, batch]
+      exporters: [otlp/backend]

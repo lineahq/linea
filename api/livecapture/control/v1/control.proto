@@ -1,0 +1,196 @@
+syntax = "proto3";
+
+package livecapture.control.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/lineahq/linea/collector/livecapture/controlpb";
+
+// CaptureControl is served by the platform; each Collector's livecapture
+// extension is the client. The Collector opens one stream and keeps it open.
+// Its first message is a report carrying its identity and capture-point
+// catalog; it reports again every two seconds and right after processing each
+// desired state. The service answers the first report with the complete
+// desired state for that Collector and sends a new complete one on every
+// change. Disconnecting never stops or extends a running session.
+service CaptureControl {
+  rpc WatchCaptures(stream CollectorReport) returns (stream DesiredState);
+}
+
+message CollectorReport {
+  Identity identity = 1;
+  // The current session, if any, followed by bounded terminal history.
+  repeated SessionStatus sessions = 2;
+  // Generation of the last desired state the Collector processed; 0 before
+  // the first one on this stream.
+  uint64 applied_generation = 3;
+  // Why that desired state was not applied; empty when it was. The
+  // Collector stays connected after rejecting a desired state.
+  string desired_state_error = 4;
+}
+
+message Identity {
+  string cluster = 1;
+  string namespace = 2;
+  string pod = 3;
+  string collector_group = 4;
+  string collector_version = 5;
+  string distribution_version = 6;
+  // False when the Git kill switch or the service's last desired state
+  // disables capture.
+  bool enabled = 7;
+  // Extensions start before processors, so the first catalog may be empty.
+  repeated CapturePoint capture_points = 8;
+  // Protocol features this Collector implements. See
+  // DesiredState.required_capabilities.
+  repeated string capabilities = 9;
+  // The largest filter this Collector compiles. A Collector that omits it
+  // applies the version 1 limits: 16 conditions, 256 characters each, and
+  // 256-character IsMatch patterns.
+  FilterLimits filter_limits = 10;
+}
+
+// FilterLimits bound a session's Filter. Lengths count Unicode code points.
+message FilterLimits {
+  // Across every list of the filter together.
+  uint32 max_conditions = 1;
+  uint32 max_condition_chars = 2;
+  // The literal pattern of an IsMatch call.
+  uint32 max_regex_chars = 3;
+}
+
+message CapturePoint {
+  string pipeline = 1;
+  string point = 2;
+  Signal signal = 3;
+  Sensitivity sensitivity = 4;
+}
+
+enum Signal {
+  SIGNAL_UNSPECIFIED = 0;
+  SIGNAL_TRACES = 1;
+  SIGNAL_METRICS = 2;
+  SIGNAL_LOGS = 3;
+}
+
+enum Sensitivity {
+  SENSITIVITY_UNSPECIFIED = 0;
+  // Before pipeline redaction; capture needs authorized_raw.
+  SENSITIVITY_RAW = 1;
+  SENSITIVITY_REDACTED = 2;
+}
+
+// DesiredState is the complete set of sessions this Collector should run.
+// An empty set stops the current session.
+message DesiredState {
+  // Increases with every message the service sends on a stream; the
+  // Collector echoes it as CollectorReport.applied_generation.
+  uint64 generation = 1;
+  // Stops admission immediately and rejects new sessions. Git's
+  // enabled: false always wins over false here.
+  bool disabled = 2;
+  // At most one session per Collector.
+  repeated Session sessions = 3;
+  // Fields an older Collector does not know are ignored. When ignoring a new
+  // field would be unsafe, the service lists the capability that introduced
+  // it here, and a Collector that lacks any of them rejects the whole
+  // desired state instead.
+  repeated string required_capabilities = 4;
+}
+
+message Session {
+  // Unique per capture; a terminal session ID is never reactivated.
+  string session_id = 1;
+  // Who started the capture, for audit.
+  string principal = 2;
+  Target target = 3;
+  repeated Point capture_points = 4;
+  repeated Signal signals = 5;
+  Filter filter = 6;
+  // Absent keeps every matching record.
+  Sampling sampling = 7;
+  // Zero fields use the Collector's configured maximum; larger values are
+  // clamped to it.
+  Limits limits = 8;
+  // Required. Clamped to the Collector's max_session_duration. An update to
+  // a running session can bring it forward but never extends it.
+  google.protobuf.Timestamp expires_at = 9;
+  // The service's RBAC decision for raw capture points. It is never taken
+  // from the user's request.
+  bool authorized_raw = 10;
+}
+
+message Target {
+  string collector_group = 1;
+  // Empty targets every pod of the group.
+  string pod = 2;
+}
+
+message Point {
+  string pipeline = 1;
+  string point = 2;
+}
+
+// Filter holds OTTL conditions. Conditions in one list are ANDed; every list
+// is optional.
+message Filter {
+  repeated string resource = 1;
+  repeated string span = 2;
+  repeated string log = 3;
+  repeated string metric = 4;
+  repeated string datapoint = 5;
+}
+
+message Sampling {
+  // Fraction of matching records kept, in [0, 1].
+  double rate = 1;
+  SamplingMode mode = 2;
+}
+
+enum SamplingMode {
+  // Same as SAMPLING_MODE_HASH.
+  SAMPLING_MODE_UNSPECIFIED = 0;
+  // Deterministic: traces by trace ID, logs and metric datapoints by record
+  // content, so every pod and capture point makes the same decision.
+  SAMPLING_MODE_HASH = 1;
+  // Random for logs and metrics; traces always use the trace ID.
+  SAMPLING_MODE_RANDOM = 2;
+}
+
+message Limits {
+  int64 bytes_per_second = 1;
+  int64 records_per_second = 2;
+  int64 total_bytes = 3;
+  int64 total_records = 4;
+  int64 record_bytes = 5;
+}
+
+message SessionStatus {
+  string session_id = 1;
+  SessionState state = 2;
+  string reason = 3;
+  google.protobuf.Timestamp expires_at = 4;
+  SessionStats stats = 5;
+}
+
+enum SessionState {
+  SESSION_STATE_UNSPECIFIED = 0;
+  SESSION_STATE_ACTIVE = 1;
+  // Admission has ended; the terminal state follows within moments.
+  SESSION_STATE_STOPPING = 2;
+  SESSION_STATE_COMPLETED = 3;
+  SESSION_STATE_EXPIRED = 4;
+  SESSION_STATE_LIMIT_REACHED = 5;
+  SESSION_STATE_FAILED = 6;
+  SESSION_STATE_DISABLED = 7;
+}
+
+message SessionStats {
+  int64 selected = 1;
+  int64 enqueued_records = 2;
+  int64 enqueued_bytes = 3;
+  int64 filter_errors = 4;
+  // Records dropped by reason: queue_full, rate_bytes, rate_records,
+  // record_size, sampling, stopping, delivery, budget.
+  map<string, int64> dropped = 5;
+}

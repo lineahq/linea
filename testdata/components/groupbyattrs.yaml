@@ -1,0 +1,22 @@
+# Moves http.status_code from spans to their resource, regrouping spans
+# into one resource per service and status.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  groupbyattrs:
+    keys: [http.status_code]
+
+exporters:
+  otlp:
+    endpoint: backend.example.invalid:4317
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [groupbyattrs]
+      exporters: [otlp]

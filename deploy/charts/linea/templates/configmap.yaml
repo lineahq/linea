@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "linea.fullname" . }}-config
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    {{- include "linea.serverConfig" . | nindent 4 }}

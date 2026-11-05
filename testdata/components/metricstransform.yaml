@@ -1,0 +1,28 @@
+# Renames the duration metric and labels it.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  metricstransform:
+    transforms:
+      - include: http_server_duration_ms
+        action: update
+        new_name: http.server.duration
+        operations:
+          - action: add_label
+            new_label: unit.source
+            new_value: ms
+
+exporters:
+  otlp:
+    endpoint: backend.example.invalid:4317
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [metricstransform]
+      exporters: [otlp]

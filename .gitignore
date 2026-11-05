@@ -1,0 +1,43 @@
+# Local tools and generated Collector distributions
+.tools/
+.cache/
+.artifacts/
+dist/
+
+# Go
+coverage.out
+*.test
+*.prof
+
+# Node / frontend
+node_modules/
+web/dist/
+web/tsconfig.tsbuildinfo
+internal/debugger/webui/static/app/
+
+# Local runtime state and secrets
+/.linea/
+.local/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+tmp/
+*.log
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Locally built binaries
+/bin/
+*.exe
+collector/distribution/otelcol-livecapture
+internal/debugger/workersrc/static/*.tar.gz
+
+# Local docs that are never committed (ADRs)
+/.docs/

@@ -1,0 +1,55 @@
+# Internal synthetic Docker fixture; never deploy this configuration.
+extensions:
+  livecapture:
+    enabled: true
+    environment: test
+    collector_group: test
+    pod: smoke-pod
+    cluster: smoke-cluster
+    limits:
+      max_queue_bytes: 4KiB
+    local_control:
+      enabled: true
+      endpoint: 127.0.0.1:17777
+      allow_raw: true
+    delivery:
+      endpoint: 127.0.0.1:14317
+      tls:
+        insecure: true
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 127.0.0.1:4317
+processors:
+  capture/ingress:
+    sensitivity: raw
+  capture/egress:
+    sensitivity: redacted
+exporters:
+  otlp/backend:
+    endpoint: 127.0.0.1:14318
+    tls:
+      insecure: true
+    sending_queue:
+      enabled: false
+    retry_on_failure:
+      enabled: false
+service:
+  extensions: [livecapture]
+  telemetry:
+    metrics:
+      level: none
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [capture/ingress, capture/egress]
+      exporters: [otlp/backend]
+    logs:
+      receivers: [otlp]
+      processors: [capture/ingress, capture/egress]
+      exporters: [otlp/backend]
+    metrics:
+      receivers: [otlp]
+      processors: [capture/ingress, capture/egress]
+      exporters: [otlp/backend]

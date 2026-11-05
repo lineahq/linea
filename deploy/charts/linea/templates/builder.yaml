@@ -1,0 +1,229 @@
+{{- if .Values.builder.enabled }}
+{{- $fullname := include "linea.fullname" . -}}
+{{- if and .Values.networkPolicy.enabled (or (include "linea.builderAutoscaled" .) (gt (int .Values.builder.replicas) 0)) }}{{ include "linea.checkObjectStorage" . }}{{ end -}}
+{{- include "linea.checkBuilderScaling" . -}}
+{{- $claim := include "linea.builderCacheClaim" . -}}
+{{- $modules := .Values.builder.modules -}}
+# The runtime builder. It dials the server
+# (linea-builder --connect) with the build token and listens on no port, so
+# it has no Service. It compiles with the Go toolchain in its image and
+# starts the programs it builds, so /work, an emptyDir holding its module
+# cache, build cache and build directories, allows execution; the root
+# filesystem stays read-only. It holds no database or bucket credentials:
+# inputs and binaries move through presigned URLs. With builder.replicas 0
+# builds are off and queued builds wait. With builder.autoscaling an
+# autoscaler sets the replicas (builder-autoscaling.yaml). On SIGTERM a
+# builder finishes its builds before it exits, within the grace period.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $fullname }}-builder
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-builder
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+    app.kubernetes.io/component: builder
+spec:
+  {{- if not (include "linea.builderAutoscaled" .) }}
+  replicas: {{ .Values.builder.replicas }}
+  {{- end }}
+  strategy:
+    {{- if include "linea.builderCacheExclusive" . }}
+    # One pod at a time can mount the ReadWriteOnce cache.
+    type: Recreate
+    {{- else }}
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    {{- end }}
+  selector:
+    matchLabels:
+      {{- include "linea.builderSelector" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "linea.builderSelector" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ $fullname }}-builder
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.builder.terminationGracePeriodSeconds }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: builder
+          image: "{{ .Values.builder.image.repository }}:{{ .Values.builder.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.builder.image.pullPolicy }}
+          # The image's entrypoint is the builder.
+          args:
+            - --connect={{ include "linea.serverURL" . }}
+            - --name={{ .Values.builder.name }}
+            - --capacity={{ .Values.builder.capacity }}
+            - --cpus={{ .Values.builder.cpus }}
+            - --token-file=/etc/linea/builder-token/token
+            - --work-dir=/work
+            {{- if .Values.builder.caSecret }}
+            - --ca-file=/etc/linea/ca/ca.crt
+            {{- end }}
+            {{- if .Values.builder.export.authSecret }}
+            - --registry-auth=/etc/linea/registry/config.json
+            {{- end }}
+            {{- range .Values.builder.export.plainHTTP }}
+            - --registry-plain-http={{ . }}
+            {{- end }}
+          {{- if or $modules.proxy $modules.private $modules.sumDB $modules.netrcSecret $modules.caSecret .Values.builder.extraEnv }}
+          # The module source builds use (builder.modules).
+          env:
+            {{- with $modules.proxy }}
+            - {name: GOPROXY, value: {{ . | quote }}}
+            {{- end }}
+            {{- with $modules.private }}
+            - {name: GOPRIVATE, value: {{ . | quote }}}
+            {{- end }}
+            {{- with $modules.sumDB }}
+            - {name: GOSUMDB, value: {{ . | quote }}}
+            {{- end }}
+            {{- if $modules.netrcSecret }}
+            - {name: NETRC, value: /etc/linea/modules/netrc/netrc}
+            {{- end }}
+            {{- if $modules.caSecret }}
+            # Go reads every file in SSL_CERT_DIR besides its default bundle.
+            - {name: SSL_CERT_DIR, value: /etc/linea/modules/ca}
+            {{- end }}
+            {{- with .Values.builder.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.builder.resources | nindent 12 }}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: work
+              mountPath: /work
+            - name: tmp
+              mountPath: /tmp
+            - name: builder-token
+              mountPath: /etc/linea/builder-token
+              readOnly: true
+            {{- if .Values.builder.caSecret }}
+            - name: ca
+              mountPath: /etc/linea/ca
+              readOnly: true
+            {{- end }}
+            {{- if .Values.builder.export.authSecret }}
+            - name: registry-auth
+              mountPath: /etc/linea/registry
+              readOnly: true
+            {{- end }}
+            {{- if $modules.netrcSecret }}
+            - name: modules-netrc
+              mountPath: /etc/linea/modules/netrc
+              readOnly: true
+            {{- end }}
+            {{- if $modules.caSecret }}
+            - name: modules-ca
+              mountPath: /etc/linea/modules/ca
+              readOnly: true
+            {{- end }}
+            {{- with .Values.builder.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: work
+          {{- if $claim }}
+          persistentVolumeClaim:
+            claimName: {{ $claim }}
+          {{- else }}
+          emptyDir:
+            sizeLimit: {{ .Values.builder.workVolumeSizeLimit }}
+          {{- end }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: builder-token
+          secret:
+            secretName: {{ include "linea.builderSecret" . }}
+            items: [{key: token, path: token}]
+        {{- if .Values.builder.caSecret }}
+        - name: ca
+          secret:
+            secretName: {{ .Values.builder.caSecret }}
+            items: [{key: {{ .Values.builder.caKey | quote }}, path: ca.crt}]
+        {{- end }}
+        {{- if .Values.builder.export.authSecret }}
+        - name: registry-auth
+          secret:
+            secretName: {{ .Values.builder.export.authSecret }}
+            items: [{key: {{ .Values.builder.export.authKey | quote }}, path: config.json}]
+        {{- end }}
+        {{- if $modules.netrcSecret }}
+        - name: modules-netrc
+          secret:
+            secretName: {{ $modules.netrcSecret }}
+            items: [{key: {{ $modules.netrcKey | quote }}, path: netrc}]
+        {{- end }}
+        {{- if $modules.caSecret }}
+        - name: modules-ca
+          secret:
+            secretName: {{ $modules.caSecret }}
+            items: [{key: {{ $modules.caKey | quote }}, path: ca.crt}]
+        {{- end }}
+        {{- with .Values.builder.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.builder.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.builder.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.builder.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- if .Values.networkPolicy.enabled }}
+---
+# The builder accepts no connection. It reaches the server, DNS to find it
+# and the object store, like a worker, and it alone reaches the outside
+# world: the module proxy and the git hosts a manifest names
+# (networkPolicy.builderEgress, open to every address by default).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-builder
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "linea.builderSelector" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    {{- include "linea.egressCommon" . | nindent 4 }}
+    {{- with .Values.networkPolicy.builderEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}
+{{- end }}

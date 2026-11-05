@@ -1,0 +1,71 @@
+# Changes deploy through the local Gitea pipeline after merging to main.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 192
+    spike_limit_mib: 48
+  # Deliberate shaping/fault injection, scoped only to labelled lab scenarios.
+  # Remove this processor to see the original, complete Telemetrygen output.
+  filter/lab_incomplete:
+    error_mode: propagate
+    trace_conditions:
+      - 'span.attributes["lab.scenario"] == "single-span" and span.name == "okey-dokey-0"'
+      - 'span.attributes["lab.scenario"] == "missing-parent" and span.name == "lets-go"'
+      - 'span.attributes["lab.scenario"] == "missing-child" and span.name == "okey-dokey-1"'
+  # Traceway v2.0.5 ignores exponential histograms. Convert this one lab metric
+  # to an explicit histogram so its average/count are visible in the backend.
+  transform/traceway_metrics:
+    error_mode: propagate
+    metric_statements:
+      - context: metric
+        statements:
+          - 'convert_exponential_histogram_to_histogram("upper", [0.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0]) where metric.name == "lab.payment.duration"'
+  batch:
+    timeout: 1s
+    send_batch_size: 100
+
+exporters:
+  otlp_http/traceway:
+    endpoint: http://traceway/api/otel
+    headers:
+      Authorization: ${file:/run/lab/authorization.yaml}
+  # Add debug to a pipeline's exporters when you need to inspect payloads.
+  debug:
+    verbosity: detailed
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  telemetry:
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, filter/lab_incomplete, batch]
+      exporters: [otlp_http/traceway]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp_http/traceway]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, transform/traceway_metrics, batch]
+      exporters: [otlp_http/traceway]
+

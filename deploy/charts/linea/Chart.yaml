@@ -1,0 +1,7 @@
+apiVersion: v2
+name: linea
+description: A linea team server, with a worker pool and a runtime builder that dial it
+type: application
+# The release's version; the release workflow checks that both match its tag.
+version: 0.1.0
+appVersion: "0.1.0"

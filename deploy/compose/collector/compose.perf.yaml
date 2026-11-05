@@ -1,0 +1,19 @@
+name: livecapture-perf
+services:
+  perf:
+    image: linea-collector:perf
+    build:
+      context: ../../..
+      dockerfile: deploy/docker/linea-collector.Dockerfile
+      target: perf
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cpus: 4
+    mem_limit: 768m
+    environment:
+      GOMAXPROCS: "2"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true

@@ -1,0 +1,140 @@
+{
+  "lineage": [
+    {
+      "id": "1:resource[0].scope[0].log_record[0]",
+      "signal": "logs",
+      "receiver": "otlp",
+      "name": "request",
+      "hops": [
+        {
+          "parent": -1,
+          "seq": 1,
+          "kind": "input.injected",
+          "component": "otlp",
+          "ref": "resource[0].scope[0].log_record[0]"
+        },
+        {
+          "parent": 0,
+          "seq": 2,
+          "kind": "stage.input",
+          "component": "filter/none",
+          "pipeline": "logs",
+          "ref": "resource[0].scope[0].log_record[0]"
+        },
+        {
+          "parent": 1,
+          "seq": 3,
+          "kind": "stage.output",
+          "component": "filter/none",
+          "pipeline": "logs",
+          "ref": "resource[0].scope[0].log_record[0]",
+          "confidence": "exact"
+        },
+        {
+          "parent": 2,
+          "seq": 4,
+          "kind": "exporter.captured",
+          "component": "otlp/backend",
+          "ref": "resource[0].scope[0].log_record[0]",
+          "end": "delivered"
+        }
+      ],
+      "deliveries": [
+        {
+          "exporter": "otlp/backend",
+          "pipeline": "logs",
+          "hop": 3,
+          "changed": false
+        }
+      ]
+    },
+    {
+      "id": "1:resource[0].scope[0].log_record[1]",
+      "signal": "logs",
+      "receiver": "otlp",
+      "name": "request",
+      "hops": [
+        {
+          "parent": -1,
+          "seq": 1,
+          "kind": "input.injected",
+          "component": "otlp",
+          "ref": "resource[0].scope[0].log_record[1]"
+        },
+        {
+          "parent": 0,
+          "seq": 2,
+          "kind": "stage.input",
+          "component": "filter/none",
+          "pipeline": "logs",
+          "ref": "resource[0].scope[0].log_record[1]"
+        },
+        {
+          "parent": 1,
+          "seq": 3,
+          "kind": "stage.output",
+          "component": "filter/none",
+          "pipeline": "logs",
+          "ref": "resource[0].scope[0].log_record[1]",
+          "confidence": "exact"
+        },
+        {
+          "parent": 2,
+          "seq": 4,
+          "kind": "exporter.captured",
+          "component": "otlp/backend",
+          "ref": "resource[0].scope[0].log_record[1]",
+          "end": "delivered"
+        }
+      ],
+      "deliveries": [
+        {
+          "exporter": "otlp/backend",
+          "pipeline": "logs",
+          "hop": 3,
+          "changed": false
+        }
+      ]
+    }
+  ],
+  "stages": [
+    {
+      "component": "filter/none",
+      "pipeline": "logs",
+      "kind": "processor",
+      "type": "filter",
+      "signal": "logs",
+      "emission": "synchronous",
+      "inputs": [
+        {
+          "seq": 2,
+          "outputs": [
+            3
+          ],
+          "outcome": "emitted",
+          "diff": {
+            "identity": "content",
+            "before": {
+              "resources": 1,
+              "scopes": 1,
+              "items": 2
+            },
+            "after": {
+              "resources": 1,
+              "scopes": 1,
+              "items": 2
+            },
+            "matching": {
+              "object": 0,
+              "exact": 2,
+              "high": 0,
+              "medium": 0,
+              "unmatched_before": 0,
+              "unmatched_after": 0
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

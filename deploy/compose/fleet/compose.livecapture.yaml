@@ -1,0 +1,124 @@
+# Optional plugin deployment. Core contains no capture functionality.
+services:
+  fleet:
+    command: [--server-id, "${FLEET_SERVER_ID:-local-fleet}", --management-listen, "0.0.0.0:8080", --agent-listen, "0.0.0.0:4320", --allow-insecure-remote, --plugins-config, /etc/linea-fleet/plugins.json, --plugin-listen, "0.0.0.0:8081"]
+    secrets: [capture_host_token, capture_service_token]
+    volumes:
+      - ${FLEET_PLUGIN_REGISTRATIONS:-./livecapture/registration.json}:/etc/linea-fleet/plugins.json:ro
+    networks: [plugins]
+
+  capture-postgres:
+    image: postgres:17@sha256:b8faeff7712663c2773a190181e1246e37e364b887611c04658c28b44e2408fe
+    environment:
+      POSTGRES_DB: livecapture
+      POSTGRES_PASSWORD_FILE: /run/secrets/capture_postgres_password
+    secrets: [capture_postgres_password, capture_migrate_password, capture_runtime_password]
+    volumes:
+      - capture-data:/var/lib/postgresql/data
+      - ./livecapture/init-db.sh:/docker-entrypoint-initdb.d/10-capture.sh:ro
+    networks: [capture-database]
+    cpus: 1
+    mem_limit: 512m
+    pids_limit: 128
+    restart: "no"
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -h127.0.0.1 -U postgres -d livecapture"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  capture-migrate:
+    image: ghcr.io/lineahq/linea-fleet-livecapture:${CAPTURE_VERSION:-0.1.0}
+    build:
+      context: ../../..
+      dockerfile: deploy/docker/linea-fleet-livecapture.Dockerfile
+      target: plugin
+    profiles: [admin]
+    command: [migrate, --runtime-role, capture_app]
+    environment:
+      GOMAXPROCS: "2"
+      LINEA_FLEET_CAPTURE_DATABASE_URL_FILE: /run/secrets/capture_migrate_url
+    secrets: [capture_migrate_url]
+    networks: [capture-database]
+    depends_on:
+      capture-postgres:
+        condition: service_healthy
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: 2
+    mem_limit: 256m
+    pids_limit: 128
+    restart: "no"
+
+  livecapture-plugin:
+    image: ghcr.io/lineahq/linea-fleet-livecapture:${CAPTURE_VERSION:-0.1.0}
+    build:
+      context: ../../..
+      dockerfile: deploy/docker/linea-fleet-livecapture.Dockerfile
+      target: plugin
+    command: [serve, --config, /etc/livecapture/config.json]
+    environment:
+      GOMAXPROCS: "2"
+      GOMEMLIMIT: 384MiB
+      LINEA_FLEET_CAPTURE_DATABASE_URL_FILE: /run/secrets/capture_runtime_url
+    secrets: [capture_host_token, capture_service_token, capture_runtime_url, capture_metrics_token, capture_tls_cert, capture_tls_key]
+    volumes:
+      - ${FLEET_LIVECAPTURE_SECRET_DIR:-../../../.local/livecapture}/config.json:/etc/livecapture/config.json:ro
+    networks: [plugins, capture-database, capture-ingress]
+    ports:
+      - "127.0.0.1:${CAPTURE_CONTROL_PORT:-4340}:4340"
+      - "127.0.0.1:${CAPTURE_DELIVERY_PORT:-4341}:4341"
+    depends_on:
+      capture-postgres:
+        condition: service_healthy
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: 2
+    mem_limit: 512m
+    pids_limit: 128
+    restart: "no"
+    healthcheck:
+      test: [CMD, /plugin, probe, --config, /etc/livecapture/config.json]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    logging:
+      options:
+        max-size: 5m
+        max-file: "2"
+
+secrets:
+  capture_host_token:
+    file: ${FLEET_LIVECAPTURE_SECRET_DIR:-../../../.local/livecapture}/host_token
+  capture_service_token:
+    file: ${FLEET_LIVECAPTURE_SECRET_DIR:-../../../.local/livecapture}/service_token
+  capture_postgres_password:
+    file: ${FLEET_LIVECAPTURE_SECRET_DIR:-../../../.local/livecapture}/postgres_password
+  capture_migrate_password:
+    file: ${FLEET_LIVECAPTURE_SECRET_DIR:-../../../.local/livecapture}/migrate_password
+  capture_runtime_password:
+    file: ${FLEET_LIVECAPTURE_SECRET_DIR:-../../../.local/livecapture}/runtime_password
+  capture_migrate_url:
+    file: ${FLEET_LIVECAPTURE_SECRET_DIR:-../../../.local/livecapture}/migrate_url
+  capture_runtime_url:
+    file: ${FLEET_LIVECAPTURE_SECRET_DIR:-../../../.local/livecapture}/runtime_url
+  capture_metrics_token:
+    file: ${FLEET_LIVECAPTURE_SECRET_DIR:-../../../.local/livecapture}/metrics_token
+  capture_tls_cert:
+    file: ${FLEET_LIVECAPTURE_SECRET_DIR:-../../../.local/livecapture}/tls_cert.pem
+  capture_tls_key:
+    file: ${FLEET_LIVECAPTURE_SECRET_DIR:-../../../.local/livecapture}/tls_key.pem
+
+volumes:
+  capture-data:
+networks:
+  plugins:
+    internal: true
+  capture-database:
+    internal: true
+  capture-ingress:

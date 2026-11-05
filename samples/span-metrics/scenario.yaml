@@ -1,0 +1,26 @@
+# Four spans reach Tempo and are aggregated into three series: a created
+# order, a failed order and order lookups. Each series has a call count and
+# a duration histogram, exported on both flushes of the simulated clock.
+# The health check is in neither.
+version: 1
+name: span-metrics
+inputs:
+  - receiver: otlp
+    file: input.json
+execution:
+  timeout: 30s
+assertions:
+  - name: every span but the health check reaches Tempo
+    target: {exporter: otlp/tempo, signal: traces}
+    count: {equals: 4}
+  - name: the health check is dropped before aggregation
+    target: {processor: filter/health, signal: traces}
+    dropped: {equals: 1}
+  - name: two flushes of three series, each a call count and a histogram
+    target: {exporter: otlp/mimir, signal: metrics}
+    count: {equals: 12}
+  - name: RED series carry the configured dimensions, not the raw path
+    target: {exporter: otlp/mimir, signal: metrics}
+    attributes:
+      present: [service.name, span.name, status.code, http.request.method, http.response.status_code]
+      absent: [url.path]

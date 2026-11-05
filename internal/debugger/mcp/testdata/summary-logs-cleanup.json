@@ -1,0 +1,150 @@
+{
+  "complete": true,
+  "errors": [],
+  "execution_status": "completed",
+  "outputs": [
+    {
+      "batches": 1,
+      "exporter": "debug",
+      "records": 3,
+      "resources": 1,
+      "scopes": 1,
+      "signal": "logs"
+    },
+    {
+      "batches": 1,
+      "exporter": "otlp/backend",
+      "records": 3,
+      "resources": 1,
+      "scopes": 1,
+      "signal": "logs"
+    }
+  ],
+  "stages": [
+    {
+      "added": 0,
+      "changes": [
+        {
+          "after": {
+            "type": "Str",
+            "value": "demo"
+          },
+          "count": 1,
+          "op": "added",
+          "path": "attributes[\"deployment.environment\"]"
+        }
+      ],
+      "component": "resource",
+      "inputs": 1,
+      "kind": "processor",
+      "outcomes": {
+        "emitted": 1
+      },
+      "pipeline": "logs",
+      "removed": 0,
+      "signal": "logs",
+      "type": "resource",
+      "uri": "otel://runs/RUN_ID/stages/logs/resource"
+    },
+    {
+      "added": 0,
+      "changes": [
+        {
+          "after": {
+            "type": "Str",
+            "value": "81f8f6dde88365f3928796ec7aa53f72820b06db8664f5fe76a7eb13e24546a2"
+          },
+          "before": {
+            "type": "Str",
+            "value": "jane"
+          },
+          "count": 3,
+          "op": "modified",
+          "path": "attributes[\"enduser.id\"]"
+        },
+        {
+          "before": {
+            "type": "Str",
+            "value": "hunter2"
+          },
+          "count": 1,
+          "op": "removed",
+          "path": "attributes[\"user.password\"]"
+        }
+      ],
+      "component": "attributes/scrub",
+      "inputs": 1,
+      "kind": "processor",
+      "outcomes": {
+        "emitted": 1
+      },
+      "pipeline": "logs",
+      "removed": 0,
+      "signal": "logs",
+      "type": "attributes",
+      "uri": "otel://runs/RUN_ID/stages/logs/attributes%2Fscrub"
+    },
+    {
+      "added": 0,
+      "changes": [],
+      "component": "filter/health",
+      "inputs": 1,
+      "kind": "processor",
+      "outcomes": {
+        "emitted": 1
+      },
+      "pipeline": "logs",
+      "removed": 1,
+      "signal": "logs",
+      "type": "filter",
+      "uri": "otel://runs/RUN_ID/stages/logs/filter%2Fhealth"
+    },
+    {
+      "added": 0,
+      "changes": [
+        {
+          "after": {
+            "type": "Str",
+            "value": "WARNING"
+          },
+          "before": {
+            "type": "Str",
+            "value": "warning"
+          },
+          "count": 3,
+          "op": "modified",
+          "path": "severity_text"
+        }
+      ],
+      "component": "transform/severity",
+      "inputs": 1,
+      "kind": "processor",
+      "outcomes": {
+        "emitted": 1
+      },
+      "pipeline": "logs",
+      "removed": 0,
+      "signal": "logs",
+      "statements_uri": "otel://runs/RUN_ID/statements/transform%2Fseverity",
+      "type": "transform",
+      "uri": "otel://runs/RUN_ID/stages/logs/transform%2Fseverity"
+    },
+    {
+      "added": 0,
+      "changes": [],
+      "component": "batch",
+      "inputs": 1,
+      "kind": "processor",
+      "outcomes": {
+        "deferred": 1
+      },
+      "pipeline": "logs",
+      "reconciled": true,
+      "removed": 0,
+      "signal": "logs",
+      "type": "batch",
+      "uri": "otel://runs/RUN_ID/stages/logs/batch"
+    }
+  ],
+  "uri": "otel://runs/RUN_ID"
+}

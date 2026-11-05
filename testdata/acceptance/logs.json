@@ -1,0 +1,27 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          { "key": "service.name", "value": { "stringValue": "orders" } }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": { "name": "orders.log" },
+          "logRecords": [
+            {
+              "timeUnixNano": "1760000000020000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": { "stringValue": "order 42 accepted" },
+              "attributes": [
+                { "key": "order.id", "value": { "intValue": "42" } }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+/* Saved work screens. Tokens only; the design-system classes do the rest. */
+.saved-stack { display: flex; flex-direction: column; gap: 12px; }
+.saved-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.saved-grow { flex: 1; }
+.saved-search { width: 320px; max-width: 100%; }
+.saved-name { display: inline-flex; gap: 8px; align-items: center; min-width: 0; }
+.saved-name a { color: var(--fg); text-decoration: none; }
+.saved-name a:hover { text-decoration: underline; }
+.saved-bar { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; padding: 10px 12px; border: 1px solid var(--accent-border); background: var(--accent-subtle); border-radius: var(--radius-lg); }
+.saved-bar__what { display: flex; flex-direction: column; gap: 2px; align-self: center; }
+.saved-bar .od-field { min-width: 180px; }
+.saved-bar .od-select { max-width: 280px; }
+.saved-pager-actions { display: inline-flex; gap: 4px; align-items: center; }
+.saved-source { display: flex; flex: 1; min-height: 0; }
+.saved-source__revisions { width: 320px; flex: none; border-right: 1px solid var(--border); }
+.saved-rev { display: flex; flex-direction: column; gap: 2px; width: 100%; padding: 10px 14px; border: 0; border-bottom: 1px solid var(--border-subtle); background: transparent; color: var(--fg); text-align: left; cursor: pointer; }
+.saved-rev:hover { background: var(--bg-hover); }
+.saved-rev[aria-current="true"] { background: var(--bg-selected); box-shadow: inset 2px 0 0 var(--accent); }
+.saved-rev:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.saved-rev__top { display: flex; gap: 8px; align-items: center; }
+.saved-page { flex: 1; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.saved-list { display: flex; flex-direction: column; gap: 8px; padding: 14px; }
+.saved-line { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-surface); }
+.saved-line__detail { font-size: 12px; color: var(--fg-muted); }
+.saved-yaml { max-height: 520px; padding: 12px 14px; white-space: pre; }
+.saved-result { max-width: 1100px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+.saved-attention { padding: 12px 14px; border-top: 1px solid var(--border-subtle); display: flex; flex-direction: column; gap: 8px; background: var(--bg-canvas); }
+@media (max-width: 900px) {
+  .saved-source { flex-direction: column; }
+  .saved-source__revisions { width: auto; border-right: 0; border-bottom: 1px solid var(--border); }
+}

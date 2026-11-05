@@ -1,0 +1,437 @@
+# linea team server (docs/debugger/deploy-kubernetes.md). The server keeps
+# its records in PostgreSQL and payloads in S3-compatible object storage:
+# your own (store), or the bundled single-pod stores (postgresql, seaweedfs).
+# Its instances are identical and share both; any of them answers any
+# request.
+
+image:
+  repository: ghcr.io/lineahq/linea-server
+  # Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# The server config (docs/debugger/team-server.md). The chart fills store from
+# store below, worker_token_file from the worker's token and
+# oidc.client_secret_file; the rest is yours.
+config:
+  storageLimit: 4GiB
+  runLimit: 16MiB
+  # oidc and/or trusted_headers, as in the server config, without
+  # client_secret_file (set oidc.clientSecret or oidc.existingSecret).
+  authentication: {}
+  # Required: without a binding nothing is allowed.
+  bindings: []
+  limits: {}
+  # Run history kept, as in the server config: runs (count) and age, such as
+  # {runs: 10000, age: 30d}; empty keeps the server's defaults.
+  retention: {}
+
+oidc:
+  # The web client's secret at the identity provider, or a Secret holding
+  # it under the key client-secret.
+  clientSecret: ""
+  existingSecret: ""
+
+fleet:
+  # linea-fleet's management API, for fleet management and live capture.
+  url: ""
+  # Plain HTTP to fleet, on a protected network.
+  allowHTTP: false
+  # The management token, or a Secret holding it under the key token.
+  token: ""
+  existingSecret: ""
+
+server:
+  # Identical instances behind the Service. With more than one, a
+  # PodDisruptionBudget keeps one up during voluntary disruptions.
+  replicas: 2
+  # On SIGTERM an instance stops claiming work and lets running work finish
+  # for this long, then hands the rest back to the queue for another
+  # instance. The pod's grace period adds 20 seconds to it.
+  drainSeconds: 25
+  # Serve MCP at /mcp.
+  mcp: true
+  # The build queue's metrics: GET /metrics in the Prometheus
+  # text format on a port of its own, counts only and without credentials,
+  # behind a Service named after the server's full name plus -metrics. On
+  # when enabled or when builder.autoscaling.kind is keda or hpa. With networkPolicy.enabled, a
+  # NetworkPolicy admits the port only from allowFrom (NetworkPolicy `from`
+  # peers; by default KEDA's namespace) and leaves the API port open.
+  metrics:
+    enabled: false
+    port: 9090
+    allowFrom:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: keda
+  # TLS in the pod from a kubernetes.io/tls Secret. Without it the server
+  # serves plain HTTP, for an ingress that ends TLS in front of it.
+  tls:
+    secretName: ""
+  extraArgs: []
+  # A Secret holding a private CA's PEM certificate under caKey. The server
+  # trusts it beside the system roots for the identity provider and fleet.
+  caSecret: ""
+  caKey: ca.crt
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  hostAliases: []
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+store:
+  # PostgreSQL, e.g. postgres://linea@db:5432/linea?sslmode=verify-full. The
+  # server creates and migrates its tables in this database.
+  databaseURL: ""
+  objects:
+    # The S3 API endpoint, http:// or https://.
+    endpoint: ""
+    bucket: ""
+    # A key prefix inside the bucket.
+    prefix: ""
+    region: ""
+    # Path-style requests, as SeaweedFS and most self-hosted stores need.
+    pathStyle: true
+    accessKey: ""
+    secretKey: ""
+  # A Secret holding database-url, access-key and secret-key instead of
+  # the three values above.
+  existingSecret: ""
+
+# Bundled stores, off by default. Each is one pod with a
+# PersistentVolumeClaim: no replication, no backups, no TLS inside the
+# cluster. Use them for evaluation and small teams; for production set store
+# to your own HA PostgreSQL and a durable bucket. Enabling one replaces its
+# part of store (leave that part empty) and cannot be combined with
+# store.existingSecret.
+postgresql:
+  enabled: false
+  image:
+    repository: postgres
+    tag: "17"
+    digest: sha256:b8faeff7712663c2773a190181e1246e37e364b887611c04658c28b44e2408fe
+    pullPolicy: IfNotPresent
+  # The password of the user linea. Generated once and kept when empty.
+  password: ""
+  persistence:
+    size: 10Gi
+    storageClassName: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# SeaweedFS with its S3 gateway. A Job per release creates the bucket. The
+# pool and builders reach it without networkPolicy.objectStorage.
+seaweedfs:
+  enabled: false
+  image:
+    repository: chrislusf/seaweedfs
+    tag: "4.51"
+    digest: sha256:f7a49e3f3972ebed5be2ed4befa4a0c68eb7bdddba6e692d42729ceb545134b8
+    pullPolicy: IfNotPresent
+  bucket: linea
+  # The S3 credentials. Generated once and kept when empty.
+  accessKey: ""
+  secretKey: ""
+  # The size of one SeaweedFS volume file.
+  volumeSizeLimitMB: 256
+  persistence:
+    size: 20Gi
+    storageClassName: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+service:
+  type: ClusterIP
+  port: 7070
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: ""
+  # A kubernetes.io/tls Secret for host; the ingress ends TLS with it.
+  tls:
+    secretName: ""
+
+# The default worker pool: linea-worker --pool
+# runs the built-in runtime as its own executable, and registers it when its
+# image is the server's release (the default tag), so requests that name no
+# runtime run here with nothing registered. It also serves any runtime the
+# team server builds, whatever its name, so a runtime built from the CLI,
+# web client or MCP runs with no image and no operator step. The pool dials
+# the server (listens on no port, so it has no Service), downloads each built
+# runtime's binary through a presigned object-storage URL into its cache and
+# runs one child process per runtime in use, started on demand.
+pool:
+  enabled: true
+  image:
+    repository: ghcr.io/lineahq/linea-worker
+    # Defaults to the chart's appVersion.
+    tag: ""
+    pullPolicy: IfNotPresent
+  # The name the pool presents to the server.
+  name: pool
+  replicas: 1
+  # Requests one pod runs at once across all runtimes.
+  capacity: 4
+  # Most runtimes kept running at once (--warm) and how long an idle one
+  # stays (--idle).
+  warm: 4
+  idle: 10m
+  cache:
+    # The disk budget for runtime binaries (--cache), least recently used
+    # first. The volume is an emptyDir, mounted at /cache; it allows
+    # executing files because the pool starts the binaries from there.
+    size: 5GiB
+    # The emptyDir's sizeLimit: a little above size.
+    volumeSizeLimit: 6Gi
+  # The URL the pool dials is worker.serverURL (default: the server's
+  # Service), and the pool presents the worker registration token
+  # (worker.token / worker.existingSecret).
+  # A Secret holding a private CA's PEM certificate under caKey, which the
+  # pool uses to verify the server's certificate, in place of the system
+  # roots.
+  caSecret: ""
+  caKey: ca.crt
+  # The children inherit the pod's environment, so the limits below are the
+  # bound: they are shared by every runtime the pool keeps running.
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "4"
+      memory: 4Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# The runtime builder: linea-builder dials the server with the
+# build token, compiles the manifests the server queues with the pinned Go
+# toolchain (no Docker daemon) and uploads the binaries through presigned
+# URLs. It holds no database or bucket credentials. It is the only component
+# with outbound network access (networkPolicy.builderEgress).
+builder:
+  # Deploy a builder. false builds nothing; builds are queued until a builder
+  # connects.
+  enabled: true
+  image:
+    repository: ghcr.io/lineahq/linea-builder
+    # Defaults to the chart's appVersion.
+    tag: ""
+    pullPolicy: IfNotPresent
+  # 0 turns builds off: the Deployment scales to zero and queued builds wait,
+  # while the server keeps accepting builders (the build token stays).
+  # Ignored when autoscaling.kind is keda or hpa.
+  replicas: 1
+  # Scaling with the build queue, for clusters that run an
+  # autoscaler; off by default. The target is one builder per `capacity`
+  # unfinished builds (linea_runtime_builds_unfinished, queued plus running).
+  #   none: builder.replicas pods.
+  #   keda: a KEDA ScaledObject reads the server's /metrics directly
+  #     (metrics-api trigger); minReplicas 0 runs no builder while nothing
+  #     is built. Needs KEDA's CRDs in the cluster.
+  #   hpa: an autoscaling/v2 HorizontalPodAutoscaler on the external metric
+  #     hpa.metricName, which your metrics adapter (such as
+  #     prometheus-adapter) must serve from the server's /metrics. The HPA
+  #     cannot scale to zero, so it keeps at least one builder.
+  # Both turn on server.metrics. A builder that is scaled in finishes its
+  # builds first (terminationGracePeriodSeconds).
+  autoscaling:
+    kind: none
+    minReplicas: 0
+    maxReplicas: 2
+    # KEDA: seconds without a build before the last builder stops, which
+    # keeps it warm for a follow-up build.
+    cooldownPeriod: 600
+    # KEDA: seconds between reads of /metrics.
+    pollingInterval: 30
+    hpa:
+      metricName: linea_runtime_builds_unfinished
+      # Labels that select the metric in the adapter, when it needs them.
+      selector: {}
+  # A builder that stops (scale-in, rolling update, node drain) finishes
+  # the builds it runs, which take at most 30 minutes, then exits. 35
+  # minutes covers that; a build still running at the end is retried once.
+  terminationGracePeriodSeconds: 2100
+  name: builder
+  # Builds one pod runs at once, and the CPUs each may use (GOMAXPROCS).
+  capacity: 1
+  cpus: 4
+  # The build token builders present (builds.token_file in the server config), at
+  # least 32 characters and different from the worker token. Generated once
+  # and kept when empty, or a Secret holding it under the key token.
+  token: ""
+  existingSecret: ""
+  # The work volume holds the module cache, build cache and build
+  # directories. An emptyDir, mounted at /work; it allows executing files
+  # because a build starts the program it compiles.
+  workVolumeSizeLimit: 20Gi
+  # A persistent work volume instead, which keeps the caches
+  # warm across restarts and scaling to zero: existingClaim names your
+  # claim, or create makes one with size, storageClassName and accessMode.
+  # accessMode is also the existing claim's. ReadWriteOnce allows one
+  # builder (replicas, or autoscaling.maxReplicas, at most 1) and replaces
+  # the builder instead of rolling it, since two pods cannot mount it; with
+  # more builders use ReadWriteMany.
+  cache:
+    persistentVolumeClaim:
+      existingClaim: ""
+      create: false
+      size: 20Gi
+      storageClassName: ""
+      accessMode: ReadWriteOnce
+  # A Secret holding a private CA's PEM certificate under caKey, which the
+  # builder uses to verify the server's certificate.
+  caSecret: ""
+  caKey: ca.crt
+  # Where builds download Go modules: the operator's choice,
+  # never a request's. Empty values keep Go's defaults (proxy.golang.org
+  # and sum.golang.org). networkPolicy.builderEgress must reach the proxy.
+  modules:
+    # GOPROXY, such as an internal Artifactory, Nexus or Athens:
+    # https://artifactory.example.com/api/go/go-remote
+    proxy: ""
+    # GOPRIVATE: module path patterns that skip the proxy and the public
+    # checksum database, such as git.example.com/*.
+    private: ""
+    # GOSUMDB: the checksum database. Go reaches sum.golang.org through
+    # the proxy when the proxy serves it; "off" only where it does not.
+    sumDB: ""
+    # A Secret holding a netrc file under netrcKey: credentials for the
+    # proxy or the git hosts of private modules, as
+    # "machine artifactory.example.com login linea password <token>"
+    # (the machine with :port when the proxy URL names one).
+    netrcSecret: ""
+    netrcKey: netrc
+    # A Secret holding the PEM certificate of the CA that signed the proxy's
+    # certificate, under caKey; added to the system roots.
+    caSecret: ""
+    caKey: ca.crt
+  # Further variables; GOPROXY, GOPRIVATE, GONOPROXY, GONOSUMDB, GOSUMDB,
+  # GOINSECURE, GOAUTH, NETRC, SSL_CERT_FILE and SSL_CERT_DIR reach builds,
+  # nothing else of the builder's environment does.
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  # Optional image export: the builder also pushes each
+  # runtime it builds, FROM scratch and tagged with the build's name, to
+  # repository (builds.export in the server config). authSecret names a Secret
+  # holding a Docker config.json under authKey (its credHelpers, then
+  # credsStore, then auths), such as a kubernetes.io/dockerconfigjson
+  # Secret. plainHTTP lists registry hosts reached without TLS.
+  # networkPolicy.builderEgress must reach the registry. A failed push is
+  # the build's export error; the build stays done.
+  export:
+    repository: ""
+    authSecret: ""
+    authKey: .dockerconfigjson
+    plainHTTP: []
+  # 5 GiB and 4 CPUs are the build budget. A builder is idle
+  # between builds, so the requests reserve only what an idle builder uses
+  # and a build bursts to the limits. On a node without 5 GiB free, a build
+  # can be killed for memory and is retried once; where that is likely,
+  # raise the requests to the limits.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "4"
+      memory: 5Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# A dedicated worker (optional): a runtime image that `linea runtime build`
+# made and you pushed, for a runtime that must run in its own container, such
+# as a pinned production Collector. It dials the server (linea-worker
+# --connect) and listens on no port, so it has no Service. The pool above
+# serves runtimes the server builds.
+worker:
+  enabled: false
+  # The runtime name the workers serve under.
+  name: team-runtime
+  image:
+    repository: ""
+    tag: ""
+    pullPolicy: IfNotPresent
+  # Any number of workers can serve one runtime.
+  replicas: 1
+  # How many requests one worker runs at once; size resources for it.
+  capacity: 1
+  # The registration token workers and the pool present, at least 32
+  # characters. Generated once and kept when empty, or a Secret holding it
+  # under the key token. The server accepts workers when the chart deploys
+  # the pool or a worker, and also when a token is given, for workers run
+  # elsewhere.
+  token: ""
+  existingSecret: ""
+  # The URL workers, the pool and builders dial. Defaults to the server's
+  # Service, https when server.tls is set. A worker in another cluster dials
+  # the ingress instead.
+  serverURL: ""
+  # A Secret holding a private CA's PEM certificate under caKey, which the
+  # workers use to verify the server's certificate, in place of the system
+  # roots.
+  caSecret: ""
+  caKey: ca.crt
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+networkPolicy:
+  # Workers, the pool and builders accept no connection. Workers and the pool
+  # reach only the server, DNS and the object store; builders also reach the
+  # outside world (builderEgress).
+  enabled: true
+  # Egress rules (NetworkPolicy `to` and `ports`) that reach
+  # store.objects.endpoint. Required with the pool or a builder unless
+  # seaweedfs.enabled: the
+  # presigned URLs for bundles, results and runtime binaries point there, and
+  # the chart cannot know where the store runs. An in-cluster store:
+  #   - to:
+  #       - podSelector: {matchLabels: {app: seaweedfs}}
+  #     ports: [{port: 8333}]
+  # An external one:
+  #   - to:
+  #       - ipBlock: {cidr: 10.20.0.0/16}
+  #     ports: [{port: 443}]
+  objectStorage: []
+  # What builders may reach besides the above: the module proxy and the git
+  # hosts a manifest names. The default is open to every address; narrow it
+  # to your module proxy and git hosts. A NetworkPolicy matches addresses, not
+  # names, so give the CIDRs those hosts resolve to.
+  builderEgress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0

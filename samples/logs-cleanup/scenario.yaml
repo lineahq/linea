@@ -1,0 +1,19 @@
+# Three of the four logs leave the Collector, without secrets.
+version: 1
+name: logs-cleanup
+inputs:
+  - receiver: otlp
+    file: input.json
+assertions:
+  - name: the health check is dropped
+    target: {exporter: otlp/backend, signal: logs}
+    count: {equals: 3}
+  - name: no password leaves
+    target: {exporter: otlp/backend, signal: logs}
+    attributes:
+      absent: [user.password]
+      present: [enduser.id]
+  - name: the environment is set
+    target: {exporter: otlp/backend, signal: logs}
+    resource_attributes:
+      equals: {deployment.environment: demo}

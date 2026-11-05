@@ -1,0 +1,63 @@
+# Logs enter one pipeline and the routing connector sends them on:
+# errors are copied to the pager, audit logs move to their own pipeline,
+# and everything else goes to the archive, which drops debug logs.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  resource/env:
+    attributes:
+      - key: deployment.environment
+        value: prod
+        action: insert
+  transform/page:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        statements:
+          - set(log.attributes["page.priority"], "high")
+          - delete_key(log.attributes, "user.email")
+  filter/debug:
+    error_mode: ignore
+    logs:
+      log_record:
+        - severity_number < SEVERITY_NUMBER_INFO
+
+connectors:
+  routing:
+    default_pipelines: [logs/archive]
+    table:
+      - condition: log.severity_number >= SEVERITY_NUMBER_ERROR
+        action: copy
+        pipelines: [logs/pager]
+      - condition: resource.attributes["service.name"] == "audit"
+        pipelines: [logs/audit]
+
+exporters:
+  otlp/pager:
+    endpoint: pager.example.invalid:4317
+  otlp/archive:
+    endpoint: archive.example.invalid:4317
+  otlp/audit:
+    endpoint: audit.example.invalid:4317
+
+service:
+  pipelines:
+    logs/in:
+      receivers: [otlp]
+      processors: [resource/env]
+      exporters: [routing]
+    logs/pager:
+      receivers: [routing]
+      processors: [transform/page]
+      exporters: [otlp/pager]
+    logs/archive:
+      receivers: [routing]
+      processors: [filter/debug]
+      exporters: [otlp/archive]
+    logs/audit:
+      receivers: [routing]
+      exporters: [otlp/audit]

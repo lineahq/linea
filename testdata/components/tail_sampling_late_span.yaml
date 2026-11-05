@@ -1,0 +1,42 @@
+version: 1
+name: late span after a sampling decision
+# The failing root is sampled once decision_wait (1s) has passed. Its child
+# arrives 3s later, after the decision, and is forwarded on its own.
+inputs:
+  - data:
+      resourceSpans:
+        - resource:
+            attributes:
+              - {key: service.name, value: {stringValue: checkout}}
+          scopeSpans:
+            - spans:
+                - traceId: 6c9f00a8a9149214e37ac744d2fd71d0
+                  spanId: fff2a08cd4d2c285
+                  name: POST /orders
+                  kind: 2
+                  startTimeUnixNano: "1791626401000000000"
+                  endTimeUnixNano: "1791626401400000000"
+                  status: {code: 2}
+                - traceId: 5b8efff798038103d269b633813fc60c
+                  spanId: eee19b7ec3c1b174
+                  name: GET /health
+                  kind: 2
+                  startTimeUnixNano: "1791626400000000000"
+                  endTimeUnixNano: "1791626400002000000"
+  - after: 3s
+    data:
+      resourceSpans:
+        - resource:
+            attributes:
+              - {key: service.name, value: {stringValue: checkout}}
+          scopeSpans:
+            - spans:
+                - traceId: 6c9f00a8a9149214e37ac744d2fd71d0
+                  spanId: a0a3b19de5e3d396
+                  parentSpanId: fff2a08cd4d2c285
+                  name: charge card
+                  startTimeUnixNano: "1791626401010000000"
+                  endTimeUnixNano: "1791626404300000000"
+assertions:
+  - target: {exporter: otlp/tempo, signal: traces}
+    count: {equals: 2}

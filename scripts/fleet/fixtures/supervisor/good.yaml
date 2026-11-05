@@ -1,0 +1,9 @@
+receivers:
+  nop/managed:
+exporters:
+  nop/managed:
+service:
+  pipelines:
+    traces/managed:
+      receivers: [nop/managed]
+      exporters: [nop/managed]

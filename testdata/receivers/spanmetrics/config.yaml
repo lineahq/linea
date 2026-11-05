@@ -1,0 +1,28 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+connectors:
+  spanmetrics:
+    histogram:
+      explicit:
+        buckets: [100ms, 250ms, 1s]
+    dimensions:
+      - name: http.request.method
+
+exporters:
+  otlp/tempo:
+    endpoint: tempo.observability:4317
+  otlp/mimir:
+    endpoint: mimir.observability:4317
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [spanmetrics, otlp/tempo]
+    metrics:
+      receivers: [spanmetrics]
+      exporters: [otlp/mimir]
