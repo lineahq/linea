@@ -38,8 +38,9 @@ export interface RuntimeOption {
  */
 export function runtimeOptions(runtimes: Runtime[] | undefined, selected: string, builtInVersion?: string, defaultName?: string): RuntimeOption[] {
   // A name selects one image: an older one a pushed reference keeps is not
-  // another choice.
-  const all = runtimes ?? [];
+  // another choice. A team server lists the built-in runtime too; it is the
+  // built-in option, not another.
+  const all = (runtimes ?? []).filter((r) => r.name !== BUILT_IN_NAME);
   const sorted = all.filter((r) => !olderImage(r, all)).sort((a, b) => a.name.localeCompare(b.name));
   const out: RuntimeOption[] = [defaultOption(sorted, builtInVersion, defaultName)];
   // Built-in stays choosable when the default is another runtime (or not

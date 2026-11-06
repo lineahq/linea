@@ -30,6 +30,8 @@ export interface RuntimeRow {
   /** Requests that name no runtime run on this one. */
   isDefault: boolean;
   runtime?: Runtime;
+  /** On a team server, the workers that serve the built-in runtime. */
+  workers?: NonNullable<Runtime['catalog']>;
 }
 
 export const BUILT_IN_KEY = 'built-in';
@@ -65,13 +67,16 @@ export function buildChip(b: Pick<RuntimeBuild, 'state'>): StateChip {
  * runtimes by name (an older image that only a pushed reference keeps is not
  * a row: its name selects a newer one). `defaultName` is the team's default
  * runtime; no row is the default while it is unknown, except a catalog
- * runtime the list itself marks.
+ * runtime the list itself marks. A team server lists the built-in runtime
+ * too, served by its workers: that entry is the built-in row, not another.
  */
 export function runtimeRows(runtimes: Runtime[] | undefined, builtInVersion: string | undefined, defaultName?: string): RuntimeRow[] {
-  const all = runtimes ?? [];
+  const all = (runtimes ?? []).filter((r) => r.name !== BUILT_IN_NAME);
+  const served = runtimes?.find((r) => r.name === BUILT_IN_NAME);
   const rows: RuntimeRow[] = [{
-    key: BUILT_IN_KEY, name: BUILT_IN_NAME, kind: 'built-in', type: 'Built-in', version: builtInVersion ?? '', state: VERIFIED,
-    isDefault: defaultName === BUILT_IN_NAME,
+    key: BUILT_IN_KEY, name: BUILT_IN_NAME, kind: 'built-in', type: 'Built-in', version: builtInVersion || served?.collector_version || '',
+    state: served?.catalog ? catalogChip(served.catalog) : VERIFIED,
+    isDefault: defaultName === BUILT_IN_NAME || served?.default === true, workers: served?.catalog,
   }];
   const current = all.filter((r) => !olderImage(r, all)).sort((a, b) => a.name.localeCompare(b.name));
   for (const r of current) {
@@ -131,7 +136,10 @@ function baseDetail(row: RuntimeRow, builtInVersion: string | undefined): Runtim
     return {
       title: `built-in${builtInVersion ? ` ${builtInVersion}` : ''}`,
       subtitle: 'ships with the debugger',
-      facts: [['Type', 'Built-in'], ['Verification', 'Verified: the release this debugger is built against']],
+      facts: [
+        ['Type', 'Built-in'], ['Verification', 'Verified: the release this debugger is built against'],
+        ...(row.workers ? [['Workers', workersFact(row.workers)] as [string, string]] : []),
+      ],
       providers: [], custom: [],
     };
   }
@@ -150,6 +158,10 @@ function baseDetail(row: RuntimeRow, builtInVersion: string | undefined): Runtim
   };
 }
 
+function workersFact(c: NonNullable<Runtime['catalog']>): string {
+  return c.workers ? `${c.workers} connected · ${c.slots} ${c.slots === 1 ? 'slot' : 'slots'}` : 'None connected: runs queue until one connects';
+}
+
 function catalogDetail(row: RuntimeRow, r: Runtime): RuntimeDetail {
   const c = r.catalog!;
   const facts: [string, string][] = [['Type', row.type]];
@@ -165,7 +177,7 @@ function catalogDetail(row: RuntimeRow, r: Runtime): RuntimeDetail {
   facts.push(['Identity', c.identity.replace(/^sha256:/, '').slice(0, 12)]);
   facts.push(['Registered', `${when(c.registered_at)} by ${c.registered_by || 'unknown'}`]);
   facts.push(['Confirmed', c.confirmed_at ? when(c.confirmed_at) : 'Not yet: no worker of this identity has connected']);
-  facts.push(['Workers', c.workers ? `${c.workers} connected · ${c.slots} ${c.slots === 1 ? 'slot' : 'slots'}` : 'None connected: runs queue until one connects']);
+  facts.push(['Workers', workersFact(c)]);
   return {
     title: `${r.name} ${r.collector_version}`,
     subtitle: c.binary ? 'built on this server · runs on pool workers' : 'registered in the catalog · runs on connected workers',

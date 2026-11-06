@@ -599,7 +599,10 @@ default" sets the team's default (below), which leaves the workspace selection
 as it is.
 
 - `/runtimes` (`RuntimesPage.tsx`, view model `runtimeList.ts`) lists built,
-  imported and catalog runtimes with the selected one beside the list. It
+  imported and catalog runtimes with the selected one beside the list. A team
+  server lists the built-in runtime too, served by its workers; that entry is
+  the built-in row (its workers chip and Workers fact), never a second row, and
+  `runtimeOptions` likewise offers built-in once. It
   pushes, imports and removes after an inline confirmation. "Build a runtime"
   opens the builder card (`RuntimeForm`) and "Import image" the import card;
   the builder card also shows the CLI line (`CLI_STEPS`:
