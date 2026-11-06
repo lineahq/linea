@@ -137,12 +137,14 @@ func TestOversizedAnalysisIsOmittedRatherThanLosingTheRun(t *testing.T) {
 	s := openPlatformLimits(t, data, limits, Options{Execute: func(_ context.Context, req engine.Request) (*engine.Report, error) {
 		rep := report(req, runresult.StatusCompleted)
 		rep.Stages = []analysis.Stage{{Component: hex.EncodeToString(random)}}
+		rep.Batching = []*analysis.Batching{{Processor: "batch"}}
+		rep.Grouping = []*analysis.Grouping{{Processor: "groupbyattrs"}}
 		return rep, nil
 	}})
 	got := waitRun(t, submit(t, s, engine.Request{ConfigYAML: bundleConfig, FixtureJSON: `{"resourceSpans":[]}`}))
 	check := func(when string, got Run) {
 		t.Helper()
-		if got.State != StateDone || got.Report == nil || len(got.Report.Stages) != 0 {
+		if got.State != StateDone || got.Report == nil || len(got.Report.Stages) != 0 || len(got.Report.Batching) != 0 || len(got.Report.Grouping) != 0 {
 			t.Fatalf("%s: state %s, error %q", when, got.State, got.Error)
 		}
 		cut := got.Report.Result.Truncation

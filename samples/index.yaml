@@ -97,3 +97,26 @@
     drops every info log and warns about the wall-clock read.
   receiver: otlp
   expect: pass
+- id: batch-timeline
+  title: "Batching: when the batch processor sends"
+  description: >-
+    Five requests timed so that each reason to send appears: the size is
+    reached, the timer fires, a burst is split at the maximum size and the
+    rest leaves at shutdown.
+  receiver: otlp
+  expect: pass
+- id: batch-metadata
+  title: "Batching: one batcher per tenant with metadata_keys"
+  description: >-
+    Requests carry a tenant header; with metadata_keys the batch processor
+    keeps one batcher per tenant, each with its own size count and timer.
+  receiver: otlp
+  expect: pass
+- id: resource-grouping
+  title: "Grouping: groupbyattrs moves a record attribute to its resource"
+  description: >-
+    Logs from two services, some with host.name and some without; groupbyattrs
+    regroups them into one resource per service and host and merges equal
+    resources.
+  receiver: otlp
+  expect: pass

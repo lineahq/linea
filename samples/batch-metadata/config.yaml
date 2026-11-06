@@ -1,0 +1,32 @@
+# A batch processor that keeps tenants apart: with metadata_keys it runs one
+# batcher per tenant header value, each with its own size count and timer.
+# The receiver must hand the request headers to the pipeline
+# (include_metadata: true), or every request lands in one batcher.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+        include_metadata: true
+      http:
+        endpoint: 0.0.0.0:4318
+        include_metadata: true
+
+processors:
+  batch:
+    send_batch_size: 4
+    timeout: 300ms
+    # One batcher per value of the tenant header. A request without it gets
+    # a batcher of its own.
+    metadata_keys: [tenant]
+
+exporters:
+  otlp/backend:
+    endpoint: backend.example.invalid:4317
+
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/backend]

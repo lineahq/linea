@@ -245,7 +245,7 @@ func declaredArchiveSize(extra []byte) (int64, bool) {
 
 // omittedSections are the report sections derived from recorded evidence,
 // left out when an archive would exceed its storage limit.
-var omittedSections = []string{"stages", "lineage", "aggregations", "routing", "sampling", "ottl"}
+var omittedSections = []string{"stages", "lineage", "aggregations", "routing", "sampling", "batching", "grouping", "ottl"}
 
 // withoutAnalysis returns a copy of rep without its derived analysis. Its
 // result names the omitted sections; status, assertions, outputs, events and
@@ -254,6 +254,7 @@ func withoutAnalysis(rep *engine.Report) *engine.Report {
 	out := *rep
 	out.Stages, out.Lineage, out.Aggregations = []analysis.Stage{}, []analysis.RecordLineage{}, []*analysis.Aggregation{}
 	out.Routing, out.Sampling, out.OTTL = []*analysis.Routing{}, []*analysis.Sampling{}, []*ottldebug.Report{}
+	out.Batching, out.Grouping = nil, nil
 	result := *rep.Result
 	cut := runresult.Truncation{Reason: runresult.TruncationEvidenceBudget}
 	if result.Truncation != nil {

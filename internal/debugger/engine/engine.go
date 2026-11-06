@@ -31,7 +31,7 @@ import (
 )
 
 // ReportSchemaVersion versions the Report JSON shape.
-const ReportSchemaVersion = "0.14"
+const ReportSchemaVersion = "0.15"
 
 // Request selects a configuration and its inputs. The configuration is a
 // path (Config) or text (ConfigYAML); the inputs are exactly one of a fixture
@@ -231,6 +231,14 @@ type Report struct {
 	// Sampling explains the per-trace decisions of tail sampling
 	// processors: the policies and what each one found in the trace.
 	Sampling []*analysis.Sampling `json:"sampling"`
+	// Batching explains when and why each batch processor sent what it
+	// held: its arrivals, its flushes and their triggers (report schema
+	// 0.15).
+	Batching []*analysis.Batching `json:"batching,omitempty"`
+	// Grouping explains how each groupbyattrs processor regrouped every
+	// request into resources and where each record went (report schema
+	// 0.15).
+	Grouping []*analysis.Grouping `json:"grouping,omitempty"`
 	OTTL     []*ottldebug.Report  `json:"ottl"`
 	// Timestamps relates the input timestamps to the run's wall clock and
 	// says whether they were rebased.
@@ -319,6 +327,12 @@ func Execute(ctx context.Context, req Request) (*Report, error) {
 		return nil, err
 	}
 	if rep.Sampling, err = explainSampling(ctx, resolved, rep.Stages, rep.Result); err != nil {
+		return nil, err
+	}
+	if rep.Batching, err = explainBatching(resolved, rep.Stages, rep.Lineage, rep.Result, opts.Inputs); err != nil {
+		return nil, err
+	}
+	if rep.Grouping, err = explainGrouping(resolved, rep.Stages, rep.Lineage, rep.Result); err != nil {
 		return nil, err
 	}
 	if rep.OTTL, err = replayTransforms(ctx, resolved, rep.Stages, rep.Result); err != nil {

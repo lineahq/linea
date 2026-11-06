@@ -1,0 +1,24 @@
+# One groupbyattrs processor that moves host.name from each log record to
+# its resource. Records with the same resource and host.name end up under one
+# resource; records without host.name stay with their own resource, and equal
+# resources are merged.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  groupbyattrs:
+    keys: [host.name]
+
+exporters:
+  otlp/backend:
+    endpoint: backend.example.invalid:4317
+
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [groupbyattrs]
+      exporters: [otlp/backend]

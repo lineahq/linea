@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decodeValue, filterSignalRows, formatDuration, formatTimestamp, signalRows, type SignalFilters } from './signals';
+import { decodeValue, filterSignalRows, formatDuration, formatTimestamp, requestRows, signalRows, type SignalFilters } from './signals';
 
 const attr = (key: string, value: unknown) => ({ key, value });
 const logs = (records: unknown[]) => ({ resourceLogs: [{ resource: { attributes: [attr('service.name', { stringValue: 'checkout' }), attr('zone', { stringValue: 'west' })] }, scopeLogs: [{ scope: { name: 'checkout.log', version: '1.2', attributes: [attr('source', { stringValue: 'sdk' })] }, logRecords: records }] }] });
@@ -96,5 +96,17 @@ describe('signal search and filters', () => {
     expect(filterSignalRows(rows, { ...defaults, sort: 'oldest' }).map((r) => r.title)).toEqual(['Payment accepted', 'Payment declined', 'No timestamp']);
     expect(filterSignalRows(rows, { ...defaults, sort: 'newest' }).map((r) => r.title)).toEqual(['Payment declined', 'Payment accepted', 'No timestamp']);
     expect(rows.map((r) => r.title)).toEqual(['Payment declined', 'Payment accepted', 'No timestamp']);
+  });
+
+  it('joins requests into one list, each row knowing its request', () => {
+    const joined = requestRows([
+      logs([{ body: { stringValue: 'first' } }, { body: { stringValue: 'second' } }]),
+      logs([{ body: { stringValue: 'third' } }]),
+    ]);
+    expect(joined.map((r) => [r.title, r.request])).toEqual([['first', 1], ['second', 1], ['third', 2]]);
+    expect(new Set(joined.map((r) => r.id)).size).toBe(3);
+    expect(joined[2].entity).toBe('resource[0].scope[0].log_record[0]');
+    expect(filterSignalRows(joined, { ...defaults, request: 2 }).map((r) => r.title)).toEqual(['third']);
+    expect(filterSignalRows(joined, { ...defaults, request: 2, record: 'resource[0].scope[0].log_record[0]' }).map((r) => r.title)).toEqual(['third']);
   });
 });

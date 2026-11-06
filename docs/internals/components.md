@@ -38,7 +38,8 @@ lineage ends `unresolved`.
   differ. Use generous limits in replays.
 - **groupbyattrs regroups resources.** Spans still match by trace and span
   ID, but the diff reports "resource(s) were merged or split; their resource
-  and scope changes are not attributed".
+  and scope changes are not attributed". `report.grouping` explains the
+  regrouping from the record lineage instead (`grouping.md`).
 - **deltatocumulative keeps state per stream** for the run only. Each replay
   starts empty, so a delta's running total covers only the points injected
   in that run. Its `time.Now()` feeds stale-stream expiry only, not the output.

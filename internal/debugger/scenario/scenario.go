@@ -35,6 +35,7 @@ type Scenario struct {
 	Version     int               `yaml:"version"`
 	Name        string            `yaml:"name"`
 	Inputs      []Input           `yaml:"inputs"`
+	Defaults    Defaults          `yaml:"defaults"`
 	Mocks       Mocks             `yaml:"mocks"`
 	Environment map[string]string `yaml:"environment"`
 	Execution   Execution         `yaml:"execution"`
@@ -84,6 +85,9 @@ type Input struct {
 	// ClientAddress is the sender IP address (optionally with a port) the
 	// receiver reports for this input, as for a connection from a pod.
 	ClientAddress string `yaml:"client_address"`
+	// Headers are the request headers this input arrives with, on top of
+	// defaults.headers.
+	Headers Headers `yaml:"headers"`
 	// After is how long the run waits, after the previous input (or the
 	// Collector's start), before injecting this one: wall-clock time, in
 	// which batch timeouts and decision timers fire.
@@ -179,7 +183,10 @@ type Fixture struct {
 	Receiver      string
 	Payload       telemetry.Payload
 	ClientAddress string
-	After         time.Duration
+	// Headers are the input's request headers with lowercased names
+	// (defaults merged), or nil.
+	Headers map[string][]string
+	After   time.Duration
 }
 
 // Load reads and validates a scenario file. Fixture files are not read
@@ -329,6 +336,12 @@ func (s *Scenario) validate() error {
 		if a := in.ClientAddress; a != "" && !ValidClientAddress(a) {
 			return fmt.Errorf("inputs[%d]: client_address %q is not an IP address (optionally with a port)", i, a)
 		}
+		if err := in.Headers.validate(); err != nil {
+			return fmt.Errorf("inputs[%d].headers: %w", i, err)
+		}
+	}
+	if err := s.Defaults.Headers.validate(); err != nil {
+		return fmt.Errorf("defaults.headers: %w", err)
 	}
 	return nil
 }
@@ -438,7 +451,7 @@ func (s *Scenario) Fixtures() ([]Fixture, error) {
 		if in.Signal != "" && in.Signal != p.Signal.String() {
 			return nil, fmt.Errorf("inputs[%d] %s: declared signal %s but it contains %s", i, name, in.Signal, p.Signal)
 		}
-		out[i] = Fixture{Receiver: in.Receiver, Payload: p, ClientAddress: in.ClientAddress, After: time.Duration(in.After)}
+		out[i] = Fixture{Receiver: in.Receiver, Payload: p, ClientAddress: in.ClientAddress, Headers: mergeHeaders(s.Defaults.Headers, in.Headers), After: time.Duration(in.After)}
 	}
 	return out, nil
 }

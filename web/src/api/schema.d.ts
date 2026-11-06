@@ -1833,6 +1833,65 @@ export interface components {
             events?: components["schemas"]["AuditEvent"][];
             next_cursor?: string;
         };
+        BatchArrival: {
+            batcher: number;
+            items: number;
+            offset_ms?: number;
+            resources: number;
+            seq: number;
+            services?: string[];
+        };
+        BatchBatcher: {
+            arrivals: number;
+            flushes: number;
+            items: number;
+            metadata?: {
+                [key: string]: string[];
+            };
+            refused?: boolean;
+            unknown?: boolean;
+        };
+        BatchFlush: {
+            batcher: number;
+            distinct_resources: number;
+            items: number;
+            left: number;
+            offset_ms?: number;
+            pending: number;
+            resources: number;
+            seq: number;
+            services?: string[];
+            sources?: components["schemas"]["BatchSource"][];
+            split?: boolean;
+            trigger: string;
+            wait_ms?: components["schemas"]["BatchWait"];
+        };
+        BatchSettings: {
+            metadata_cardinality_limit?: number;
+            metadata_keys?: string[];
+            send_batch_max_size: number;
+            send_batch_size: number;
+            timeout: string;
+        };
+        BatchSource: {
+            arrival: number;
+            items: number;
+        };
+        BatchWait: {
+            max: number;
+            min: number;
+        };
+        Batching: {
+            arrivals?: components["schemas"]["BatchArrival"][];
+            batchers?: components["schemas"]["BatchBatcher"][];
+            flushes?: components["schemas"]["BatchFlush"][];
+            notes?: string[];
+            pipeline: string;
+            processor: string;
+            settings: components["schemas"]["BatchSettings"];
+            signal: string;
+            verification: string;
+        };
         BisectCulprit: {
             diff: string;
             last_good: number;
@@ -2938,6 +2997,48 @@ export interface components {
             statements?: components["schemas"]["Statement"][];
             status: string;
         };
+        GroupAttribute: {
+            key: string;
+            moved?: boolean;
+            value: string;
+        };
+        GroupBlockIn: {
+            attributes?: components["schemas"]["GroupAttribute"][];
+            records: number;
+        };
+        GroupBlockOut: {
+            attributes?: components["schemas"]["GroupAttribute"][];
+            from?: components["schemas"]["GroupSource"][];
+            records?: components["schemas"]["GroupRecord"][];
+        };
+        GroupRecord: {
+            from: number;
+            lineage: string;
+            moved?: string[];
+            name: string;
+        };
+        GroupRequest: {
+            after?: components["schemas"]["GroupBlockOut"][];
+            before?: components["schemas"]["GroupBlockIn"][];
+            grouped: number;
+            input: number;
+            kept: number;
+            moved?: string[];
+            output?: number;
+            unfollowed: number;
+        };
+        GroupSource: {
+            block: number;
+            records: number;
+        };
+        Grouping: {
+            keys?: string[];
+            notes?: string[];
+            pipeline: string;
+            processor: string;
+            requests?: components["schemas"]["GroupRequest"][];
+            signal: string;
+        };
         Hop: {
             changes?: components["schemas"]["Change"][];
             component?: string;
@@ -2969,6 +3070,8 @@ export interface components {
             client_address?: string;
             counts: components["schemas"]["Counts"];
             error?: string;
+            headers?: string[];
+            headers_dropped?: boolean;
             injected: boolean;
             mock?: string;
             receiver: string;
@@ -3241,7 +3344,9 @@ export interface components {
         Report: {
             aggregations?: components["schemas"]["Aggregation"][];
             assertions?: components["schemas"]["AssertionReport"];
+            batching?: components["schemas"]["Batching"][];
             comparison?: components["schemas"]["Comparison"];
+            grouping?: components["schemas"]["Grouping"][];
             limits?: components["schemas"]["ReportLimits"];
             lineage?: components["schemas"]["RecordLineage"][];
             ottl?: components["schemas"]["OttldebugReport"][];

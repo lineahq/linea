@@ -53,6 +53,8 @@ Collector note names the release it was verified against (currently `v0.162.0`
 | [reference-runs.md](reference-runs.md) | How the uninstrumented reference Collector run is built and compared |
 | [aggregation.md](aggregation.md) | Count connector semantics, its verified replay, lineage across an aggregation, metric sorting |
 | [routing.md](routing.md) | Routing connector semantics, replaying the real connector to attribute each record to a rule, verification |
+| [batching.md](batching.md) | Batch processor timer and size semantics, inferring each send's trigger and checking it against the processor's metrics |
+| [grouping.md](grouping.md) | How groupbyattrs regroups records into resources (v0.162.0) and how `report.grouping` follows each record into its new resource |
 | [sampling.md](sampling.md) | Recording tail_sampling decisions with its hooks, replaying policies to explain them |
 | [ottl-replay.md](ottl-replay.md) | How the transform processor executes OTTL and how replay mirrors and verifies it |
 

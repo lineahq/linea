@@ -69,6 +69,11 @@ mocks:
 inputs:
   - file: span.json
     client_address: 10.42.0.17   # sender IP (optionally :port) for connection association
+    headers:                     # request headers; a value is a string or a list
+      tenant: acme
+defaults:
+  headers:                       # sent with every input; an input's own header wins
+    user-agent: shop-client/1.0
 execution:
   drain_timeout: 2s        # quiet period after the last record (default below)
 ```
@@ -194,6 +199,16 @@ or `..`, and duplicate paths (with `\` and `/` treated alike), are rejected.
   are rejected) is attached to the injection context as a `*net.TCPAddr`.
   `resource_attribute` association (for example `k8s.pod.ip`) needs nothing
   extra.
+- **Headers.** An input's `headers`, merged key by key over
+  `defaults.headers` (names are case-insensitive and lowercased; the input
+  wins), are the request headers it arrives with. Names must be HTTP tokens,
+  not pseudo-headers or `-bin`, and every header needs a value. They apply
+  to OTLP receivers only and reach the pipeline only with
+  `include_metadata: true` (gRPC's when configured, else HTTP's), as
+  `client.Info.Metadata`; the reference run sends them as gRPC metadata.
+  The result names each input's headers, never their values, and marks
+  `headers_dropped` when the receiver ignored them. See
+  [batching.md](batching.md) for `metadata_keys`.
 - **Declarations.** Supplied lists the objects of the kinds the processor
   requested (`Pod shop/checkout-...`). Limitations: objects are fixed, the
   API connection is replaced, `wait_for_metadata` was enabled (when the user

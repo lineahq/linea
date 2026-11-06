@@ -208,7 +208,9 @@ values. The report also contains:
 - batch emissions reconciled against the batch input;
 - a statement-by-statement OTTL replay of each transform processor, marked
   `replay_verified` only when it reproduces the processor's actual output;
-- explanations of routing rules and tail_sampling decisions;
+- explanations of routing rules and tail_sampling decisions, of why each
+  batch processor sent when it did, and of how groupbyattrs regrouped each
+  record into its resource;
 - mocked dependencies and stand-ins: components outside the distribution, and
   references with no value supplied.
 

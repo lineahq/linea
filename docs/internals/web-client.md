@@ -246,6 +246,30 @@ Verified against debugger API 1 / Collector v0.162.0.
   says decisions are explained when the run ends. Details:
   [sampling.md](sampling.md).
 
+## Batches
+
+- A batch processor opens on its Batches tab (Changes shows no attribute
+  change for it), built from `report.batching` (matched by processor and
+  pipeline), in the record-view style of the Decisions tab:
+  - A summary (requests in, batches out, reasons) with the settings.
+  - Impact: a table of requests, items per request, resource blocks and the
+    added wait, into and out of the processor, plus batchers with
+    `metadata_keys`.
+  - Batchers: what `metadata_keys` does, and with it one row per batcher
+    (its metadata values, requests, items, batches and reasons).
+  - Batches: the shared record list, one row per batch with its reason,
+    batcher and wait, opening to the requests it carries and its resource
+    blocks. Filters by reason.
+  `batching.ts` builds the rows (`batching.test.ts`); styles are the
+  `.bt-*` table rules in `styles.css`. A normalized report has no times, so
+  the wait is left out. Details: [batching.md](batching.md).
+- A receiver's, exporter's or extension's Data view lists the records of all
+  its requests in one `SignalExplorer` per signal (`requests`,
+  `requestRows`), with a Request column and filter, so one batch is not read
+  as everything exported. Record refs stay those of their own request. The
+  tree and raw views show one request, picked by position ("Request 2 · 4
+  log records", `payloads.ts`).
+
 ## OTTL debugger and statement edits
 
 - **Where it lives.** For a transform stage input, the Telemetry tab opens on an
@@ -568,6 +592,12 @@ the step `diverges_at` names, and links to follow the record in either run
 SHA-256, `runs/inputDiff.ts`, tested), an "Input differences" card names them
 and "Configuration diff" shows each as a unified diff, read from
 `GET /runs/{id}/inputs`. Its view model, `runs/compare.ts`, is pure and tested.
+A "Batching" card puts each batch processor (by processor and pipeline) of both
+runs side by side: its settings, a strip of the batches each run sent (width by
+items, tone by why the batch left) and the outcome rows, with changed rows
+marked. It reads each run's own report `batching`, not the platform comparison,
+so it shows even when the comparison is inconclusive (`runs/batchingCompare.ts`,
+tested).
 "Compare with…" (`CompareMenu`) also runs a finished run's input with another
 configuration, the open one or one of the five newest saved ones, beside the
 run's own recorded configuration: one `POST /comparisons` on the run's runtime
@@ -801,7 +831,13 @@ checks are not recorded, and nothing shows when there are none. Component views
 live in the bottom pane (`debugger/ComponentPane.tsx`; before a run,
 `PREPARE_TABS` explains how the component will run and shows its configuration).
 Compare runs is its own state. Processors open directly on Changes, with
-optional Statements for transform; tail_sampling opens on Decisions
+optional Statements for transform; batch opens on Batches
+(`BatchingPanel.tsx`, the step-by-step story of requests and batches; logic in `batching.ts`);
+groupbyattrs opens on Grouping (`GroupingPanel.tsx`, the resource blocks in
+beside the blocks out with the attributes moved up from the records and each
+record linked to its path; it reads `report.grouping`, named and summarized
+in `grouping.ts`);
+tail_sampling opens on Decisions
 (`SamplingPanel.tsx`, a trace-per-row record list whose opened row is the ladder
 of policies; logic in `sampling.ts`) and a Configuration tab; extensions open on
 Activity, then Data; receiver/exporter/connector views retain Data, with Routing
@@ -824,7 +860,10 @@ inline input and no assertions as a quick run (its mocks and settings sent
 as `setup_yaml`), anything else as a scenario, and any input can run alone.
 `workspace/migrate.ts` (tested) folds separate quick drafts into the
 document. `input/InputsPanel.tsx` edits inputs as cards started from payload
-templates (`input/templates.ts`), files or pasted JSON.
+templates (`input/templates.ts`), files or pasted JSON. Each card edits its
+request headers (`HeadersEditor.tsx`, `setHeaders`) and shows the scenario's
+`defaults.headers` it also sends, which Run settings edits; any valid header
+name, checked as the scenario check does (`headerProblem`).
 `config/ConfigTools.tsx` holds the configuration start screen, templates
 and "+ Insert component"; `config/templates.ts` (tested) inserts a component
 snippet into the chosen pipelines through `yaml` nodes, keeping comments, and

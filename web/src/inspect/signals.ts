@@ -27,6 +27,8 @@ export interface SignalRow {
   scope: Fields;
   raw: ObjectValue;
   search: string;
+  /** The request it came in, from 1, when rows join several payloads. */
+  request?: number;
 }
 
 const object = (v: unknown): ObjectValue => v !== null && typeof v === 'object' && !Array.isArray(v) ? v as ObjectValue : {};
@@ -217,12 +219,24 @@ export function signalRows(payload: unknown): SignalRow[] {
   return rows;
 }
 
-export interface SignalFilters { query: string; service: string; category: string; sort: 'recorded' | 'newest' | 'oldest'; record?: string }
+/**
+ * requestRows joins the rows of several payloads of one signal, in order,
+ * each tagged with its request. Entities stay those of their own payload.
+ */
+export function requestRows(payloads: readonly unknown[]): SignalRow[] {
+  return payloads.flatMap((p, i) => signalRows(p).map((r) => ({ ...r, id: `${i + 1}:${r.id}`, request: i + 1 })));
+}
+
+export interface SignalFilters {
+  query: string; service: string; category: string; sort: 'recorded' | 'newest' | 'oldest'; record?: string;
+  /** Only this request's rows; the record, when set, is looked up in it. */
+  request?: number;
+}
 
 /** Plain text terms are ANDed; no backend query language is implied. */
 export function filterSignalRows(rows: SignalRow[], filters: SignalFilters): SignalRow[] {
   const terms = filters.query.toLowerCase().trim().split(/\s+/).filter(Boolean);
-  const filtered = rows.filter((r) => (!filters.record || r.entity === filters.record || r.recordEntity === filters.record || r.recordEntity.startsWith(`${filters.record}.`))
+  const filtered = rows.filter((r) => (!filters.request || r.request === filters.request) && (!filters.record || r.entity === filters.record || r.recordEntity === filters.record || r.recordEntity.startsWith(`${filters.record}.`))
     && (!filters.service || r.service === filters.service)
     && (!filters.category || r.category === filters.category)
     && terms.every((t) => r.search.includes(t)));

@@ -17,7 +17,7 @@ func TestTheBuiltInRuntimeHasEveryOptionalFeature(t *testing.T) {
 			t.Errorf("%s is not provided", f.Name)
 		}
 	}
-	for _, v := range []string{"0.8", "0.9", "0.10", "0.11", ReportSchemaVersion} {
+	for _, v := range []string{"0.8", "0.9", "0.10", "0.11", "0.12", "0.13", "0.14", ReportSchemaVersion} {
 		if !ReadableReportSchema(v) {
 			t.Errorf("report schema %s is not readable: each is the next without its new fields", v)
 		}

@@ -19,6 +19,7 @@ describe('inspector information architecture', () => {
     expect(ids('processor', 'attributes')).toEqual(['changes', 'component']);
     expect(ids('processor', 'transform')).toEqual(['changes', 'ottl', 'component']);
     expect(ids('processor', 'tail_sampling')).toEqual(['decisions', 'changes', 'component']);
+    expect(ids('processor', 'groupbyattrs')).toEqual(['grouping', 'changes', 'component']);
     expect(ids('connector', 'count')).toEqual(['routes', 'telemetry', 'component']);
     expect(ids('connector', 'routing')).toEqual(['routes', 'telemetry', 'component']);
     expect(ids('extension', 'livecapture')).toEqual(['activity', 'telemetry', 'component']);

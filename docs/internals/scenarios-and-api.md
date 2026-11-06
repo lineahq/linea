@@ -38,7 +38,7 @@ error that says to use `data` or an absolute path.
 Decoding is strict (`KnownFields`). Sections the debugger does not implement are
 rejected instead of being silently ignored, so a scenario never appears to test
 something it does not. `mocks`, inputs' `client_address` and
-`execution.drain_timeout` are specified in [mocking.md](mocking.md).
+`headers`, `defaults.headers` and `execution.drain_timeout` are specified in [mocking.md](mocking.md).
 `assertions` is specified in [assertions.md](assertions.md).
 
 ## Timeline

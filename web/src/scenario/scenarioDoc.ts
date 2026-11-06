@@ -23,7 +23,15 @@ export interface InputModel {
   clientAddress: string;
   /** The wait before this input is sent (a Go duration), or empty. */
   after: string;
+  /** The request headers this input declares, over defaults.headers. */
+  headers: Header[];
 }
+
+/**
+ * Header is one request header: its name and its value, a repeated header's
+ * values joined with ", ".
+ */
+export type Header = [string, string];
 
 /** FileModel is one file of the mocked filesystem (mocks.files). */
 export interface FileModel {
@@ -70,6 +78,8 @@ export interface ScenarioModel {
   /** execution.timestamps: 'rebase', 'recorded' or empty (recorded). */
   timestamps: string;
   environment: [string, string][];
+  /** defaults.headers: the headers every input sends unless it declares its own. */
+  headers: Header[];
   inputs: InputModel[];
   files: FileModel[];
   kubeObjects: KubeObjectModel[];
@@ -120,6 +130,7 @@ export function readScenario(text: string): { model: ScenarioModel } | { error: 
         data: data === undefined ? undefined : isScalar(data) ? str(data.value) : JSON.stringify((data as YAMLMap).toJSON()),
         clientAddress: str(n.get('client_address')),
         after: str(n.get('after')),
+        headers: readHeaders(n.get('headers')),
       });
     }
   }
@@ -183,6 +194,7 @@ export function readScenario(text: string): { model: ScenarioModel } | { error: 
       settle: str(doc.getIn(['execution', 'settle'])),
       timestamps: str(doc.getIn(['execution', 'timestamps'])),
       environment,
+      headers: readHeaders(doc.getIn(['defaults', 'headers'])),
       inputs,
       files,
       kubeObjects,
@@ -192,6 +204,55 @@ export function readScenario(text: string): { model: ScenarioModel } | { error: 
     },
   };
 }
+
+function headerValue(v: unknown): string {
+  if (isSeq(v)) return v.items.map((i) => str(isScalar(i) ? i.value : i)).join(', ');
+  return str(isScalar(v) ? v.value : v);
+}
+
+function readHeaders(n: unknown): Header[] {
+  return isMap(n) ? (n.items as Pair[]).map((p) => [str(isScalar(p.key) ? p.key.value : p.key), headerValue(p.value)]) : [];
+}
+
+/**
+ * headerProblem says why a header name cannot be sent, as the scenario
+ * check does: an HTTP token, not a pseudo-header and not binary metadata.
+ */
+export function headerProblem(name: string): string | undefined {
+  if (!name) return 'A header needs a name.';
+  if (name.toLowerCase().endsWith('-bin')) return `${name}: binary metadata (-bin) cannot be sent.`;
+  if (!/^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/.test(name)) return `${name} is not a valid header name.`;
+  return undefined;
+}
+
+/**
+ * setHeaders replaces the headers at path (an input's headers or
+ * defaults.headers). Names match case-insensitively, as the Collector's do.
+ * An unchanged value keeps its node, so a repeated header's list survives.
+ */
+export const setHeaders =
+  (path: (string | number)[], entries: Header[]): Edit =>
+  (doc) => {
+    const kept = entries.filter(([k]) => k.trim() !== '');
+    for (const [k] of kept) {
+      const problem = headerProblem(k);
+      if (problem) throw new Error(problem);
+    }
+    const dup = kept.find(([k], i) => kept.findIndex(([o]) => o.toLowerCase() === k.toLowerCase()) !== i);
+    if (dup) throw new Error(`The headers already have ${dup[0]}.`);
+    if (!kept.length) {
+      setField(path, '')(doc);
+      return;
+    }
+    const old = doc.getIn(path);
+    const m = new YAMLMap();
+    for (const [k, v] of kept) {
+      const prev = isMap(old) ? (old.items as Pair[]).find((p) => isScalar(p.key) && p.key.value === k) : undefined;
+      if (prev && headerValue(prev.value) === v) m.items.push(prev);
+      else m.items.push(doc.createPair(k, v));
+    }
+    doc.setIn(path, m);
+  };
 
 /** nodeText renders a node as its own YAML document, comments included. */
 function nodeText(n: unknown): string {

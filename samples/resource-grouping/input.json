@@ -1,0 +1,141 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "checkout"
+            }
+          }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": {
+            "name": "app"
+          },
+          "logRecords": [
+            {
+              "timeUnixNano": "1791626400000000000",
+              "severityText": "INFO",
+              "body": {
+                "stringValue": "order 1 placed"
+              },
+              "attributes": [
+                {
+                  "key": "host.name",
+                  "value": {
+                    "stringValue": "node-1"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1791626400000000000",
+              "severityText": "INFO",
+              "body": {
+                "stringValue": "order 2 placed"
+              },
+              "attributes": [
+                {
+                  "key": "host.name",
+                  "value": {
+                    "stringValue": "node-2"
+                  }
+                }
+              ]
+            },
+            {
+              "timeUnixNano": "1791626400000000000",
+              "severityText": "INFO",
+              "body": {
+                "stringValue": "cache warmed"
+              }
+            },
+            {
+              "timeUnixNano": "1791626400000000000",
+              "severityText": "INFO",
+              "body": {
+                "stringValue": "order 3 placed"
+              },
+              "attributes": [
+                {
+                  "key": "host.name",
+                  "value": {
+                    "stringValue": "node-1"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "cart"
+            }
+          }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": {
+            "name": "app"
+          },
+          "logRecords": [
+            {
+              "timeUnixNano": "1791626400000000000",
+              "severityText": "INFO",
+              "body": {
+                "stringValue": "cart 7 updated"
+              },
+              "attributes": [
+                {
+                  "key": "host.name",
+                  "value": {
+                    "stringValue": "node-1"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "checkout"
+            }
+          }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": {
+            "name": "app"
+          },
+          "logRecords": [
+            {
+              "timeUnixNano": "1791626400000000000",
+              "severityText": "INFO",
+              "body": {
+                "stringValue": "checkout started"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

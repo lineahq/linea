@@ -25,6 +25,10 @@ export function componentTabs(component: Pick<TopologyComponent, 'kind' | 'type'
     tabs.splice(0, 1, { id: 'changes', label: 'Changes', purpose: 'Resource and record attributes before and after this component, with changed values highlighted.' });
     if (component.type === 'transform') tabs.push({ id: 'ottl', label: 'Statements', purpose: 'How individual OTTL statements produced the observed changes. Replay verification is shown separately.' });
     // tail_sampling opens on its decisions (owner decision 2026-10-23); Changes only reconciles the buffer.
+    // batch opens on its sends: Changes shows no attribute change for it.
+    if (component.type === 'batch') tabs.unshift({ id: 'batches', label: 'Batches', purpose: 'When the processor sent what it held and why: size, timer, split or shutdown, and how long records waited.' });
+    // groupbyattrs opens on its regrouping: Changes cannot attribute resource changes across merged or split blocks.
+    if (component.type === 'groupbyattrs') tabs.unshift({ id: 'grouping', label: 'Grouping', purpose: 'Which resource blocks came in and went out, the attributes moved from records to resources and where each record went.' });
     if (component.type === 'tail_sampling') tabs.unshift({ id: 'decisions', label: 'Decisions', purpose: 'Which traces were kept or dropped, the policy that decided each one and what every policy found in the trace.' });
   }
   if (component.kind === 'extension') {

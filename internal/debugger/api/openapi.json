@@ -311,6 +311,241 @@
         },
         "type": "object"
       },
+      "BatchArrival": {
+        "properties": {
+          "batcher": {
+            "type": "integer"
+          },
+          "items": {
+            "type": "integer"
+          },
+          "offset_ms": {
+            "type": "number"
+          },
+          "resources": {
+            "type": "integer"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "services": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "batcher",
+          "items",
+          "resources",
+          "seq"
+        ],
+        "type": "object"
+      },
+      "BatchBatcher": {
+        "properties": {
+          "arrivals": {
+            "type": "integer"
+          },
+          "flushes": {
+            "type": "integer"
+          },
+          "items": {
+            "type": "integer"
+          },
+          "metadata": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object"
+          },
+          "refused": {
+            "type": "boolean"
+          },
+          "unknown": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "arrivals",
+          "flushes",
+          "items"
+        ],
+        "type": "object"
+      },
+      "BatchFlush": {
+        "properties": {
+          "batcher": {
+            "type": "integer"
+          },
+          "distinct_resources": {
+            "type": "integer"
+          },
+          "items": {
+            "type": "integer"
+          },
+          "left": {
+            "type": "integer"
+          },
+          "offset_ms": {
+            "type": "number"
+          },
+          "pending": {
+            "type": "integer"
+          },
+          "resources": {
+            "type": "integer"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "services": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/BatchSource"
+            },
+            "type": "array"
+          },
+          "split": {
+            "type": "boolean"
+          },
+          "trigger": {
+            "type": "string"
+          },
+          "wait_ms": {
+            "$ref": "#/components/schemas/BatchWait"
+          }
+        },
+        "required": [
+          "batcher",
+          "distinct_resources",
+          "items",
+          "left",
+          "pending",
+          "resources",
+          "seq",
+          "trigger"
+        ],
+        "type": "object"
+      },
+      "BatchSettings": {
+        "properties": {
+          "metadata_cardinality_limit": {
+            "type": "integer"
+          },
+          "metadata_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "send_batch_max_size": {
+            "type": "integer"
+          },
+          "send_batch_size": {
+            "type": "integer"
+          },
+          "timeout": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "send_batch_max_size",
+          "send_batch_size",
+          "timeout"
+        ],
+        "type": "object"
+      },
+      "BatchSource": {
+        "properties": {
+          "arrival": {
+            "type": "integer"
+          },
+          "items": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "arrival",
+          "items"
+        ],
+        "type": "object"
+      },
+      "BatchWait": {
+        "properties": {
+          "max": {
+            "type": "number"
+          },
+          "min": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "max",
+          "min"
+        ],
+        "type": "object"
+      },
+      "Batching": {
+        "properties": {
+          "arrivals": {
+            "items": {
+              "$ref": "#/components/schemas/BatchArrival"
+            },
+            "type": "array"
+          },
+          "batchers": {
+            "items": {
+              "$ref": "#/components/schemas/BatchBatcher"
+            },
+            "type": "array"
+          },
+          "flushes": {
+            "items": {
+              "$ref": "#/components/schemas/BatchFlush"
+            },
+            "type": "array"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "pipeline": {
+            "type": "string"
+          },
+          "processor": {
+            "type": "string"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/BatchSettings"
+          },
+          "signal": {
+            "type": "string"
+          },
+          "verification": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pipeline",
+          "processor",
+          "settings",
+          "signal",
+          "verification"
+        ],
+        "type": "object"
+      },
       "BisectCulprit": {
         "properties": {
           "diff": {
@@ -4309,6 +4544,185 @@
         ],
         "type": "object"
       },
+      "GroupAttribute": {
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "moved": {
+            "type": "boolean"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "value"
+        ],
+        "type": "object"
+      },
+      "GroupBlockIn": {
+        "properties": {
+          "attributes": {
+            "items": {
+              "$ref": "#/components/schemas/GroupAttribute"
+            },
+            "type": "array"
+          },
+          "records": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "records"
+        ],
+        "type": "object"
+      },
+      "GroupBlockOut": {
+        "properties": {
+          "attributes": {
+            "items": {
+              "$ref": "#/components/schemas/GroupAttribute"
+            },
+            "type": "array"
+          },
+          "from": {
+            "items": {
+              "$ref": "#/components/schemas/GroupSource"
+            },
+            "type": "array"
+          },
+          "records": {
+            "items": {
+              "$ref": "#/components/schemas/GroupRecord"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "GroupRecord": {
+        "properties": {
+          "from": {
+            "type": "integer"
+          },
+          "lineage": {
+            "type": "string"
+          },
+          "moved": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "lineage",
+          "name"
+        ],
+        "type": "object"
+      },
+      "GroupRequest": {
+        "properties": {
+          "after": {
+            "items": {
+              "$ref": "#/components/schemas/GroupBlockOut"
+            },
+            "type": "array"
+          },
+          "before": {
+            "items": {
+              "$ref": "#/components/schemas/GroupBlockIn"
+            },
+            "type": "array"
+          },
+          "grouped": {
+            "type": "integer"
+          },
+          "input": {
+            "type": "integer"
+          },
+          "kept": {
+            "type": "integer"
+          },
+          "moved": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "output": {
+            "type": "integer"
+          },
+          "unfollowed": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "grouped",
+          "input",
+          "kept",
+          "unfollowed"
+        ],
+        "type": "object"
+      },
+      "GroupSource": {
+        "properties": {
+          "block": {
+            "type": "integer"
+          },
+          "records": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "block",
+          "records"
+        ],
+        "type": "object"
+      },
+      "Grouping": {
+        "properties": {
+          "keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "pipeline": {
+            "type": "string"
+          },
+          "processor": {
+            "type": "string"
+          },
+          "requests": {
+            "items": {
+              "$ref": "#/components/schemas/GroupRequest"
+            },
+            "type": "array"
+          },
+          "signal": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pipeline",
+          "processor",
+          "signal"
+        ],
+        "type": "object"
+      },
       "Hop": {
         "properties": {
           "changes": {
@@ -4419,6 +4833,15 @@
           },
           "error": {
             "type": "string"
+          },
+          "headers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "headers_dropped": {
+            "type": "boolean"
           },
           "injected": {
             "type": "boolean"
@@ -5407,8 +5830,20 @@
           "assertions": {
             "$ref": "#/components/schemas/AssertionReport"
           },
+          "batching": {
+            "items": {
+              "$ref": "#/components/schemas/Batching"
+            },
+            "type": "array"
+          },
           "comparison": {
             "$ref": "#/components/schemas/Comparison"
+          },
+          "grouping": {
+            "items": {
+              "$ref": "#/components/schemas/Grouping"
+            },
+            "type": "array"
           },
           "limits": {
             "$ref": "#/components/schemas/ReportLimits"

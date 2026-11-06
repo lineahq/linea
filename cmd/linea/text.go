@@ -250,6 +250,19 @@ func writeText(w io.Writer, rep *platform.Report) error {
 		}
 	}
 
+	if len(rep.Batching) > 0 {
+		printf("\nbatching:\n")
+	}
+	for _, b := range rep.Batching {
+		writeBatching(printf, b)
+	}
+	if len(rep.Grouping) > 0 {
+		printf("\ngrouping:\n")
+	}
+	for _, g := range rep.Grouping {
+		writeGrouping(printf, g)
+	}
+
 	printf("\n")
 	for _, o := range r.Outputs {
 		printf("exporter %s (%s): %d batch(es), %d item(s)\n", o.Exporter, o.Signal, o.Batches, o.Counts.Items)
@@ -288,6 +301,81 @@ func writeText(w io.Writer, rep *platform.Report) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// writeBatching prints one batch processor's settings and its sends.
+func writeBatching(printf func(string, ...any), b *analysis.Batching) {
+	st := b.Settings
+	printf("  %s (pipeline %s, %s): send_batch_size %d, timeout %s, send_batch_max_size %d", b.Processor, b.Pipeline, b.Signal, st.SendBatchSize, st.Timeout, st.SendBatchMaxSize)
+	if len(st.MetadataKeys) > 0 {
+		printf(", metadata_keys %s", strings.Join(st.MetadataKeys, ", "))
+	}
+	printf("\n    %d request(s) in, %d batch(es) out, %s\n", len(b.Arrivals), len(b.Flushes), b.Verification)
+	for _, f := range b.Flushes {
+		printf("    send seq %d: %d item(s), %s", f.Seq, f.Items, f.Trigger)
+		if f.Split {
+			printf(", split")
+		}
+		if len(b.Batchers) > 0 {
+			printf(", batcher %d", f.Batcher+1)
+		}
+		printf("\n")
+	}
+	for _, n := range b.Notes {
+		printf("    note: %s\n", n)
+	}
+}
+
+// writeGrouping prints where one groupbyattrs processor put each record.
+// A * marks a resource attribute moved up from the records.
+func writeGrouping(printf func(string, ...any), g *analysis.Grouping) {
+	printf("  %s (pipeline %s, %s): keys %s\n", g.Processor, g.Pipeline, g.Signal, strings.Join(g.Keys, ", "))
+	moved := false
+	for _, r := range g.Requests {
+		if r.Output == nil {
+			printf("    input seq %d: %d resource block(s) in, nothing emitted\n", r.Input, len(r.Before))
+			continue
+		}
+		printf("    input seq %d -> seq %d: %d resource block(s) in, %d out; %d record(s) moved attributes up, %d kept their resource", r.Input, *r.Output, len(r.Before), len(r.After), r.Grouped, r.Kept)
+		if r.Unfollowed > 0 {
+			printf(", %d not followed", r.Unfollowed)
+		}
+		printf("\n")
+		for i, b := range r.After {
+			var attrs, from, records []string
+			for _, a := range b.Attributes {
+				if a.Moved {
+					moved = true
+					attrs = append(attrs, a.Key+"="+a.Value+"*")
+				} else {
+					attrs = append(attrs, a.Key+"="+a.Value)
+				}
+			}
+			for _, f := range b.From {
+				from = append(from, fmt.Sprintf("in %d", f.Block+1))
+			}
+			for _, rec := range b.Records {
+				records = append(records, rec.Name)
+			}
+			printf("      out %d {%s}", i+1, strings.Join(attrs, ", "))
+			if len(from) > 1 {
+				printf(" merged")
+			}
+			if len(from) > 0 {
+				printf(" from %s", strings.Join(from, ", "))
+			}
+			if len(records) > 0 {
+				printf(": %s", strings.Join(records, ", "))
+			}
+			printf("\n")
+		}
+	}
+	if moved {
+		printf("    * moved up from the records\n")
+	}
+	for _, n := range g.Notes {
+		printf("    note: %s\n", n)
+	}
 }
 
 // recordLabel names a removed or added record: spans by name and span ID,

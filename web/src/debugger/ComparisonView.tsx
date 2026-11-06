@@ -13,6 +13,8 @@ import {
   assertionOutcomes, COMPARE_FILTERS, compareCandidates, compareItems, comparePair, fateText, finished, outputRows, summaryCards, verdict,
 } from '../runs/compare';
 import { differingInputs } from '../runs/inputDiff';
+import { batchingChanges, batchingHeadline, type BatchCell, type BatchingChange } from '../runs/batchingCompare';
+import { itemNoun, TRIGGER_LABELS, type Trigger } from '../inspect/batching';
 import { followRows } from '../runs/followBoth';
 import { useComparedRuns } from '../runs/comparedRuns';
 import { FactChip } from './FactChip';
@@ -242,6 +244,8 @@ function Comparison({ c, runs }: { c: RunComparison; runs: Run[] }) {
         ) : <div className="od-card__body od-muted" style={{ fontSize: 12.5 }}>Neither run delivered any output.</div>}
       </section>
 
+      <BatchingComparison changes={batchingChanges(sides.runs.get(c.before.id)?.report?.batching, sides.runs.get(c.after.id)?.report?.batching)} label={label} />
+
       {open ? <Details c={c} label={label} /> : (
         <section className="od-card" style={{ opacity: 0.6 }} aria-label="Record changes">
           <div className="od-card__head"><h2 className="od-card__title" style={{ margin: 0 }}>Record changes</h2><span className="od-chip od-chip--warn"><Icon name="triangle-alert" size={12} />Not conclusive</span></div>
@@ -250,6 +254,70 @@ function Comparison({ c, runs }: { c: RunComparison; runs: Run[] }) {
       )}
       {(c.notes ?? []).map((n, k) => <p key={k} className="od-muted" style={{ fontSize: 12.5, margin: 0 }}>{n}</p>)}
     </>
+  );
+}
+
+const BATCH_TONES: Record<Trigger, string> = { size: 'keep', timeout: 'mod', shutdown: 'none', immediate: 'none' };
+
+/**
+ * BatchingComparison puts each batch processor's settings and batches in both
+ * runs side by side, from each run's own report, so a changed send_batch_size,
+ * timeout or metadata_keys shows what it did to the batches.
+ */
+function BatchingComparison({ changes, label }: { changes: BatchingChange[]; label: { before: string; after: string } }) {
+  if (!changes.length) return null;
+  return (
+    <section className="od-card" style={{ overflow: 'hidden' }} aria-label="Batching">
+      <div className="od-card__head">
+        <h2 className="od-card__title" style={{ margin: 0 }}>Batching</h2>
+        <span className="od-subtle" style={{ fontSize: 12 }}>each batch processor's settings and the batches it sent</span>
+      </div>
+      {changes.map((ch) => (
+        <div key={ch.key} className="od-card__body cmp-batching" aria-label={`Batching of ${ch.processor}${ch.pipeline ? ` in ${ch.pipeline}` : ''}`}>
+          <div className="t-body-strong">
+            <span className="mono">{ch.processor}</span>{ch.pipeline && <span className="od-subtle" style={{ fontWeight: 400 }}> · pipeline {ch.pipeline}</span>}
+          </div>
+          <div className="od-muted" style={{ fontSize: 12.5, margin: '2px 0 8px' }}>{batchingHeadline(ch)}</div>
+          <div className="cmp-batch-strips">
+            <BatchStrip name={`Baseline ${label.before}`} cells={ch.batches.before} signal={ch.signal} />
+            <BatchStrip name={`Candidate ${label.after}`} cells={ch.batches.after} signal={ch.signal} />
+          </div>
+          <table className="od-table">
+            <thead><tr><th /><th className="num">Baseline {label.before}</th><th className="num">Candidate {label.after}</th></tr></thead>
+            <tbody>
+              {[...ch.settings.map((r) => ({ ...r, setting: true })), ...ch.outcome.map((r) => ({ ...r, setting: false }))].map((r) => (
+                <tr key={r.label} className={r.changed ? 'cmp-changed' : undefined}>
+                  <td className={r.setting ? 'mono' : undefined}>{r.label}</td>
+                  <td className="num">{r.before}</td>
+                  <td className="num">{r.after}{r.changed && <span className="od-delta od-delta--same"> changed</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+/** BatchStrip draws one run's batches in order, each as wide as what it carried and toned by why it left. */
+function BatchStrip({ name, cells, signal }: { name: string; cells: BatchCell[]; signal: string }) {
+  return (
+    <div className="cmp-batch-strip">
+      <span className="od-subtle cmp-batch-strip__name">{name}</span>
+      {cells.length ? (
+        <ol className="cmp-batch-strip__cells" aria-label={`${name}: ${cells.length} batches`}>
+          {cells.map((b, i) => {
+            const text = `Batch ${i + 1}: ${itemNoun(signal, b.items)}, ${TRIGGER_LABELS[b.trigger]}${b.batcher ? `, ${b.batcher}` : ''}`;
+            return (
+              <li key={i} className={`rv-glyph-${BATCH_TONES[b.trigger]}`} style={{ flexGrow: b.items || 1 }} title={text} aria-label={text}>
+                {b.items}
+              </li>
+            );
+          })}
+        </ol>
+      ) : <span className="od-subtle" style={{ fontSize: 12 }}>no batches</span>}
+    </div>
   );
 }
 

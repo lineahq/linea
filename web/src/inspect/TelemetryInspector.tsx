@@ -18,6 +18,7 @@ import { OTTLPanel } from '../ottl/OTTLPanel';
 import { SignalExplorer } from './SignalExplorer';
 import { RawJSONDiff } from './RawJSONDiff';
 import { capOptions } from './pages';
+import { payloadGroups, payloadOption, payloadSummary } from './payloads';
 
 interface Props {
   runId: string;
@@ -298,10 +299,13 @@ function PayloadView({ runId, node, events, lineage, search, setSearch }: Props)
   const list = useMemo(() => events.filter((e) => e.kind === kind && eventNodeKey(e) === node.key), [events, kind, node.key]);
   const selected = list.find((e) => e.seq === search.input) ?? list[0];
   const snap = useSnapshot(runId, selected?.snapshot);
+  const all = useSnapshots(runId, list.map((e) => e.snapshot));
+  const groups = useMemo(() => payloadGroups(list), [list]);
   const records = useMemo(() => listRecords(snap.data), [snap.data]);
   const record = records.find((r) => r.entity === search.record);
   const value = record ? record.value : snap.data;
   const view = PAYLOAD_VIEWS.some(([k]) => k === search.view) ? search.view! : 'explore';
+  const label = kind === 'input.injected' ? 'Received telemetry' : kind === 'endpoint.received' ? 'Sent telemetry' : 'Exported telemetry';
   if (!selected) {
     return (
       <div className="placeholder">
@@ -316,46 +320,49 @@ function PayloadView({ runId, node, events, lineage, search, setSearch }: Props)
     <div className="details telemetry">
       <div className="stage-head">
         <span className="muted">{kind === 'input.injected' ? 'injected' : kind === 'endpoint.received' ? `sent to ${selected.endpoint}` : 'captured'}</span>
-        {list.length > 1 && (
+        {view !== 'explore' && list.length > 1 && (
           <select aria-label="Payload" value={selected.seq} onChange={(e) => setSearch({ input: Number(e.target.value), record: undefined })}>
-            {list.map((e) => (
-              <option key={e.seq} value={e.seq}>
-                #{e.seq}{e.endpoint ? ` · ${e.endpoint}` : ''} · {e.signal} · {e.counts?.items ?? '?'} items{e.pipeline ? ` · ${e.pipeline}` : ''}
-              </option>
-            ))}
+            {list.map((e, i) => <option key={e.seq} value={e.seq}>{payloadOption(list, i)}</option>)}
           </select>
         )}
-        <span className="muted">
-          {selected.signal} · {selected.counts?.items ?? '?'} items
-        </span>
+        {view !== 'explore' && <span className="muted">{payloadSummary(list, selected)}</span>}
         {view !== 'explore' && <RecordPicker records={records} record={search.record} onRecord={(r) => setSearch({ record: r })} />}
         {view !== 'explore' && <><FollowButton lineage={lineage} seq={selected.seq} record={search.record} setSearch={setSearch} />
         <StepButtons prev={prev} next={next} setSearch={setSearch} /></>}
       </div>
       {selected.error && <p className="error">Error: {selected.error}</p>}
       {view !== 'explore' && <TechnicalDetails views={PAYLOAD_VIEWS} view={view} set={(v) => setSearch({ view: v })} />}
-      {snap.error && <p className="error">{snap.error.message}</p>}
-      {snap.isLoading ? (
+      {view === 'explore' ? (
+        all.error ? <p className="error">{all.error.message}</p>
+        : all.isLoading || !all.data ? <p className="muted">Loading payloads…</p>
+        : groups.map((g) => (
+          <SignalExplorer
+            simple
+            key={g.signal}
+            payload={undefined}
+            requests={g.indexes.map((i) => all.data![i])}
+            recordRequest={g.indexes.indexOf(list.indexOf(selected)) + 1 || undefined}
+            label={label}
+            record={g.indexes.includes(list.indexOf(selected)) ? search.record : undefined}
+            onClearRecord={() => setSearch({ record: undefined })}
+            onFollow={(entity, request) => {
+              const e = list[g.indexes[(request ?? 1) - 1]];
+              const l = e && findLineage(lineage, e.seq, entity);
+              return l && (() => setSearch({ trace: l.id, tab: 'journey', view: undefined }));
+            }}
+          />
+        ))
+      ) : snap.error ? <p className="error">{snap.error.message}</p>
+      : snap.isLoading ? (
         <p className="muted">Loading payload…</p>
-      ) : view === 'explore' ? (
-        <SignalExplorer
-          simple
-          key={selected.seq}
-          payload={snap.data}
-          label={kind === 'input.injected' ? 'Received telemetry' : kind === 'endpoint.received' ? 'Sent telemetry' : 'Exported telemetry'}
-          record={search.record}
-          onClearRecord={() => setSearch({ record: undefined })}
-          onFollow={(entity) => {
-            const l = findLineage(lineage, selected.seq, entity);
-            return l && (() => setSearch({ trace: l.id, tab: 'journey', view: undefined }));
-          }}
-        />
       ) : view === 'tree' ? (
         <JsonTree value={value} />
       ) : (
         <pre className="code raw">{pretty(value)}</pre>
       )}
-      {view === 'explore' && <details><summary>Raw OTLP JSON</summary><pre className="code">{pretty(snap.data)}</pre></details>}
+      {view === 'explore' && all.data && all.data.map((d, i) => (
+        <details key={list[i].seq}><summary>Raw OTLP JSON{list.length > 1 ? ` · request ${i + 1}` : ''}</summary><pre className="code">{pretty(d)}</pre></details>
+      ))}
     </div>
   );
 }

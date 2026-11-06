@@ -3,6 +3,7 @@ package scenario
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +43,12 @@ func TestLoadRejectsInvalidScenarios(t *testing.T) {
 		{"file with content and file", "version: 1\nmocks: {files: [{path: /a.log, content: x, file: a.log}]}\n", "at most one of content or file"},
 		{"exporter mode", "version: 1\ninputs: [{file: a.json}]\nmocks: {exporters: {mode: forward}}\n", "only capture"},
 		{"client address", "version: 1\ninputs: [{file: a.json, client_address: checkout.shop}]\n", "not an IP address"},
+		{"header name", "version: 1\ninputs: [{file: a.json, headers: {'x tenant': a}}]\n", "not a valid header name"},
+		{"binary header", "version: 1\ninputs: [{file: a.json, headers: {trace-bin: a}}]\n", "not a valid header name"},
+		{"header twice", "version: 1\ninputs: [{file: a.json, headers: {Space: a, space: b}}]\n", "are the same header"},
+		{"header without value", "version: 1\ninputs: [{file: a.json, headers: {space: []}}]\n", "has no value"},
+		{"header map value", "version: 1\ninputs: [{file: a.json, headers: {space: {a: b}}}]\n", "string or a list of strings"},
+		{"default header", "version: 1\ninputs: [{file: a.json}]\ndefaults: {headers: {':path': a}}\n", "defaults.headers"},
 		{"bad timeout", "version: 1\ninputs: [{file: a.json}]\nexecution: {timeout: soon}\n", "invalid duration"},
 		{"negative after", "version: 1\ninputs: [{file: a.json, after: -1s}]\n", "must be positive"},
 		{"unknown timestamps", "version: 1\ninputs: [{file: a.json}]\nexecution: {timestamps: now}\n", "execution.timestamps"},
@@ -195,6 +202,39 @@ func TestParseReadsInlineInputs(t *testing.T) {
 				t.Fatalf("fixtures = %+v", fixtures)
 			}
 		})
+	}
+}
+
+// TestFixturesMergeHeaders: an input's headers replace the defaults of the
+// same name, matched case-insensitively, and names come out lowercased.
+func TestFixturesMergeHeaders(t *testing.T) {
+	const logs = `{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{"stringValue":"hi"}}]}]}]}`
+	yaml := "version: 1\ndefaults:\n  headers: {X-Tenant: acme, Space: prod}\ninputs:\n" +
+		"  - data: '" + logs + "'\n" +
+		"  - data: '" + logs + "'\n    headers: {space: [dev, qa], User-Agent: test}\n"
+	s, err := Parse([]byte(yaml), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtures, err := s.Fixtures()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []map[string][]string{
+		{"x-tenant": {"acme"}, "space": {"prod"}},
+		{"x-tenant": {"acme"}, "space": {"dev", "qa"}, "user-agent": {"test"}},
+	}
+	for i, w := range want {
+		if !reflect.DeepEqual(fixtures[i].Headers, w) {
+			t.Errorf("input %d headers = %v, want %v", i, fixtures[i].Headers, w)
+		}
+	}
+	plain, err := Parse([]byte("version: 1\ninputs:\n  - data: '"+logs+"'\n"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f, _ := plain.Fixtures(); f[0].Headers != nil {
+		t.Errorf("headers without declarations = %v, want nil", f[0].Headers)
 	}
 }
 

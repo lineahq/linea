@@ -38,6 +38,9 @@ func (r *Report) Normalize() {
 	if r.Timestamps != nil {
 		r.Timestamps.Offset = ""
 	}
+	for _, b := range r.Batching {
+		b.Normalize()
+	}
 	for _, res := range []*runresult.Result{r.Result, r.Reference} {
 		if res == nil {
 			continue
