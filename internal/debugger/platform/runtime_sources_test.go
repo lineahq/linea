@@ -58,7 +58,7 @@ func TestBuildsFollowTheSupportTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !b.Verified || b.CollectorVersion != "0.162.0" || len(b.Warnings) != 5 || b.Warnings[0] != "dist.output_path only steers OCB's own build and is ignored" ||
+	if !b.Verified || b.CollectorVersion != "0.162.0" || len(b.Warnings) != 6 || b.Warnings[0] != "dist.output_path only steers OCB's own build and is ignored" ||
 		b.Warnings[1] != "the manifest has no processor/transform, so the runtime lacks the ottl_replay feature and its reports say so" {
 		t.Fatalf("build = %+v", b)
 	}

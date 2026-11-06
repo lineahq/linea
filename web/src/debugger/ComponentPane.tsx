@@ -7,8 +7,10 @@ import { TelemetryInspector } from '../inspect/TelemetryInspector';
 import { ExtensionActivity } from '../inspect/ExtensionActivity';
 import { SamplingPanel } from '../inspect/SamplingPanel';
 import { BatchingPanel } from '../inspect/BatchingPanel';
+import { FilteringPanel } from '../inspect/FilteringPanel';
 import { GroupingPanel } from '../inspect/GroupingPanel';
 import { batchingFor } from '../inspect/batching';
+import { filteringFor } from '../inspect/filtering';
 import { groupingFor } from '../inspect/grouping';
 import { samplingFor } from '../inspect/sampling';
 import { modeInfo } from '../graph/lanes';
@@ -162,6 +164,8 @@ export function ComponentPane({ node, runId, view, inspection, search, setSearch
           <BatchingPanel batching={batchingFor(report?.batching, c.id, node.pipeline)} live={view.live} />
         ) : tab === 'grouping' ? (
           <GroupingPanel grouping={groupingFor(report?.grouping, c.id, node.pipeline)} live={view.live} search={search} setSearch={setSearch} />
+        ) : tab === 'filter' ? (
+          <FilteringPanel filtering={filteringFor(report?.filtering, c.id, node.pipeline)} live={view.live} search={search} setSearch={setSearch} />
         ) : tab === 'decisions' ? (
           <SamplingPanel sampling={samplingFor(report?.sampling, c.id, node.pipeline)} lineage={report?.lineage} live={view.live} setSearch={setSearch} />
         ) : c.kind === 'exporter' && tab === 'telemetry' && !view.live && report && !view.events.some((e) => e.kind === 'exporter.captured' && e.component === c.id) ? (

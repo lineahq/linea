@@ -35,6 +35,9 @@ const (
 	RoutingExplanation Name = "routing_explanation"
 	// SamplingExplanation explains tail_sampling decisions per policy.
 	SamplingExplanation Name = "sampling_explanation"
+	// FilterExplanation says which filter processor condition removed each
+	// item.
+	FilterExplanation Name = "filter_explanation"
 )
 
 // Feature is an optional feature and the component module that brings it.
@@ -55,6 +58,7 @@ var All = []Feature{
 	{CountAggregation, "connector/count", "github.com/open-telemetry/opentelemetry-collector-contrib/connector/countconnector", "github.com/lineahq/linea/internal/debugger/aggregation"},
 	{RoutingExplanation, "connector/routing", "github.com/open-telemetry/opentelemetry-collector-contrib/connector/routingconnector", "github.com/lineahq/linea/internal/debugger/routing"},
 	{SamplingExplanation, "processor/tail_sampling", "github.com/open-telemetry/opentelemetry-collector-contrib/processor/tailsamplingprocessor", "github.com/lineahq/linea/internal/debugger/sampling"},
+	{FilterExplanation, "processor/filter", "github.com/open-telemetry/opentelemetry-collector-contrib/processor/filterprocessor", "github.com/lineahq/linea/internal/debugger/filterreplay"},
 }
 
 // ReplayFunc replays a transform processor's statements on one stage input
@@ -99,6 +103,11 @@ type SamplingDecision struct {
 // pipeline; completed says whether the run shut down cleanly.
 type SamplingFunc func(ctx context.Context, processor, pipeline string, cfg component.Config, inputs []SamplingInput, decisions []SamplingDecision, completed bool) (*analysis.Sampling, error)
 
+// FilterFunc explains one input of a filter processor against its
+// correlated output (nil when none). stageError is the error the processor
+// returned for the input, if any.
+type FilterFunc func(ctx context.Context, processor string, cfg component.Config, inputSeq int, input telemetry.Payload, outputSeq int, output *telemetry.Payload, stageError string) (*analysis.Filtering, error)
+
 // The provided functions; nil when the runtime lacks the feature. They are
 // set only during package initialization.
 var (
@@ -107,6 +116,7 @@ var (
 	count    CountFunc
 	routing  RoutingFunc
 	sampling SamplingFunc
+	filter   FilterFunc
 )
 
 // ProvideTransform provides OTTLReplay. Call it only from an init function.
@@ -123,6 +133,10 @@ func ProvideRouting(f RoutingFunc) { routing = f }
 // function.
 func ProvideSampling(f SamplingFunc) { sampling = f }
 
+// ProvideFilter provides FilterExplanation. Call it only from an init
+// function.
+func ProvideFilter(f FilterFunc) { filter = f }
+
 // Replay is the transform statement replay, or nil.
 func Replay() ReplayFunc { return replay }
 
@@ -138,6 +152,9 @@ func Routing() RoutingFunc { return routing }
 // Sampling is the tail_sampling explanation, or nil.
 func Sampling() SamplingFunc { return sampling }
 
+// Filter is the filter processor explanation, or nil.
+func Filter() FilterFunc { return filter }
+
 // Has reports whether this process provides the feature.
 func Has(n Name) bool {
 	switch n {
@@ -149,6 +166,8 @@ func Has(n Name) bool {
 		return routing != nil
 	case SamplingExplanation:
 		return sampling != nil
+	case FilterExplanation:
+		return filter != nil
 	}
 	return false
 }

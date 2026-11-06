@@ -262,6 +262,12 @@ func writeText(w io.Writer, rep *platform.Report) error {
 	for _, g := range rep.Grouping {
 		writeGrouping(printf, g)
 	}
+	if len(rep.Filtering) > 0 {
+		printf("\nfiltering:\n")
+	}
+	for _, f := range rep.Filtering {
+		writeFiltering(printf, f)
+	}
 
 	printf("\n")
 	for _, o := range r.Outputs {
@@ -322,6 +328,62 @@ func writeBatching(printf func(string, ...any), b *analysis.Batching) {
 		printf("\n")
 	}
 	for _, n := range b.Notes {
+		printf("    note: %s\n", n)
+	}
+}
+
+// filterDropLines bounds the drops printed per filter input; the report
+// holds them all.
+const filterDropLines = 20
+
+// writeFiltering prints what one filter processor input did: each
+// condition's counts, and which condition removed each item when the
+// replay reproduces the processor's output.
+func writeFiltering(printf func(string, ...any), f *analysis.Filtering) {
+	printf("  %s (pipeline %s, %s): input seq %d", f.Processor, f.Pipeline, f.Signal, f.Input)
+	if f.Output != nil {
+		printf(" -> seq %d", *f.Output)
+	} else {
+		printf(", nothing emitted")
+	}
+	printf(": %d record(s) in, %d dropped, %s\n", f.Records, f.Dropped, f.Verification)
+	for _, c := range f.Conditions {
+		printf("    [%d] %s (%s, %s): %s\n", c.Index, c.Source, c.Context, c.ErrorMode, c.Condition)
+		if f.Verification == analysis.FilterUnsupported {
+			continue
+		}
+		printf("        evaluated %d, matched %d (%d record(s)), %d error(s)", c.Evaluated, c.Matched, c.Records, c.Errors)
+		if c.Error != "" {
+			printf(": %s", c.Error)
+		}
+		printf("\n")
+	}
+	for i, d := range f.Drops {
+		if i == filterDropLines {
+			printf("    ... %d more drop(s) in the report\n", len(f.Drops)-i)
+			break
+		}
+		printf("    %s dropped by [%d]", d.Ref, d.Condition)
+		if d.Records > 1 {
+			printf(" with %d record(s)", d.Records)
+		}
+		var names []string
+		for _, r := range d.Removed {
+			if len(names) == 3 {
+				names = append(names, fmt.Sprintf("+%d more", len(d.Removed)-3))
+				break
+			}
+			names = append(names, fmt.Sprintf("%q", r.Name))
+		}
+		if len(names) > 0 {
+			printf(": %s", strings.Join(names, ", "))
+		}
+		printf("\n")
+	}
+	if f.Error != "" {
+		printf("    error: %s\n", f.Error)
+	}
+	for _, n := range f.Notes {
 		printf("    note: %s\n", n)
 	}
 }

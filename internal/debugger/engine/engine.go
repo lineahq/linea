@@ -239,7 +239,11 @@ type Report struct {
 	// request into resources and where each record went (report schema
 	// 0.15).
 	Grouping []*analysis.Grouping `json:"grouping,omitempty"`
-	OTTL     []*ottldebug.Report  `json:"ottl"`
+	// Filtering explains every filter processor input: which condition
+	// removed each item, and what each condition was evaluated on, matched
+	// and failed on (report schema 0.15).
+	Filtering []*analysis.Filtering `json:"filtering,omitempty"`
+	OTTL      []*ottldebug.Report   `json:"ottl"`
 	// Timestamps relates the input timestamps to the run's wall clock and
 	// says whether they were rebased.
 	Timestamps *Timestamps           `json:"timestamps,omitempty"`
@@ -333,6 +337,9 @@ func Execute(ctx context.Context, req Request) (*Report, error) {
 		return nil, err
 	}
 	if rep.Grouping, err = explainGrouping(resolved, rep.Stages, rep.Lineage, rep.Result); err != nil {
+		return nil, err
+	}
+	if rep.Filtering, err = explainFiltering(ctx, resolved, rep.Stages, rep.Lineage, rep.Result); err != nil {
 		return nil, err
 	}
 	if rep.OTTL, err = replayTransforms(ctx, resolved, rep.Stages, rep.Result); err != nil {

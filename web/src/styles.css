@@ -3407,3 +3407,8 @@ tr.cmp-changed td { background: var(--diff-changed-bg); }
 .gb-attr--moved { background: var(--modified); color: var(--warn); }
 .gb-records { list-style: none; margin: 0; padding: 0; font-size: 12px; display: flex; flex-direction: column; gap: 2px; }
 @media (max-width: 720px) { .gb-flow { grid-template-columns: minmax(0, 1fr); } .gb-arrow { display: none; } }
+
+/* Filter tab (inspect/FilteringPanel.tsx): the items each condition removed. */
+.ft-drops { list-style: none; margin: 4px 0 0; padding: 0; font-size: 12px; display: flex; flex-direction: column; gap: 2px; }
+.ft-drops--nested { margin: 2px 0 0 12px; }
+.ft-run { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }

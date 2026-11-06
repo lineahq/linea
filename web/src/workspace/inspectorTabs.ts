@@ -29,6 +29,8 @@ export function componentTabs(component: Pick<TopologyComponent, 'kind' | 'type'
     if (component.type === 'batch') tabs.unshift({ id: 'batches', label: 'Batches', purpose: 'When the processor sent what it held and why: size, timer, split or shutdown, and how long records waited.' });
     // groupbyattrs opens on its regrouping: Changes cannot attribute resource changes across merged or split blocks.
     if (component.type === 'groupbyattrs') tabs.unshift({ id: 'grouping', label: 'Grouping', purpose: 'Which resource blocks came in and went out, the attributes moved from records to resources and where each record went.' });
+    // filter opens on its conditions: Changes shows the records it passed on, not which condition removed the rest.
+    if (component.type === 'filter') tabs.unshift({ id: 'filter', label: 'Filter', purpose: 'Which configured condition removed each record, and how often every condition was evaluated, matched and failed.' });
     if (component.type === 'tail_sampling') tabs.unshift({ id: 'decisions', label: 'Decisions', purpose: 'Which traces were kept or dropped, the policy that decided each one and what every policy found in the trace.' });
   }
   if (component.kind === 'extension') {

@@ -715,10 +715,11 @@ The root Go module is declared in `go.mod`.
   `go.mod`, since it needs `pkg/ottl` v0.160; `manifest.OTTLVariants` lists the
   variants and a test keeps them equal to the directories).
 - `internal/debugger/features/` — the optional analysis features: transform
-  statement replay, count aggregation, routing and tail_sampling explanations,
-  each compiled in only when the manifest has its component. Feature packages
-  (`internal/debugger/ottlreplay`, `internal/debugger/aggregation`,
-  `internal/debugger/routing`, `internal/debugger/sampling`) provide their
+  statement replay, count aggregation, routing, tail_sampling and filter
+  explanations, each compiled in only when the manifest has its component.
+  Feature packages (`internal/debugger/ottlreplay`, `internal/debugger/aggregation`,
+  `internal/debugger/routing`, `internal/debugger/sampling`,
+  `internal/debugger/filterreplay`) provide their
   function in `init`; `internal/debugger/featureset` (generated) imports those
   of the manifest and `engine/local` imports it. A runtime without a feature skips
   that analysis; its hello and reports name it in `missing_features`, and a
@@ -980,6 +981,12 @@ The root Go module is declared in `go.mod`.
   processor (the real factory) on each trace's evaluated spans, in full to
   verify the recorded decision and per policy, with the evidence each policy
   read (duration, status codes, attribute values).
+- `internal/debugger/filterreplay/` — filter processor explanation: which
+  configured condition removed each item of a recorded input, evaluated
+  with the processor's own function sets (through
+  `internal/debugger/compat/ottl`) and verified against the observed output;
+  the `filter_explanation` feature, written to `report.filtering`
+  (`filtering.md`).
 - `internal/debugger/ottldebug/` — the types of per-statement OTTL replay
   reports.
 - `internal/debugger/ottlreplay/` — per-statement OTTL replay of transform

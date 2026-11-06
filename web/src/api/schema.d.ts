@@ -2697,10 +2697,47 @@ export interface components {
             id: string;
             stage: string;
         };
+        FilterCondition: {
+            condition: string;
+            context: string;
+            error?: string;
+            error_mode: string;
+            errors: number;
+            evaluated: number;
+            index: number;
+            matched: number;
+            records: number;
+            source: string;
+        };
+        FilterDrop: {
+            condition: number;
+            records: number;
+            ref: string;
+            removed?: components["schemas"]["FilterRecord"][];
+        };
         FilterLimits: {
             max_condition_chars: number;
             max_conditions: number;
             max_regex_chars: number;
+        };
+        FilterRecord: {
+            lineage: string;
+            name: string;
+            ref: string;
+        };
+        Filtering: {
+            conditions?: components["schemas"]["FilterCondition"][];
+            dropped: number;
+            drops?: components["schemas"]["FilterDrop"][];
+            error?: string;
+            input: number;
+            notes?: string[];
+            output?: number;
+            pipeline: string;
+            processor: string;
+            records: number;
+            signal: string;
+            verification: string;
         };
         FleetAgent: {
             attributes?: {
@@ -3346,6 +3383,7 @@ export interface components {
             assertions?: components["schemas"]["AssertionReport"];
             batching?: components["schemas"]["Batching"][];
             comparison?: components["schemas"]["Comparison"];
+            filtering?: components["schemas"]["Filtering"][];
             grouping?: components["schemas"]["Grouping"][];
             limits?: components["schemas"]["ReportLimits"];
             lineage?: components["schemas"]["RecordLineage"][];

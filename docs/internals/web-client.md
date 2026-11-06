@@ -836,7 +836,11 @@ optional Statements for transform; batch opens on Batches
 groupbyattrs opens on Grouping (`GroupingPanel.tsx`, the resource blocks in
 beside the blocks out with the attributes moved up from the records and each
 record linked to its path; it reads `report.grouping`, named and summarized
-in `grouping.ts`);
+in `grouping.ts`); filter opens on Filter (`FilteringPanel.tsx`: with several requests, each
+condition's counts over the whole run; then per request each condition with
+its counts and, when the replay is verified, the records it removed, each
+opening its path; it reads `report.filtering`, summed and summarized in
+`filtering.ts`);
 tail_sampling opens on Decisions
 (`SamplingPanel.tsx`, a trace-per-row record list whose opened row is the ladder
 of policies; logic in `sampling.ts`) and a Configuration tab; extensions open on

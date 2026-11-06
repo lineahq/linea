@@ -299,7 +299,7 @@ How the debugger absorbs this:
   files without its `go.mod`, so in a build it is an ordinary package of
   the build module, compiled against the release's dependency set.
 - Explanations that replay a component with its own code (transform,
-  count, routing, tail_sampling) are optional features: they compile in only
+  count, routing, tail_sampling, filter) are optional features: they compile in only
   when the manifest has the component, through the generated
   `internal/debugger/featureset`. A runtime without one skips that analysis and says
   so (`missing_features` in its hello and reports); a build warns.

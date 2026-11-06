@@ -3518,6 +3518,77 @@
         ],
         "type": "object"
       },
+      "FilterCondition": {
+        "properties": {
+          "condition": {
+            "type": "string"
+          },
+          "context": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "error_mode": {
+            "type": "string"
+          },
+          "errors": {
+            "type": "integer"
+          },
+          "evaluated": {
+            "type": "integer"
+          },
+          "index": {
+            "type": "integer"
+          },
+          "matched": {
+            "type": "integer"
+          },
+          "records": {
+            "type": "integer"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "condition",
+          "context",
+          "error_mode",
+          "errors",
+          "evaluated",
+          "index",
+          "matched",
+          "records",
+          "source"
+        ],
+        "type": "object"
+      },
+      "FilterDrop": {
+        "properties": {
+          "condition": {
+            "type": "integer"
+          },
+          "records": {
+            "type": "integer"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "removed": {
+            "items": {
+              "$ref": "#/components/schemas/FilterRecord"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "condition",
+          "records",
+          "ref"
+        ],
+        "type": "object"
+      },
       "FilterLimits": {
         "properties": {
           "max_condition_chars": {
@@ -3534,6 +3605,84 @@
           "max_condition_chars",
           "max_conditions",
           "max_regex_chars"
+        ],
+        "type": "object"
+      },
+      "FilterRecord": {
+        "properties": {
+          "lineage": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "lineage",
+          "name",
+          "ref"
+        ],
+        "type": "object"
+      },
+      "Filtering": {
+        "properties": {
+          "conditions": {
+            "items": {
+              "$ref": "#/components/schemas/FilterCondition"
+            },
+            "type": "array"
+          },
+          "dropped": {
+            "type": "integer"
+          },
+          "drops": {
+            "items": {
+              "$ref": "#/components/schemas/FilterDrop"
+            },
+            "type": "array"
+          },
+          "error": {
+            "type": "string"
+          },
+          "input": {
+            "type": "integer"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "output": {
+            "type": "integer"
+          },
+          "pipeline": {
+            "type": "string"
+          },
+          "processor": {
+            "type": "string"
+          },
+          "records": {
+            "type": "integer"
+          },
+          "signal": {
+            "type": "string"
+          },
+          "verification": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "dropped",
+          "input",
+          "pipeline",
+          "processor",
+          "records",
+          "signal",
+          "verification"
         ],
         "type": "object"
       },
@@ -5838,6 +5987,12 @@
           },
           "comparison": {
             "$ref": "#/components/schemas/Comparison"
+          },
+          "filtering": {
+            "items": {
+              "$ref": "#/components/schemas/Filtering"
+            },
+            "type": "array"
           },
           "grouping": {
             "items": {

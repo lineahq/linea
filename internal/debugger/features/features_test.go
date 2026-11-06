@@ -37,7 +37,7 @@ func TestLackingNamesTheFeaturesAManifestDoesNotBring(t *testing.T) {
 	for _, f := range got {
 		names = append(names, f.Name)
 	}
-	if want := []Name{CountAggregation, RoutingExplanation, SamplingExplanation}; !slices.Equal(names, want) {
+	if want := []Name{CountAggregation, RoutingExplanation, SamplingExplanation, FilterExplanation}; !slices.Equal(names, want) {
 		t.Fatalf("Lacking = %v, want %v", names, want)
 	}
 	if p := Packages(); p["github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor"] != "github.com/lineahq/linea/internal/debugger/ottlreplay" {
