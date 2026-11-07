@@ -124,4 +124,12 @@ describe('finding helpers', () => {
     expect(g.map((x) => [x.op, x.path, x.entities.size])).toEqual([['changed', 'q', 2], ['added', 'p', 1]]);
     expect(g[0].after.size).toBe(2);
   });
+  it('counts the same position in two inputs as two records', () => {
+    const g = changeGroups([
+      { input: 1, entity: 'resource[0].scope[0].log_record[0]', op: 'added', path: 'p', after: 1 },
+      { input: 2, entity: 'resource[0].scope[0].log_record[0]', op: 'added', path: 'p', after: 1 },
+      { input: 2, entity: 'resource[0].scope[0].log_record[0]', op: 'added', path: 'p', after: 1 },
+    ]);
+    expect(g[0].entities.size).toBe(2);
+  });
 });
