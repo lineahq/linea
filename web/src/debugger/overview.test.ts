@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Event, Report, Run } from '../api/types';
-import { assertionRows, coverage, coverageText, durationText, environmentRows, facets, problems } from './overview';
+import { assertionRows, assertionsCard, coverage, coverageText, durationText, environmentRows, facets, notRealLine, problems } from './overview';
 
 const counts = (items: number) => ({ items, resources: 1, scopes: 1 });
 const comp = (kind: string, id: string, mode = 'real', extra = {}) => ({ kind, id, type: id, ref: `${kind}/${id}`, mode, ...extra });
@@ -90,5 +90,39 @@ describe('assertions and environment', () => {
     expect(p.warnings[0].text).toContain('hit its deadline');
     expect(p.errors).toEqual([]);
     expect(problems({ id: 'x', project_id: 'default', created: '', state: 'error', error: 'boom' }).errors[0].text).toContain('boom');
+  });
+});
+
+describe('overview cards', () => {
+  const row = (outcome: string, name = outcome) => ({ outcome, icon: 'circle-check' as const, name, target: 't', evidence: ['x: expected 1'] });
+  it('summarizes the assertions: failures listed without evidence, passes in one line', () => {
+    const failed = assertionsCard([row('pass', 'a'), row('fail', 'b')], true)!;
+    expect(failed).toMatchObject({ status: '1 of 2 failed', tone: 'fail', total: 2, failed: 1 });
+    expect(failed.failing.map((x) => x.name)).toEqual(['b']);
+    expect(assertionsCard([row('pass'), row('pass')], true)).toMatchObject({ status: 'Passed', tone: 'pass', line: 'All 2 passed', failing: [] });
+  });
+  it('lists errors first and never counts an inconclusive check as a pass', () => {
+    const c = assertionsCard([row('inconclusive', 'i'), row('error', 'e'), row('pass', 'p')], true)!;
+    expect(c.status).toBe('1 of 3 failed, 1 inconclusive');
+    expect(c.failing.map((x) => x.name)).toEqual(['e', 'i']);
+    const only = assertionsCard([row('inconclusive', 'i'), row('pass')], true)!;
+    expect(only).toMatchObject({ status: '1 of 2 inconclusive', tone: 'warn', failed: 0 });
+    expect(only.line).toBeUndefined();
+  });
+  it('says no assertions only for a completed run', () => {
+    expect(assertionsCard([], true)).toMatchObject({ status: 'None', line: 'No assertions', unchecked: true, total: 0 });
+    expect(assertionsCard([], false)).toBeUndefined();
+  });
+  it('says what did not run for real or was not recorded, and nothing otherwise', () => {
+    expect(notRealLine(undefined, [], false)).toBeUndefined();
+    expect(notRealLine(report(), coverage(report(), [ev(1, 'input.injected', 'otlp', 5)]), false)).toBeUndefined();
+    const r = report('completed', {
+      topology: { components: [comp('processor', 'k8sattributes', 'dependency_mocked'), comp('processor', 'geoip', 'stand_in'), comp('exporter', 'a', 'captured')], pipelines: [] },
+    } as unknown as Partial<Report>);
+    expect(notRealLine(r, [], false)).toEqual({ text: '1 mocked component, 1 stand-in · checks through stand-ins are inconclusive', tone: 'warn' });
+    const early = report('partial');
+    const rows = coverage(early, []);
+    expect(notRealLine(early, rows, false)!.text).toBe(`${rows.filter((x) => x.state !== 'recorded').length} components not recorded · missing output is not a drop`);
+    expect(notRealLine(early, rows, true)).toBeUndefined();
   });
 });

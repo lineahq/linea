@@ -565,10 +565,12 @@ refreshes the usage and the run lists. Admin is not in the session's permission
 list, so the form is disabled for a role without `run.delete` (which an admin
 always holds) and a 403 reads "Only an admin may prune runs." The run overview
 lists stand-in components, components with stand-in values and unavailable
-references with their remedy in an open "Stand-ins" section (`runs/standins.ts`,
-tested), never in a collapsed disclosure; the pipeline graph marks `stand_in`
-nodes. Simulated endpoints are listed in an open "Simulated endpoints" section
-too. The graph shows every configured extension in a row above the pipelines,
+references with their remedy in a "Stand-ins" section of its collapsed Run
+details (`runs/standins.ts`, tested). The Overview's warn line states that
+stand-ins or mocks took part and opens that section, so the fact is never
+hidden. The pipeline graph marks `stand_in`
+nodes. Simulated endpoints are listed in a "Simulated endpoints" section of
+Run details. The graph shows every configured extension in a row above the pipelines,
 each with its execution mode (`laneModel`'s `extensions: 'running'` option shows
 only running ones); an extension opens on "Activity" (`ExtensionActivity.tsx`:
 its endpoints, lifecycle and log entries paged by 25, its metrics) and "Data"
@@ -829,19 +831,51 @@ covered by its tests and `panes.test.ts`. The panes are the left pane (inputs,
 or the run's whole-run views), the graph and the bottom pane (the selected
 component, or the run's progress). The product UI dropped pane expand and
 restore. `inspectorTabs.ts` defines the information architecture. The whole-run
-Overview, Records (record journeys), Timeline and Recommendations (`INVESTIGATE_TABS`) live in
+Overview, Assertions, Records (record journeys), Timeline and Recommendations (`INVESTIGATE_TABS`) live in
 the Investigate pane (`debugger/InvestigatePane.tsx`). A failed run, or one
 whose execution ended partial or failed, adds a Collector log disclosure to the
 Overview (`RunLogPanel.tsx`; `keepsRunLog` and `runLogView` in `runLog.ts`,
 tested) from `GET /runs/{id}/log`. It opens when the log has lines and shows the
-server's redacted text unchanged. A done run's Overview lists the assertion
-checks recorded beside it ("Recorded checks", `RecordedChecks.tsx`,
-`debugger/evaluations.ts`, tested; `GET /runs/{id}/evaluations`), such as an
-agent's `linea_evaluate_assertions`, each opening to its results; the web's own
-checks are not recorded, and nothing shows when there are none. A finished
-run's Overview shows one line about `report.recommendations` after Key
-findings (`recommendationHint`: the count and how many concern data at risk)
-that opens the Recommendations tab; nothing shows when there are none. The
+server's redacted text unchanged.
+
+The Overview (`RunOverview.tsx`) is lean. In order it holds the outcome facets,
+the run's error callouts with the Collector log, the evidence-limit warning
+callout (never collapsed or hidden), up to three compact `od-card` summaries
+(each a header row of label and short status, and a link button to its tab),
+one warn line and a collapsed "Run details" disclosure.
+**Assertions** (`assertionsCard` in `overview.ts`, tested) shows the status
+("1 of 2 failed"), one line per assertion that did not pass (name and target,
+never the evidence; failed and errored first, then inconclusive, which is never
+counted as a pass), "All N passed" when all passed, or "No assertions" with the
+sentence that behavior was not checked; "Open assertions" selects the
+Assertions tab. **Key findings** lists each finding as an icon, its title and
+its actions as inline link buttons, with one muted footer line "Observed in run
+<name>" instead of per-finding provenance and detail text; it is omitted
+without findings and while the run is live. **Recommendations** shows the count
+and `recommendationHint` (how many concern data at risk), then one row per kind
+of recommendation (`recommendationKinds` in `recommendations.ts`, tested): its
+kind chip, the rule's title and "×N" when the rule fired more than once, data
+at risk first; "Open
+recommendations" selects the Recommendations tab; it is omitted when there are
+none and while live. The warn line (`notRealLine`, tested) appears when a
+mocked component, stand-in, unsupported component or component with no recorded
+output exists ("2 mocked components, 1 stand-in · checks through stand-ins are
+inconclusive"); it is a button that opens and scrolls to Run details. Captured
+exporters and simulated extensions are how every run works and are not counted.
+"Run details" is one collapsed `detail-disclosure` holding What was recorded,
+Mocks, stand-ins and missing references (`runs/standins.ts`, tested), Simulated
+endpoints, Inputs and outputs, Notes and the run's Sources with runtime and
+settle (`RunInputsPanel`).
+
+The Assertions tab (`debugger/AssertionsTab.tsx`; its count is on the tab and
+styled as failing when an assertion failed or errored) holds what each assertion
+checked with its outcome and evidence, the "No assertions" sentence, and the
+assertion checks recorded beside a done run ("Recorded checks",
+`RecordedChecks.tsx`, `debugger/evaluations.ts`, tested;
+`GET /runs/{id}/evaluations`), such as an agent's `linea_evaluate_assertions`,
+each opening to its results; the web's own checks are not recorded, and nothing
+shows when there are none. A live run says assertions are available when it
+finishes. The
 Recommendations tab (`debugger/RecommendationsTab.tsx`, its count on the tab;
 `debugger/recommendations.ts`, tested) lists them: per recommendation its kind, a title from its rule, the server's summary, the
 suggested change as text, what it would save, its limits and coverage, a

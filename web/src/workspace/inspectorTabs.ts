@@ -3,13 +3,14 @@ import type { TopologyComponent } from '../api/types';
 
 export interface InspectorTab { id: string; label: string; purpose: string }
 export const RUN_TABS: InspectorTab[] = [
-  { id: 'run', label: 'Overview', purpose: 'Run outcome, captured totals, checks and evidence limits across all pipelines.' },
+  { id: 'run', label: 'Overview', purpose: 'Run outcome, evidence limits and a card each for assertions, key findings and recommendations; run details are collapsed below.' },
+  { id: 'assertions', label: 'Assertions', purpose: 'What each assertion checked, its outcome and evidence, plus checks recorded later.' },
   { id: 'journey', label: 'Records', purpose: 'Where records went across the whole run. Open a record to follow its path.' },
   { id: 'events', label: 'Timeline', purpose: 'Recorded execution order across all components. Open an event to inspect its payload.' },
   { id: 'recommendations', label: 'Recommendations', purpose: 'Suggestions from this run’s evidence, each with what it rests on. Verify a processor order on this run’s input.' },
   { id: 'compare', label: 'Compare runs', purpose: 'Compare this run with another run: the outcome, each exporter’s records and the injected records that ended or changed differently.' },
 ];
-/** The four views of the Investigate left pane; Compare runs is reached from the run header. */
+/** The five views of the Investigate left pane; Compare runs is reached from the run header. */
 export const INVESTIGATE_TABS: InspectorTab[] = RUN_TABS.filter((t) => t.id !== 'compare');
 
 /** Before any run the component's views explain what the next run will do. */

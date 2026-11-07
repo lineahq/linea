@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RecommendationVerification, Report } from '../api/types';
-import { benefitChangeText, benefitText, changeText, componentNode, provenance, recommendationHint, recommendationViews, ruleTitle, verifiable, verificationView } from './recommendations';
+import { benefitChangeText, benefitText, changeText, componentNode, provenance, recommendationHint, recommendationKinds, recommendationViews, ruleTitle, verifiable, verificationView } from './recommendations';
 
 const comp = (kind: string, id: string) => ({ kind, id, type: id.split('/')[0], ref: `${kind}/${id}`, mode: 'real' });
 
@@ -159,5 +159,22 @@ describe('recommendationHint', () => {
     expect(recommendationHint(views)).toBe('2 recommendations, 1 about data at risk');
     expect(recommendationHint(views.slice(0, 1))).toBe('1 recommendation');
     expect(recommendationHint([])).toBeUndefined();
+  });
+});
+
+describe('recommendationKinds', () => {
+  it('groups by rule, data at risk first, then in report order', () => {
+    const views = recommendationViews(report([
+      { rule: 'config.unused_component', kind: 'redundancy', confidence: 'static', summary: 'Unused.' },
+      { rule: 'ottl.statement_never_matched', kind: 'redundancy', confidence: 'observed', summary: 'A.' },
+      { rule: 'sampling.late_spans', kind: 'risk', confidence: 'observed', summary: 'Late.' },
+      { rule: 'ottl.statement_never_matched', kind: 'redundancy', confidence: 'observed', summary: 'B.' },
+    ]), 'abc');
+    expect(recommendationKinds(views).map((k) => [k.title, k.kind.label, k.count])).toEqual([
+      ['Late spans skipped evaluation', 'Risk', 1],
+      ['Unused component', 'Redundant', 1],
+      ['Statement never matched', 'Redundant', 2],
+    ]);
+    expect(recommendationKinds([])).toEqual([]);
   });
 });

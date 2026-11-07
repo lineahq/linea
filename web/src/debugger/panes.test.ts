@@ -60,18 +60,61 @@ function investigate(search: WorkspaceSearch, setSearch = vi.fn(), v = view) {
 }
 
 describe('Investigate left pane', () => {
-  it('opens on the overview: three separate facts, findings with provenance, assertions and open sections', async () => {
+  it('opens on a lean overview: three facts, three cards, one not-for-real line and collapsed run details', async () => {
     await investigate({ run: run.id });
     expect([...host.querySelectorAll('.od-facet__name')].map((n) => n.textContent)).toEqual(['Execution', 'Evidence', 'Assertions']);
     expect(host.textContent).toContain('1 of 1 failed');
+    const cards = [...host.querySelectorAll('section.od-card')].map((c) => c.getAttribute('aria-label'));
+    expect(cards).toEqual(['Assertions summary', 'Key findings']);
+    const assertions = host.querySelector('section[aria-label="Assertions summary"]')!;
+    expect(assertions.textContent).toContain('pager gets 2');
+    expect(assertions.textContent).not.toContain('expected 2, observed 0');
     expect(host.textContent).toContain('otlp/pager received 0 records');
-    expect(host.textContent).toContain('2 records were dropped at filter/pager.');
     expect(host.textContent).toContain('Observed in run #01234567');
-    expect(host.textContent).toContain('count: expected 2, observed 0');
-    expect(host.querySelector('section[aria-label="Stand-ins"]')).not.toBeNull();
-    expect(host.textContent).toContain('Mocks, stand-ins and missing references');
-    expect(host.textContent).toContain("Open the run's configuration and scenario");
     expect(host.textContent).not.toContain('Likely cause');
+    expect(host.querySelectorAll('.od-prov')).toHaveLength(0);
+    const details = host.querySelector<HTMLDetailsElement>('details.detail-disclosure')!;
+    expect(details.open).toBe(false);
+    expect(details.querySelector('section[aria-label="Stand-ins"]')).not.toBeNull();
+    expect(details.textContent).toContain('Mocks, stand-ins and missing references');
+    expect(details.textContent).toContain("Open the run's configuration and scenario");
+    expect(host.querySelector('button[aria-label*="Show run details"]')).toBeNull();
+  });
+
+  it('keeps what did not run for real visible and opens the run details from it', async () => {
+    const standIn = { ...report, topology: { ...report.topology, components: [...report.topology!.components!, comp('processor', 'acme', 'stand_in')] } } as Report;
+    await investigate({ run: run.id }, vi.fn(), { ...view, run: { ...run, report: standIn } });
+    const line = host.querySelector<HTMLButtonElement>('button[aria-label*="Show run details"]')!;
+    expect(line.textContent).toContain('1 stand-in · checks through stand-ins are inconclusive');
+    await act(() => line.click());
+    expect(host.querySelector<HTMLDetailsElement>('details.detail-disclosure')!.open).toBe(true);
+  });
+
+  it('opens the assertions and recommendations tabs from their cards', async () => {
+    const setSearch = vi.fn();
+    const recs = { ...report, recommendations: [{ rule: 'config.unused_component', kind: 'redundancy', confidence: 'static', components: ['processor/filter/pager'], summary: 'filter/pager is configured but no pipeline uses it.' }] } as unknown as Report;
+    await investigate({ run: run.id }, setSearch, { ...view, run: { ...run, report: recs } });
+    await click('Open assertions');
+    expect(setSearch).toHaveBeenLastCalledWith({ tab: 'assertions', view: undefined });
+    expect(host.querySelector('section[aria-label="Recommendations summary"]')!.textContent).toContain('1 recommendation');
+    await click('Open recommendations');
+    expect(setSearch).toHaveBeenLastCalledWith({ tab: 'recommendations', view: undefined });
+  });
+
+  it('lists each assertion with its evidence in the Assertions tab, with the failing count on the tab', async () => {
+    await investigate({ run: run.id, tab: 'assertions' });
+    expect(host.querySelector('[role="tab"][aria-selected="true"]')!.textContent).toContain('Assertions');
+    expect(host.querySelector('.od-tab__count--fail')!.textContent).toBe('1');
+    expect(host.querySelector('section[aria-label="Assertions"]')!.textContent).toContain('pager gets 2');
+    expect(host.textContent).toContain('count: expected 2, observed 0');
+    expect(host.querySelector('section.od-card')).toBeNull();
+  });
+
+  it('says a run without assertions checked no behavior, and an unfinished run has none yet', async () => {
+    await investigate({ run: run.id, tab: 'assertions' }, vi.fn(), { ...view, run: { ...run, report: { ...report, assertions: undefined } as Report } });
+    expect(host.textContent).toContain('No assertions: behavior was not checked against expectations.');
+    await investigate({ run: run.id, tab: 'assertions' }, vi.fn(), { run: { ...run, state: 'running', report: undefined }, events: [], live: true });
+    expect(host.textContent).toContain('Assertions are available when the run finishes.');
   });
 
   it('opens the stage a finding names and follows its dropped record', async () => {
@@ -87,7 +130,7 @@ describe('Investigate left pane', () => {
     const setSearch = vi.fn();
     await investigate({ run: run.id, tab: 'journey' }, setSearch);
     expect(host.querySelector('[role="tab"][aria-selected="true"]')!.textContent).toContain('Records');
-    expect(host.querySelector('.od-tab__count')!.textContent).toBe('2');
+    expect(host.querySelector('#investigate-tab-journey .od-tab__count')!.textContent).toBe('2');
     expect(host.textContent).toContain('dropped at filter/pager');
     expect(host.textContent).toContain('delivered to otlp/archive');
     await click('Dropped 1');

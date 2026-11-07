@@ -235,3 +235,26 @@ export function recommendationHint(views: RecommendationView[]): string | undefi
   const count = `${views.length} ${views.length === 1 ? 'recommendation' : 'recommendations'}`;
   return risky ? `${count}, ${risky} about data at risk` : count;
 }
+
+/** RecommendationKind is one rule's line in the Overview card: its title, kind and how often the run reports it. */
+export interface RecommendationKind {
+  rule: string;
+  title: string;
+  kind: RecommendationView['kind'];
+  count: number;
+}
+
+/**
+ * recommendationKinds groups a run's recommendations by rule for the
+ * Overview card: data at risk first, then in report order.
+ */
+export function recommendationKinds(views: RecommendationView[]): RecommendationKind[] {
+  const byRule = new Map<string, RecommendationKind>();
+  for (const v of views) {
+    const k = byRule.get(v.rule);
+    if (k) k.count++;
+    else byRule.set(v.rule, { rule: v.rule, title: v.title, kind: v.kind, count: 1 });
+  }
+  const all = [...byRule.values()];
+  return [...all.filter((k) => k.kind.tone === 'warn'), ...all.filter((k) => k.kind.tone !== 'warn')];
+}

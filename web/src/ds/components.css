@@ -70,7 +70,7 @@
 .od-radio-card input { margin: 3px 0 0; accent-color: var(--accent); }
 
 /* ---------- Tabs and segmented controls ---------- */
-.od-tabs { display: flex; align-items: stretch; gap: 2px; border-bottom: 1px solid var(--border-subtle); padding: 0 8px; min-height: 36px; }
+.od-tabs { display: flex; align-items: stretch; gap: 2px; border-bottom: 1px solid var(--border-subtle); padding: 0 8px; min-height: 36px; overflow-x: auto; scrollbar-width: thin; }
 .od-tab { position: relative; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 0; background: transparent; color: var(--fg-muted); font: 500 13px/1 var(--font-sans); cursor: pointer; white-space: nowrap; }
 .od-tab:hover { color: var(--fg); }
 .od-tab[aria-selected="true"] { color: var(--fg); }

@@ -197,3 +197,71 @@ export function problems(run: Run): Problems {
     notes: all.filter((l) => l.level === 'info'),
   };
 }
+
+const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+export interface AssertionsCard {
+  /** The short status in the card header: "1 of 2 failed", "Passed" or "None". */
+  status: string;
+  tone: Fact['tone'];
+  /** The checks that did not pass, failed or errored first; never their evidence. */
+  failing: AssertionRow[];
+  /** The one line shown when nothing failed: "All 2 passed" or "No assertions". */
+  line?: string;
+  /** Whether the muted "behavior was not checked" sentence follows "No assertions". */
+  unchecked: boolean;
+  /** Number of assertions, for the tab's count. */
+  total: number;
+  /** Failed or errored assertions, for the tab's tone. */
+  failed: number;
+}
+
+/**
+ * assertionsCard summarizes a run's assertions for the Overview: how many
+ * failed and which, without their evidence. A check that is inconclusive is
+ * listed with the failures and never counted as a pass. A run that did not
+ * complete and declared none has no card.
+ */
+export function assertionsCard(rows: AssertionRow[], completed: boolean): AssertionsCard | undefined {
+  const n = rows.length;
+  const failed = rows.filter((r) => r.outcome === 'fail' || r.outcome === 'error').length;
+  const inconclusive = rows.filter((r) => r.outcome === 'inconclusive').length;
+  if (!n) return completed ? { status: 'None', tone: 'neutral', failing: [], line: 'No assertions', unchecked: true, total: 0, failed: 0 } : undefined;
+  const order = (r: AssertionRow) => (r.outcome === 'fail' || r.outcome === 'error' ? 0 : 1);
+  const failing = rows.filter((r) => r.outcome !== 'pass').sort((a, b) => order(a) - order(b));
+  if (failed) {
+    const extra = inconclusive ? `, ${inconclusive} inconclusive` : '';
+    return { status: `${failed} of ${n} failed${extra}`, tone: 'fail', failing, unchecked: false, total: n, failed };
+  }
+  if (inconclusive) return { status: `${inconclusive} of ${n} inconclusive`, tone: 'warn', failing, unchecked: false, total: n, failed };
+  return { status: 'Passed', tone: 'pass', failing: [], line: `All ${n} passed`, unchecked: false, total: n, failed };
+}
+
+export interface NotRealLine {
+  text: string;
+  tone: 'warn';
+}
+
+/**
+ * notRealLine is the one line that keeps "what did not run for real or was
+ * not recorded" visible while the details are collapsed: mocked dependencies,
+ * stand-ins, unsupported components and components with no recorded output.
+ * Captured exporters and simulated extensions are how every run works and
+ * are not counted; the details list them. Nothing to say gives no line.
+ */
+export function notRealLine(rep: Report | undefined, rows: readonly CoverageRow[], live: boolean): NotRealLine | undefined {
+  if (!rep) return undefined;
+  const env = environmentRows(rep);
+  const of = (mode: EnvironmentRow['mode']) => env.filter((x) => x.mode === mode).length;
+  const unrecorded = live ? 0 : rows.filter((x) => x.state !== 'recorded').length;
+  const parts: string[] = [];
+  if (of('mocked')) parts.push(count(of('mocked'), 'mocked component', 'mocked components'));
+  if (of('standin')) parts.push(count(of('standin'), 'stand-in', 'stand-ins'));
+  if (of('unsupported')) parts.push(count(of('unsupported'), 'unsupported component', 'unsupported components'));
+  if (unrecorded) parts.push(`${count(unrecorded, 'component', 'components')} not recorded`);
+  if (!parts.length) return undefined;
+  const tail: string[] = [];
+  if (hasStandIns(rep)) tail.push('checks through stand-ins are inconclusive');
+  if (unrecorded) tail.push('missing output is not a drop');
+  return { text: [parts.join(', '), ...tail].join(' · '), tone: 'warn' };
+}
