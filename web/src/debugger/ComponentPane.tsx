@@ -181,6 +181,7 @@ export function ComponentPane({ node, runId, view, inspection, search, setSearch
             lineage={report?.lineage}
             aggregations={report?.aggregations}
             routing={report?.routing}
+            filtering={report?.filtering}
             live={view.live}
             search={{
               ...search,

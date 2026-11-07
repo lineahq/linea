@@ -788,10 +788,15 @@ empty strings and match confidence (only medium-confidence matches are called
 out). Matching totals include explicitly added/removed records; only the
 remainder is uncertain. Never invent counterparts for unmatched or buffered
 records, and never claim which statement dropped a record: the replay counts
-statements per input, not per record. A transform adds a "By" column and a
+statements per input, not per record. A filter processor whose replay is
+verified (`replay_verified`) is the exception: a dropped row names the
+condition that removed it (`removedBy` in `filtering.ts`), otherwise it says
+"Removed by this processor". A transform adds a "By" column and a
 statements key from the OTTL replay; editing stays in the Statements tab
 (`OTTLPanel`, whose edits are server candidates; `candidates.ts` words their
-failures), which the Changes view links to. A buffered (deferred) processor
+failures), which the Changes view links to. A statement's details name each
+record from the stage input (body, span or metric name, `recordNames`) over its
+1-based position, never by its raw ref alone, and open it on Changes. A buffered (deferred) processor
 input, as with batch or tail_sampling, shows the stage's reconciliation instead:
 all buffered inputs against all later emissions, concatenated in event order by
 `deferred.ts` (tested), whose refs map back to their own events for following
@@ -865,8 +870,8 @@ beside the blocks out with the attributes moved up from the records and each
 record linked to its path; it reads `report.grouping`, named and summarized
 in `grouping.ts`); filter opens on Filter (`FilteringPanel.tsx`: with several requests, each
 condition's counts over the whole run; then per request each condition with
-its counts and, when the replay is verified, the records it removed, each
-opening its path; it reads `report.filtering`, summed and summarized in
+its counts and whether it removed nothing, without listing records, which
+Changes shows; it reads `report.filtering`, summed and summarized in
 `filtering.ts`);
 tail_sampling opens on Decisions
 (`SamplingPanel.tsx`, a trace-per-row record list whose opened row is the ladder

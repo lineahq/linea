@@ -80,6 +80,15 @@ describe('record changes', () => {
     expect(rows()[0].querySelector('.rv-pill-drop')).not.toBeNull();
   });
 
+  it('says which condition removed a dropped record, or that the processor did', () => {
+    const removed = { removed: [{ ref: entity(1), name: 'Health check' }] };
+    const row = () => rows().find((r) => r.textContent!.includes('Health check'))!;
+    render({ diff: diff({ changes: [], ...removed }), removedBy: (e) => e === entity(1) ? 'Removed by condition 0: IsMatch(body, "^Health")' : undefined });
+    expect(row().textContent).toContain('Removed by condition 0: IsMatch(body, "^Health")');
+    render({ diff: diff({ changes: [], ...removed }), removedBy: () => undefined });
+    expect(row().textContent).toContain('Removed by this processor');
+  });
+
   it('shows a dropped record from the input and a created one from the output', () => {
     const output = { resourceLogs: [{ scopeLogs: [{ logRecords: [log('Created log')] }] }] };
     render({ diff: diff({ changes: [], removed: [{ ref: entity(0), name: 'Login' }], added: [{ ref: entity(0), name: 'Created log' }] }), after: output });

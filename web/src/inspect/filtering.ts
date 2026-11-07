@@ -23,11 +23,27 @@ export function refLabel(ref: string): string {
   }).join(' › ');
 }
 
-/** dropsBy groups the drops by the index of the condition that made them. */
-export function dropsBy(f: Filtering): Map<number, FilterDrop[]> {
-  const out = new Map<number, FilterDrop[]>();
-  for (const d of f.drops ?? []) out.set(d.condition, [...(out.get(d.condition) ?? []), d]);
-  return out;
+/** inRef tells whether a drop's ref covers the record entity, or lies inside it (a data point of a metric, an event of a span). */
+const inRef = (ref: string, entity: string) => ref === entity || entity.startsWith(`${ref}.`) || ref.startsWith(`${entity}.`);
+
+/**
+ * removedBy lists the conditions that removed a record of the input: the
+ * drops at the record, at its resource or scope, or inside it. It names
+ * nothing unless the replay reproduces the processor's output.
+ */
+export function removedBy(f: Filtering | undefined, entity: string): FilterCondition[] {
+  if (!f || f.verification !== 'replay_verified') return [];
+  const hit = (d: FilterDrop) => inRef(d.ref, entity) || (d.removed ?? []).some((r) => inRef(r.ref, entity));
+  const indexes = new Set((f.drops ?? []).filter(hit).map((d) => d.condition));
+  return (f.conditions ?? []).filter((c) => indexes.has(c.index));
+}
+
+/** removedByText is a dropped record's one sentence on Changes: the condition with its text, or the conditions' numbers. */
+export function removedByText(conditions: FilterCondition[]): string | undefined {
+  if (!conditions.length) return undefined;
+  if (conditions.length === 1) return `Removed by condition ${conditions[0].index}: ${conditions[0].condition}`;
+  const n = conditions.map((c) => c.index);
+  return `Removed by conditions ${n.slice(0, -1).join(', ')} and ${n[n.length - 1]}`;
 }
 
 /** unused lists the conditions that were evaluated and never matched: they removed nothing in this request. */
@@ -36,17 +52,22 @@ export function unused(f: Filtering): FilterCondition[] {
   return (f.conditions ?? []).filter((c) => c.evaluated > 0 && c.matched === 0 && c.errors === 0);
 }
 
-/** filterSummary is the one sentence above a request's view. */
+/**
+ * filterSummary is the sentence above a request's conditions: whether their
+ * counts can be trusted. The records in, dropped and passed on are the
+ * Changes tab's, so it does not repeat them.
+ */
 export function filterSummary(f: Filtering): string {
-  const kept = f.records - f.dropped;
-  const parts = [`${itemNoun(f.signal, f.records)} in, ${f.dropped} dropped, ${kept} passed on.`];
+  const parts: string[] = [];
   if (f.error) parts.push('A condition failed under error_mode propagate, so the processor returned an error and the whole request was lost.');
   switch (f.verification) {
     case 'replay_verified':
-      parts.push(f.drops?.length ? 'Evaluating the conditions on the recorded input reproduces the output, so each drop is named with its condition.' : 'Evaluating the conditions on the recorded input reproduces the output.');
+      parts.push(f.drops?.length
+        ? 'Evaluating the conditions on the recorded input reproduces the output: the counts below are exact, and Changes names the condition that removed each record.'
+        : 'Evaluating the conditions on the recorded input reproduces the output: the counts below are exact.');
       break;
     case 'replay_differs':
-      parts.push('Evaluating the conditions did not reproduce what the processor emitted, so no drop is attributed to a condition.');
+      parts.push('Evaluating the conditions did not reproduce what the processor emitted, so no count or drop is attributed to a condition.');
       break;
     default:
       parts.push('This processor filters with settings the debugger does not evaluate, so no drop is attributed to a condition.');

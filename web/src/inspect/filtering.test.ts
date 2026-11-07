@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Filtering } from '../api/types';
-import { dropsBy, filterSummary, filteringFor, refLabel, runTotals, totalsSummary, unused } from './filtering';
+import { filterSummary, filteringFor, refLabel, removedBy, removedByText, runTotals, totalsSummary, unused } from './filtering';
 
 const verified: Filtering = {
   processor: 'filter/health', pipeline: 'logs', signal: 'logs', input: 7, output: 8, verification: 'replay_verified', records: 4, dropped: 3,
@@ -25,18 +25,49 @@ describe('filtering', () => {
     expect(refLabel('resource[0].scope[0].metric[1].data_point[0]')).toBe('resource 1 › scope 1 › metric 2 › data point 1');
   });
 
-  it('groups drops by condition and finds conditions that removed nothing', () => {
-    const by = dropsBy(verified);
-    expect(by.get(0)?.map((d) => d.ref)).toEqual(['resource[1]']);
-    expect(by.get(2)).toBeUndefined();
+  it('finds conditions that removed nothing, only when the replay is verified', () => {
     expect(unused(verified).map((c) => c.index)).toEqual([2]);
     expect(unused({ ...verified, verification: 'replay_differs' })).toEqual([]);
   });
 
-  it('summarizes each verification', () => {
-    expect(filterSummary(verified)).toBe('4 log records in, 3 dropped, 1 passed on. Evaluating the conditions on the recorded input reproduces the output, so each drop is named with its condition.');
-    expect(filterSummary({ ...verified, verification: 'replay_differs', drops: undefined })).toBe('4 log records in, 3 dropped, 1 passed on. Evaluating the conditions did not reproduce what the processor emitted, so no drop is attributed to a condition.');
-    expect(filterSummary({ ...verified, verification: 'unsupported', output: undefined, dropped: 4, error: 'boom' })).toBe('4 log records in, 4 dropped, 0 passed on. A condition failed under error_mode propagate, so the processor returned an error and the whole request was lost. This processor filters with settings the debugger does not evaluate, so no drop is attributed to a condition.');
+  it('names the conditions that removed a record', () => {
+    const at = (entity: string, f: Filtering = verified) => removedBy(f, entity).map((c) => c.index);
+    expect(at('resource[0].scope[0].log_record[1]')).toEqual([1]);
+    expect(at('resource[0].scope[0].log_record[0]')).toEqual([]);
+    expect(at('resource[1].scope[0].log_record[0]')).toEqual([0]);
+    expect(at('resource[1]')).toEqual([0]);
+    expect(removedBy(undefined, 'resource[1]')).toEqual([]);
+  });
+
+  it('matches a data point drop to its metric, and refs in removed', () => {
+    const metrics: Filtering = { ...verified, signal: 'metrics', drops: [
+      { ref: 'resource[0].scope[0].metric[2].data_point[1]', condition: 2, records: 1 },
+      { ref: 'resource[0].scope[0].metric[3]', condition: 1, records: 1, removed: [{ ref: 'resource[0].scope[0].metric[4]', name: 'm4', lineage: 'l4' }] },
+    ] };
+    expect(removedBy(metrics, 'resource[0].scope[0].metric[2]').map((c) => c.index)).toEqual([2]);
+    expect(removedBy(metrics, 'resource[0].scope[0].metric[4]').map((c) => c.index)).toEqual([1]);
+    expect(removedBy(metrics, 'resource[0].scope[0].metric[5]')).toEqual([]);
+  });
+
+  it('names nothing unless the replay reproduces the output', () => {
+    for (const verification of ['replay_differs', 'unsupported'] as const) {
+      expect(removedBy({ ...verified, verification }, 'resource[1]')).toEqual([]);
+    }
+  });
+
+  it('words which conditions removed a record', () => {
+    const cs = verified.conditions!;
+    expect(removedByText([cs[1]])).toBe('Removed by condition 1: IsMatch(body, "^health")');
+    expect(removedByText([cs[0], cs[2]])).toBe('Removed by conditions 0 and 2');
+    expect(removedByText(cs)).toBe('Removed by conditions 0, 1 and 2');
+    expect(removedByText([])).toBeUndefined();
+  });
+
+  it('summarizes each verification without repeating the counts', () => {
+    expect(filterSummary(verified)).toBe('Evaluating the conditions on the recorded input reproduces the output: the counts below are exact, and Changes names the condition that removed each record.');
+    expect(filterSummary({ ...verified, drops: undefined })).toBe('Evaluating the conditions on the recorded input reproduces the output: the counts below are exact.');
+    expect(filterSummary({ ...verified, verification: 'replay_differs', drops: undefined })).toBe('Evaluating the conditions did not reproduce what the processor emitted, so no count or drop is attributed to a condition.');
+    expect(filterSummary({ ...verified, verification: 'unsupported', output: undefined, dropped: 4, error: 'boom' })).toBe('A condition failed under error_mode propagate, so the processor returned an error and the whole request was lost. This processor filters with settings the debugger does not evaluate, so no drop is attributed to a condition.');
   });
 
   it('sums the run per condition, counting only verified requests', () => {

@@ -1,12 +1,13 @@
-import { Fragment, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { api } from '../api/client';
 import type { OTTLEvaluation, OTTLGroup, OTTLReport, OTTLStatement } from '../api/types';
 import { getWorkspace, updateWorkspace, useWorkspace } from '../workspace/store';
 import { useStartRun } from '../runs/useStartRun';
 import { ChangesTable } from '../inspect/ChangesTable';
+import { refLabel } from '../inspect/filtering';
 import { SideBySide } from '../inspect/DiffViews';
-import { pretty } from '../inspect/records';
+import { pretty, recordNames } from '../inspect/records';
 import { runBlocker } from '../input/quickInput';
 import { editProblem } from './candidates';
 import { statementTestOutcome, statementTestRequest } from './statementTest';
@@ -55,6 +56,12 @@ export function OTTLPanel({ report, input, observed, onRecord, onRerun, runId, o
       </p>
     );
   }
+  return <Explained report={report} input={input} observed={observed} onRecord={onRecord} onRerun={onRerun} runId={runId} onCompare={onCompare} />;
+}
+
+/** Explained is the panel for an input the replay covered; its records are named from the input. */
+function Explained({ report, ...rest }: Props & { report: OTTLReport }) {
+  const names = useMemo(() => recordNames(rest.input), [rest.input]);
   const v = VERIFICATION[report.verification] ?? { cls: 'idle', text: report.verification };
   return (
     <div className="ottl">
@@ -75,13 +82,15 @@ export function OTTLPanel({ report, input, observed, onRecord, onRerun, runId, o
         </p>
       )}
       {(report.groups ?? []).map((g) => (
-        <GroupView key={g.index} report={report} group={g} input={input} observed={observed} onRecord={onRecord} onRerun={onRerun} runId={runId} onCompare={onCompare} />
+        <GroupView key={g.index} report={report} group={g} names={names} {...rest} />
       ))}
     </div>
   );
 }
 
-function GroupView({ report, group, ...rest }: { report: OTTLReport; group: OTTLGroup } & Omit<Props, 'report'>) {
+type Named = { names: ReadonlyMap<string, string> };
+
+function GroupView({ report, group, ...rest }: { report: OTTLReport; group: OTTLGroup } & Named & Omit<Props, 'report'>) {
   return (
     <section className="ottl-group">
       <h4>
@@ -123,13 +132,14 @@ function StatementRow({
   report,
   group,
   statement: s,
+  names,
   input,
   observed,
   onRecord,
   onRerun,
   runId,
   onCompare,
-}: { report: OTTLReport; group: OTTLGroup; statement: OTTLStatement } & Omit<Props, 'report'>) {
+}: { report: OTTLReport; group: OTTLGroup; statement: OTTLStatement } & Named & Omit<Props, 'report'>) {
   const ws = useWorkspace();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<string | undefined>();
@@ -207,10 +217,10 @@ function StatementRow({
           <td colSpan={7}>
             {errors.map((e, i) => (
               <div key={i} className="error">
-                {e.phase} error on <code>{e.entity}</code>: {e.message}
+                {e.phase} error on <code title={e.entity}>{names.get(e.entity) ?? refLabel(e.entity)}</code>: {e.message}
               </div>
             ))}
-            {changes.length > 0 && <ChangesTable changes={changes} onRecord={onRecord} />}
+            {changes.length > 0 && <ChangesTable changes={changes} names={names} onRecord={onRecord} />}
           </td>
         </tr>
       )}
@@ -289,7 +299,7 @@ function StatementRow({
                   </div>
                 </div>
               )}
-              {tryIt.data && <TryResult ev={tryIt.data} group={group.index} statement={s.index} observed={observed} onRecord={onRecord} />}
+              {tryIt.data && <TryResult ev={tryIt.data} group={group.index} statement={s.index} observed={observed} names={names} onRecord={onRecord} />}
             </div>
           </td>
         </tr>
@@ -303,12 +313,14 @@ function TryResult({
   group,
   statement,
   observed,
+  names,
   onRecord,
 }: {
   ev: OTTLEvaluation;
   group: number;
   statement: number;
   observed: unknown;
+  names: ReadonlyMap<string, string>;
   onRecord(e: string | undefined): void;
 }) {
   const [compare, setCompare] = useState(false);
@@ -338,7 +350,7 @@ function TryResult({
       )}
       {(st?.errors ?? []).map((e, i) => (
         <div key={i} className="error">
-          {e.phase} error on <code>{e.entity}</code>: {e.message}
+          {e.phase} error on <code title={e.entity}>{names.get(e.entity) ?? refLabel(e.entity)}</code>: {e.message}
         </div>
       ))}
       {ev.replay?.error && <p className="error">Processing stopped: {ev.replay.error}</p>}
@@ -359,7 +371,7 @@ function TryResult({
           {compare ? (
             <SideBySide before={pretty(observed)} after={pretty(ev.output)} />
           ) : (
-            <ChangesTable changes={ev.diff?.changes ?? []} onRecord={onRecord} />
+            <ChangesTable changes={ev.diff?.changes ?? []} names={names} onRecord={onRecord} />
           )}
         </>
       )}

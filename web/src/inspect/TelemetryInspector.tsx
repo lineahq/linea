@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import type { Aggregation, Event, OTTLReport, RecordLineage, Routing, Stage, StageInput } from '../api/types';
+import type { Aggregation, Event, Filtering, OTTLReport, RecordLineage, Routing, Stage, StageInput } from '../api/types';
 import type { WorkspaceSearch } from '../router';
 import type { LayoutNode } from '../graph/layout';
 import { eventNodeKey, stageNodeKey } from '../runs/annotations';
@@ -12,6 +12,7 @@ import { VERIFICATION } from './aggregation';
 import { AggregationList } from './AggregationList';
 import { RoutingList } from './RoutingList';
 import { explained } from './routing';
+import { removedBy, removedByText } from './filtering';
 import { RecordChanges } from './RecordChanges';
 import { JsonTree } from './JsonTree';
 import { OTTLPanel } from '../ottl/OTTLPanel';
@@ -33,6 +34,8 @@ interface Props {
   aggregations?: Aggregation[];
   /** Which rule of a routing connector sent each record where. */
   routing?: Routing[];
+  /** Which condition of a filter processor removed each record. */
+  filtering?: Filtering[];
   live: boolean;
   search: WorkspaceSearch;
   setSearch(patch: Partial<WorkspaceSearch>): void;
@@ -165,7 +168,7 @@ function RecordPicker({
   );
 }
 
-function StageView({ runId, node, events, stages, ottl, lineage, live, search, setSearch }: Props) {
+function StageView({ runId, node, events, stages, ottl, filtering, lineage, live, search, setSearch }: Props) {
   const stage = stages?.find((s) => stageNodeKey(s) === node.key);
   const bySeq = useMemo(() => new Map(events.map((e) => [e.seq, e])), [events]);
   const liveInputs = useMemo(
@@ -204,6 +207,7 @@ function StageView({ runId, node, events, stages, ottl, lineage, live, search, s
           events={events}
           bySeq={bySeq}
           ottl={ottl?.find((r) => r.processor === stage.component && r.input === selected.seq)}
+          filtering={filtering?.find((f) => f.processor === stage.component && f.pipeline === node.pipeline && f.input === selected.seq)}
           lineage={lineage}
           search={search}
           setSearch={setSearch}
@@ -260,10 +264,10 @@ function DeferredView({ runId, stage, window, bySeq, lineage, search, setSearch 
 }
 
 function StageInputView({
-  runId, input, bySeq, ottl, lineage, search, setSearch,
+  runId, input, bySeq, ottl, filtering, lineage, search, setSearch,
 }: {
   runId: string; input: StageInput; stage: Stage; events: Event[];
-  bySeq: Map<number, Event>; ottl?: OTTLReport; lineage?: RecordLineage[];
+  bySeq: Map<number, Event>; ottl?: OTTLReport; filtering?: Filtering; lineage?: RecordLineage[];
   search: WorkspaceSearch; setSearch: Props['setSearch'];
 }) {
   const before = useSnapshot(runId, bySeq.get(input.seq)?.snapshot);
@@ -278,13 +282,14 @@ function StageInputView({
     </select></label>}
     {error ? <p className="error">{error.message}</p> : before.isLoading || after.isLoading ? <p className="muted">Loading recorded data…</p> :
       search.view === 'ottl' ? <><OTTLPanel report={ottl} input={before.data} observed={after.data}
-        onRecord={(record) => setSearch({ record })}
+        onRecord={(record) => setSearch({ record, tab: 'changes', view: undefined })}
         onRerun={(run) => setSearch({ run, input: undefined, record: undefined })}
         runId={runId} onCompare={(compare) => setSearch({ compare })} />
         <RawJSONDiff before={before.data} after={after.data} afterMissingReason={input.outcome === 'emitted' ? undefined : OUTCOME_NOTES[input.outcome]} /></> :
       <RecordChanges diff={output === input.outputs?.[0] ? input.diff : undefined} before={before.data} after={after.data}
         record={search.record} onClearRecord={() => setSearch({ record: undefined })}
         afterMissingReason={input.outcome === 'emitted' ? undefined : OUTCOME_NOTES[input.outcome]}
+        removedBy={filtering && output === input.outputs?.[0] ? (entity) => removedByText(removedBy(filtering, entity)) : undefined}
         report={output === input.outputs?.[0] ? ottl : undefined} onOpenStatements={ottl ? () => setSearch({ tab: 'ottl', view: undefined }) : undefined}
         onFollow={(entity, side) => {
           const seq = side === 'before' ? input.seq : output;
