@@ -84,6 +84,7 @@ func (s *Service) recoverTombstones() error {
 	}
 	for _, t := range runs {
 		s.deletedRuns.add(t.ID, t.Deleted)
+		s.listings.drop(t.ID)
 	}
 	for _, t := range suites {
 		s.deletedSuites.add(t.ID, t.Deleted)

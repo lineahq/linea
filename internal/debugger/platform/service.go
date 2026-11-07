@@ -219,7 +219,9 @@ type pendingRun struct {
 // New keeps history and the run queue in memory; Open durably publishes
 // lifecycle, evidence and the queue to a repository.
 type Service struct {
-	logger   *zap.Logger
+	logger *zap.Logger
+	// listings caches list entries of terminal runs read for a run list.
+	listings listingCache
 	executor ExecuteFunc
 	// defaultRuntime is Options.DefaultRuntime.
 	defaultRuntime string
@@ -435,7 +437,7 @@ func newService(opts Options, repository artifact.Repository) *Service {
 	s := &Service{
 		logger: opts.Logger, executor: opts.Execute, prepare: opts.Prepare,
 		prepareGate:   make(chan struct{}, 1),
-		queueCapacity: opts.QueueCapacity, historyLimit: opts.HistoryLimit, runCache: opts.RunCache,
+		queueCapacity: opts.QueueCapacity, historyLimit: opts.HistoryLimit, runCache: opts.RunCache, listings: listingCache{max: listingCacheSize},
 		ctx: ctx, stop: stop, wake: make(chan struct{}, 1), done: make(chan struct{}),
 		runs:             make(map[string]*Handle),
 		jobs:             make(map[string]*pendingRun),
@@ -865,11 +867,20 @@ func (s *Service) list(ctx context.Context, q RunQuery, projects []string) (*Run
 		r := s.runs[record.ID]
 		s.mu.Unlock()
 		if r == nil {
+			if v, ok := s.listings.get(record); ok {
+				page.Runs = append(page.Runs, v)
+				continue
+			}
 			// Not cached here, or admitted elsewhere and not yet followed:
-			// read it from storage without caching it.
+			// read it from storage without caching the handle, only its
+			// list entry once it is terminal.
 			if r, err = s.handleFromRecord(ctx, record); err != nil {
 				return nil, err
 			}
+			v := listed(r)
+			s.listings.put(record, v)
+			page.Runs = append(page.Runs, v)
+			continue
 		}
 		page.Runs = append(page.Runs, listed(r))
 	}
