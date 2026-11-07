@@ -268,6 +268,7 @@ func writeText(w io.Writer, rep *platform.Report) error {
 	for _, f := range rep.Filtering {
 		writeFiltering(printf, f)
 	}
+	writeRecommendations(printf, rep.Recommendations)
 
 	printf("\n")
 	for _, o := range r.Outputs {
@@ -307,6 +308,57 @@ func writeText(w io.Writer, rep *platform.Report) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// writeRecommendations prints each recommendation with its kind and
+// confidence, the suggested change, what it saves, and what limits it.
+func writeRecommendations(printf func(string, ...any), recs []platform.Recommendation) {
+	if len(recs) == 0 {
+		return
+	}
+	printf("\nrecommendations:\n")
+	for _, r := range recs {
+		printf("  [%s, %s] %s", r.Kind, r.Confidence, r.Rule)
+		if r.Pipeline != "" {
+			printf(" (pipeline %s)", r.Pipeline)
+		}
+		printf(": %s\n", r.Summary)
+		if c := r.Change; c != nil {
+			printf("      change: %s\n", changeLine(c))
+		}
+		if b := r.Benefit; b != nil {
+			printf("      saves: %d %s\n", b.Count, strings.ReplaceAll(b.Metric, "_", " "))
+		}
+		for _, b := range r.Blockers {
+			printf("      limit: %s\n", b)
+		}
+		for _, c := range r.Coverage {
+			printf("      coverage: %s\n", c)
+		}
+	}
+}
+
+// changeLine describes a suggested change in one line.
+func changeLine(c *platform.RecommendationChange) string {
+	switch c.Op {
+	case platform.ChangeSwap:
+		return "processors: [" + strings.Join(c.Processors, ", ") + "]"
+	case platform.ChangeRemoveStatement:
+		where := ""
+		if c.Index != nil {
+			where = fmt.Sprintf(" %d", *c.Index)
+		}
+		if c.Group != nil {
+			return fmt.Sprintf("remove statement%s of group %d of %s: %s", where, *c.Group, c.Component, c.Text)
+		}
+		return fmt.Sprintf("remove condition%s of %s: %s", where, c.Component, c.Text)
+	case platform.ChangeSetOption:
+		if c.Value == "" {
+			return fmt.Sprintf("set %s %s (the value is yours to choose)", c.Component, c.Option)
+		}
+		return fmt.Sprintf("set %s %s: %s", c.Component, c.Option, c.Value)
+	}
+	return string(c.Op)
 }
 
 // writeBatching prints one batch processor's settings and its sends.

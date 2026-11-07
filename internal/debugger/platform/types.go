@@ -14,6 +14,7 @@ import (
 	"github.com/lineahq/linea/internal/debugger/hostfs"
 	"github.com/lineahq/linea/internal/debugger/instrument"
 	"github.com/lineahq/linea/internal/debugger/ottldebug"
+	"github.com/lineahq/linea/internal/debugger/recommend"
 	"github.com/lineahq/linea/internal/debugger/statementedit"
 	"github.com/lineahq/linea/internal/debugger/topology"
 )
@@ -22,25 +23,29 @@ import (
 // records, named here so adapters depend on the platform alone. They are
 // read-only: callers must not mutate them.
 type (
-	Report           = engine.Report
-	Inspection       = engine.Inspection
-	PreviewResult    = engine.OTTLEvaluation
-	AssertionReport  = assertion.Report
-	SuiteReport      = engine.TestReport
-	BundleInfo       = engine.BundleInfo
-	Versions         = engine.Versions
-	ReportRuntime    = engine.ReportRuntime
-	Event            = instrument.Event
-	RunStatus        = runresult.Status
-	Diagnostic       = config.Diagnostic
-	Reference        = config.Reference
-	Graph            = topology.Graph
-	Stage            = analysis.Stage
-	OTTLReport       = ottldebug.Report
-	ArtifactKind     = artifact.Kind
-	ArtifactMetadata = artifact.Metadata
-	ArtifactRevision = artifact.RevisionData
-	ArtifactPage     = artifact.Page
+	Report          = engine.Report
+	Inspection      = engine.Inspection
+	PreviewResult   = engine.OTTLEvaluation
+	AssertionReport = assertion.Report
+	SuiteReport     = engine.TestReport
+	BundleInfo      = engine.BundleInfo
+	Versions        = engine.Versions
+	ReportRuntime   = engine.ReportRuntime
+	Event           = instrument.Event
+	RunStatus       = runresult.Status
+	Diagnostic      = config.Diagnostic
+	Reference       = config.Reference
+	Graph           = topology.Graph
+	Stage           = analysis.Stage
+	OTTLReport      = ottldebug.Report
+	// Recommendation is one suggestion of a report or inspection, and
+	// RecommendationChange the configuration change it suggests.
+	Recommendation       = recommend.Recommendation
+	RecommendationChange = recommend.ConfigChange
+	ArtifactKind         = artifact.Kind
+	ArtifactMetadata     = artifact.Metadata
+	ArtifactRevision     = artifact.RevisionData
+	ArtifactPage         = artifact.Page
 	// ArtifactRevisionPage is one page of an artifact's revisions, newest first.
 	ArtifactRevisionPage = artifact.RevisionPage
 	SavedArtifact        = artifact.Saved
@@ -54,6 +59,13 @@ type (
 	EnvironmentPolicy = config.EnvironmentPolicy
 	// PathPolicy is trusted composition policy (Options.Paths).
 	PathPolicy = hostfs.Policy
+)
+
+// Suggested change operations of a recommendation.
+const (
+	ChangeSwap            = recommend.OpSwap
+	ChangeRemoveStatement = recommend.OpRemoveStatement
+	ChangeSetOption       = recommend.OpSetOption
 )
 
 // TimestampsRebased marks a report whose input timestamps were rebased.

@@ -56,6 +56,7 @@ Collector note names the release it was verified against (currently `v0.162.0`
 | [batching.md](batching.md) | Batch processor timer and size semantics, inferring each send's trigger and checking it against the processor's metrics |
 | [grouping.md](grouping.md) | How groupbyattrs regroups records into resources (v0.162.0) and how `report.grouping` follows each record into its new resource |
 | [filtering.md](filtering.md) | Filter processor forms, function sets, condition evaluation order and error modes (v0.162.0), and how `report.filtering` names the condition that dropped each record |
+| [recommendations.md](recommendations.md) | The rule catalog behind `report.recommendations`: what each rule reads, when it fires, the change it suggests and its contract fields |
 | [sampling.md](sampling.md) | Recording tail_sampling decisions with its hooks, replaying policies to explain them |
 | [ottl-replay.md](ottl-replay.md) | How the transform processor executes OTTL and how replay mirrors and verifies it |
 

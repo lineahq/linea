@@ -103,7 +103,8 @@ The root Go module is declared in `go.mod`.
   Inspection and OTTL previews are a host capture (`CaptureInspection`,
   `CaptureOTTL`, no factories) completed by a registry (`CompleteInspection`,
   `CompleteOTTL`). Both results carry `runtime`, the runtime that answered,
-  which the platform sets (`answeredBy`; inspection schema 0.2); `Decode` is the
+  which the platform sets (`answeredBy`; inspection schema 0.2), and the
+  configuration-only recommendations (inspection schema 0.3); `Decode` is the
   strict JSON decoder for reports crossing a process boundary. The engine
   links no Collector: executing, factory-based preparation, completing an
   inspection or preview and the built-in runtime's description go through the
@@ -987,6 +988,11 @@ The root Go module is declared in `go.mod`.
   `internal/debugger/compat/ottl`) and verified against the observed output;
   the `filter_explanation` feature, written to `report.filtering`
   (`filtering.md`).
+- `internal/debugger/recommend/` — pure rules over a report's sections
+  (topology, stages, filtering, OTTL, batching, grouping, sampling) that
+  produce `report.recommendations` and, from the topology alone, an
+  inspection's; each rule has a stable ID, a kind, a confidence, evidence
+  refs and an optional suggested change (`recommendations.md`).
 - `internal/debugger/ottldebug/` — the types of per-statement OTTL replay
   reports.
 - `internal/debugger/ottlreplay/` — per-statement OTTL replay of transform
@@ -1027,7 +1033,7 @@ The root Go module is declared in `go.mod`.
 - `internal/debugger/evidence/` — pure projections of a terminal run's report:
   the run summary (with endpoint outputs and component log counts, an
   error-level entry a `component` error) and the query families (stage changes,
-  records, journey, statements, events) cut into byte- and item-bounded pages
+  records, journey, statements, events, recommendations) cut into byte- and item-bounded pages
   with oversize entries and opaque cursors; it reads only the report and its
   recorded snapshots.
 - `internal/debugger/comparison/` — pure comparison of two terminal runs from

@@ -212,6 +212,11 @@ values. The report also contains:
   batch processor sent when it did, of how groupbyattrs regrouped each
   record into its resource, and of which filter condition dropped each
   record;
+- recommendations: work the run shows was avoidable (a filter condition or
+  OTTL statement that never matched, a processor that changed nothing), batch
+  settings the input never reached, and orderings that risk data, each with
+  its evidence, what it would save and what the input did not cover. They
+  are suggestions; nothing changes your configuration;
 - mocked dependencies and stand-ins: components outside the distribution, and
   references with no value supplied.
 

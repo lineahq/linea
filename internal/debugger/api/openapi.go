@@ -158,10 +158,10 @@ var evidenceParams = func() []any {
 		return map[string]any{"name": name, "in": "query", "schema": map[string]any{"type": typ}, "description": desc}
 	}
 	return []any{
-		map[string]any{"name": "family", "in": "query", "required": true, "description": "stage_changes, records, journey, statements or events.",
-			"schema": map[string]any{"type": "string", "enum": []string{"stage_changes", "records", "journey", "statements", "events"}}},
-		param("pipeline", "string", "Pipeline ID for stage_changes and records (empty for a connector); optional filter for statements."),
-		param("component", "string", "The stage for stage_changes and records, the transform processor for statements, an optional filter for events."),
+		map[string]any{"name": "family", "in": "query", "required": true, "description": "stage_changes, records, journey, statements, events or recommendations.",
+			"schema": map[string]any{"type": "string", "enum": []string{"stage_changes", "records", "journey", "statements", "events", "recommendations"}}},
+		param("pipeline", "string", "Pipeline ID for stage_changes and records (empty for a connector); optional filter for statements and recommendations."),
+		param("component", "string", "The stage for stage_changes and records, the transform processor for statements, an optional filter for events and recommendations."),
 		param("signal", "string", "Signal of a connector stage that has several."),
 		param("side", "string", "For records: before (received) or after (emitted)."),
 		param("entity", "string", "For journey: a record ID."),
@@ -308,7 +308,7 @@ func paths() map[string]any {
 				"409": operationFailure("The run has not finished."),
 			})},
 		"/api/v1/runs/{id}/evidence": map[string]any{"get": op("queryRunEvidence",
-			"One bounded page of a finished run's recorded evidence, as MCP's linea_get_execution_trace: stage_changes, records, journey, statements or events. Never executes anything. A cursor continues only the same run, family and parameters; page sizes above the server's budgets are lowered and listed in page.clamped.",
+			"One bounded page of a finished run's recorded evidence, as MCP's linea_get_execution_trace: stage_changes, records, journey, statements, events or recommendations. Never executes anything. A cursor continues only the same run, family and parameters; page sizes above the server's budgets are lowered and listed in page.clamped.",
 			append(run, evidenceParams...), "", map[string]any{
 				"200": reply("One page of evidence.", ref("EvidenceResult")),
 				"400": operationFailure("A bad family, parameter, page size or cursor."),

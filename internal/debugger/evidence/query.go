@@ -33,6 +33,9 @@ const (
 	// FamilyEvents: recorded events in a sequence range, optionally of one
 	// component.
 	FamilyEvents Family = "events"
+	// FamilyRecommendations: the run's recommendations, in catalog order,
+	// optionally of one pipeline or naming one component.
+	FamilyRecommendations Family = "recommendations"
 )
 
 // Sides of a records query.
@@ -51,6 +54,8 @@ const (
 //     limits it to the inputs of one pipeline.
 //   - events: from_seq and to_seq (inclusive; zero to_seq is the end), and
 //     optionally component.
+//   - recommendations: optionally pipeline and component (a configuration
+//     ID the recommendation names).
 type Query struct {
 	Family    Family `json:"family"`
 	Pipeline  string `json:"pipeline,omitempty"`
@@ -215,6 +220,8 @@ func (q Query) validate() error {
 		}
 	case FamilyStatements:
 		allowed = set{pipeline: true, component: true}
+	case FamilyRecommendations:
+		allowed = set{pipeline: true, component: true}
 	case FamilyEvents:
 		allowed = set{component: true, seqs: true}
 		if q.FromSeq < 0 || q.ToSeq < 0 || q.ToSeq != 0 && q.ToSeq < q.FromSeq {
@@ -268,7 +275,7 @@ func decodeCursor(s string) (cursor, error) {
 }
 
 // analysisFamilies read the report's derived analysis.
-var analysisFamilies = []Family{FamilyStageChanges, FamilyRecords, FamilyJourney, FamilyStatements}
+var analysisFamilies = []Family{FamilyStageChanges, FamilyRecords, FamilyJourney, FamilyStatements, FamilyRecommendations}
 
 // evidenceReason says why the run's evidence for family is not complete, or
 // "" when it is.

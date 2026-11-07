@@ -3,6 +3,7 @@ package evidence
 import (
 	"fmt"
 	"slices"
+	"strings"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
 
@@ -110,6 +111,8 @@ func project(rep *engine.Report, q Query) ([]entry, error) {
 		return journey(rep, q.Entity)
 	case FamilyStatements:
 		return statements(rep, q)
+	case FamilyRecommendations:
+		return recommendations(rep, q), nil
 	}
 	return events(rep, q), nil
 }
@@ -318,4 +321,25 @@ func eventsBySeq(rep *engine.Report) map[int]instrument.Event {
 		m[e.Seq] = e
 	}
 	return m
+}
+
+// recommendations are the run's recommendations; item refs are their
+// positions in the report ("recommendation:<n>"), so a filtered page still
+// names the report entry. A pipeline filter keeps recommendations about the
+// whole configuration, which apply to every pipeline.
+func recommendations(rep *engine.Report, q Query) []entry {
+	var out []entry
+	for i, r := range rep.Recommendations {
+		if q.Pipeline != "" && r.Pipeline != "" && r.Pipeline != q.Pipeline {
+			continue
+		}
+		if q.Component != "" && !slices.ContainsFunc(r.Components, func(ref string) bool {
+			_, id, _ := strings.Cut(ref, "/")
+			return id == q.Component
+		}) {
+			continue
+		}
+		out = append(out, entry{fmt.Sprintf("recommendation:%d", i), r})
+	}
+	return out
 }

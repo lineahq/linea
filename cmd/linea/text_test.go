@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/lineahq/linea/internal/debugger/analysis"
+	"github.com/lineahq/linea/internal/debugger/platform"
+	"github.com/lineahq/linea/internal/debugger/recommend"
 )
 
 // TestWriteGroupingMarksMovedAttributesAndMerges: the text names each output
@@ -36,7 +38,45 @@ func TestWriteGroupingMarksMovedAttributesAndMerges(t *testing.T) {
 	}
 }
 
-// TestWriteFilteringNamesConditionsAndDrops: the text lists each condition
+// TestWriteRecommendationsShowsChangeSavingsAndLimits: each recommendation
+// is one line with its kind, confidence and rule, then its change, what it
+// saves, its limits and its coverage.
+func TestWriteRecommendationsShowsChangeSavingsAndLimits(t *testing.T) {
+	one, zero := 1, 0
+	recs := []platform.Recommendation{
+		{Rule: "filter.condition_never_matched", Kind: "redundancy", Confidence: "observed", Pipeline: "logs", Summary: "Condition never matched.",
+			Change:   &platform.RecommendationChange{Op: platform.ChangeRemoveStatement, Component: "filter/health", Index: &one, Text: "severity_number < 5"},
+			Benefit:  &recommend.Benefit{Metric: "evaluations_without_effect", Count: 3},
+			Coverage: []string{"Observed on 4 log records in 1 request."}},
+		{Rule: "ottl.statement_no_change", Kind: "redundancy", Confidence: "observed", Pipeline: "logs", Summary: "Changed nothing.",
+			Change: &platform.RecommendationChange{Op: platform.ChangeRemoveStatement, Component: "transform", Group: &zero, Index: &one, Text: `set(x, "a")`}},
+		{Rule: "config.memory_limiter_not_first", Kind: "risk", Confidence: "static", Pipeline: "logs", Summary: "Not first.",
+			Change: &platform.RecommendationChange{Op: platform.ChangeSwap, Processors: []string{"memory_limiter", "batch"}}, Blockers: []string{"Not checked."}},
+		{Rule: "sampling.late_spans", Kind: "risk", Confidence: "observed", Summary: "Late.",
+			Change: &platform.RecommendationChange{Op: platform.ChangeSetOption, Component: "tail_sampling", Option: "decision_wait"}},
+	}
+	var b strings.Builder
+	writeRecommendations(func(f string, a ...any) { fmt.Fprintf(&b, f, a...) }, recs)
+	want := `
+recommendations:
+  [redundancy, observed] filter.condition_never_matched (pipeline logs): Condition never matched.
+      change: remove condition 1 of filter/health: severity_number < 5
+      saves: 3 evaluations without effect
+      coverage: Observed on 4 log records in 1 request.
+  [redundancy, observed] ottl.statement_no_change (pipeline logs): Changed nothing.
+      change: remove statement 1 of group 0 of transform: set(x, "a")
+  [risk, static] config.memory_limiter_not_first (pipeline logs): Not first.
+      change: processors: [memory_limiter, batch]
+      limit: Not checked.
+  [risk, observed] sampling.late_spans: Late.
+      change: set tail_sampling decision_wait (the value is yours to choose)
+`
+	if b.String() != want {
+		t.Fatalf("text =\n%s\nwant\n%s", b.String(), want)
+	}
+}
+
+// TestWriteFilteringNamesConditionsAndDrops:the text lists each condition
 // with its counts and each drop with the condition that made it, and only
 // the configuration when the replay does not cover the settings.
 func TestWriteFilteringNamesConditionsAndDrops(t *testing.T) {

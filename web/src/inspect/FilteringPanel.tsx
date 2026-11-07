@@ -48,13 +48,13 @@ export function FilteringPanel({ filtering, live, search, setSearch }: {
           <tbody>
             {selected.conditions!.map((c) => (
               <tr key={c.index}>
-                <th scope="row">{c.index + 1}</th>
+                <th scope="row">{c.index}</th>
                 <td>
                   <code className="mono">{c.condition}</code>
                   <div className="bt-note small">{c.source} · {c.context} context · error_mode {c.error_mode}{idle.has(c.index) && ' · removed nothing in this request'}</div>
                   {c.error && <div className="bt-note small mono">{c.error}</div>}
                   {verified && (drops.get(c.index) ?? []).length > 0 && (
-                    <ul className="ft-drops" aria-label={`Removed by condition ${c.index + 1}`}>
+                    <ul className="ft-drops" aria-label={`Removed by condition ${c.index}`}>
                       {drops.get(c.index)!.map((d) => <Drop key={d.ref} drop={d} signal={selected.signal} onFollow={follow} />)}
                     </ul>
                   )}
@@ -92,7 +92,7 @@ function WholeRun({ filtering }: { filtering: Filtering[] }) {
           <tbody>
             {t.conditions.map((c) => (
               <tr key={c.index}>
-                <th scope="row">{c.index + 1}</th>
+                <th scope="row">{c.index}</th>
                 <td><code className="mono">{c.condition}</code>{c.evaluated > 0 && c.matched === 0 && c.errors === 0 && <div className="bt-note small">removed nothing in this run</div>}</td>
                 <td className="bt-num">{c.evaluated}</td>
                 <td className="bt-num">{c.matched}</td>

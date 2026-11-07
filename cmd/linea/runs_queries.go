@@ -56,9 +56,9 @@ func runsEvidenceCmd(ctx context.Context, args []string, stdout, stderr io.Write
 		args, stdout, stderr,
 		func(fs *flag.FlagSet) {
 			for _, f := range []struct{ name, usage string }{
-				{"family", "stage_changes, records, journey, statements or events"},
-				{"pipeline", "pipeline ID for stage_changes and records; optional filter for statements"},
-				{"component", "the stage, the transform processor for statements, or an events filter"},
+				{"family", "stage_changes, records, journey, statements, events or recommendations"},
+				{"pipeline", "pipeline ID for stage_changes and records; optional filter for statements and recommendations"},
+				{"component", "the stage, the transform processor for statements, or an events and recommendations filter"},
 				{"signal", "signal of a connector stage that has several"},
 				{"side", "for records: before (received) or after (emitted)"},
 				{"entity", "for journey: a record ID"},

@@ -25,6 +25,7 @@ import (
 	// The optional features this runtime's manifest brings.
 	"github.com/lineahq/linea/internal/debugger/instrument"
 	"github.com/lineahq/linea/internal/debugger/ottldebug"
+	"github.com/lineahq/linea/internal/debugger/recommend"
 	"github.com/lineahq/linea/internal/debugger/scenario"
 	"github.com/lineahq/linea/internal/debugger/telemetry"
 	"github.com/lineahq/linea/internal/debugger/topology"
@@ -244,6 +245,10 @@ type Report struct {
 	// and failed on (report schema 0.15).
 	Filtering []*analysis.Filtering `json:"filtering,omitempty"`
 	OTTL      []*ottldebug.Report   `json:"ottl"`
+	// Recommendations are suggestions derived from the sections above and
+	// the topology: avoidable work, settings this input never exercised and
+	// risky orderings, each with its evidence (report schema 0.15).
+	Recommendations []recommend.Recommendation `json:"recommendations,omitempty"`
 	// Timestamps relates the input timestamps to the run's wall clock and
 	// says whether they were rebased.
 	Timestamps *Timestamps           `json:"timestamps,omitempty"`
@@ -345,6 +350,8 @@ func Execute(ctx context.Context, req Request) (*Report, error) {
 	if rep.OTTL, err = replayTransforms(ctx, resolved, rep.Stages, rep.Result); err != nil {
 		return nil, err
 	}
+	rep.Recommendations = recommend.Recommend(recommend.Input{Topology: rep.Topology, Stages: rep.Stages, Filtering: rep.Filtering,
+		OTTL: rep.OTTL, Batching: rep.Batching, Grouping: rep.Grouping, Sampling: rep.Sampling})
 	if len(assertions) > 0 {
 		if rep.Assertions, err = assertion.Evaluate(assertions, rep.Topology, rep.Result); err != nil {
 			return nil, err

@@ -827,7 +827,14 @@ server's redacted text unchanged. A done run's Overview lists the assertion
 checks recorded beside it ("Recorded checks", `RecordedChecks.tsx`,
 `debugger/evaluations.ts`, tested; `GET /runs/{id}/evaluations`), such as an
 agent's `linea_evaluate_assertions`, each opening to its results; the web's own
-checks are not recorded, and nothing shows when there are none. Component views
+checks are not recorded, and nothing shows when there are none. A finished
+run's Overview lists `report.recommendations` in an open "Recommendations"
+section after Key findings (`debugger/recommendations.ts`, tested): per
+recommendation its kind, a title from its rule, the server's summary, the
+suggested change as text, what it would save, its limits and coverage, a
+link to each component it names and what it rests on. It words them only:
+it adds, ranks or hides none, and a change is never applied to the draft.
+Component views
 live in the bottom pane (`debugger/ComponentPane.tsx`; before a run,
 `PREPARE_TABS` explains how the component will run and shows its configuration).
 Compare runs is its own state. Processors open directly on Changes, with

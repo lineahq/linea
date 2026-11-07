@@ -546,6 +546,21 @@
         ],
         "type": "object"
       },
+      "Benefit": {
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "metric": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "count",
+          "metric"
+        ],
+        "type": "object"
+      },
       "BisectCulprit": {
         "properties": {
           "diff": {
@@ -2905,6 +2920,41 @@
         ],
         "type": "object"
       },
+      "ConfigChange": {
+        "properties": {
+          "component": {
+            "type": "string"
+          },
+          "group": {
+            "type": "integer"
+          },
+          "index": {
+            "type": "integer"
+          },
+          "op": {
+            "type": "string"
+          },
+          "option": {
+            "type": "string"
+          },
+          "processors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "text": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "op"
+        ],
+        "type": "object"
+      },
       "ConfigGraph": {
         "properties": {
           "diagnostics": {
@@ -3410,6 +3460,21 @@
           "seq",
           "source",
           "time"
+        ],
+        "type": "object"
+      },
+      "Evidence": {
+        "properties": {
+          "ref": {
+            "type": "string"
+          },
+          "section": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref",
+          "section"
         ],
         "type": "object"
       },
@@ -5057,6 +5122,12 @@
           "inspection_schema": {
             "type": "string"
           },
+          "recommendations": {
+            "items": {
+              "$ref": "#/components/schemas/Recommendation"
+            },
+            "type": "array"
+          },
           "references": {
             "items": {
               "$ref": "#/components/schemas/Reference"
@@ -5822,6 +5893,62 @@
         ],
         "type": "object"
       },
+      "Recommendation": {
+        "properties": {
+          "benefit": {
+            "$ref": "#/components/schemas/Benefit"
+          },
+          "blockers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "change": {
+            "$ref": "#/components/schemas/ConfigChange"
+          },
+          "components": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "confidence": {
+            "type": "string"
+          },
+          "coverage": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/Evidence"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "pipeline": {
+            "type": "string"
+          },
+          "rule": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "confidence",
+          "kind",
+          "rule",
+          "summary"
+        ],
+        "type": "object"
+      },
       "RecordLineage": {
         "properties": {
           "connector": {
@@ -6017,6 +6144,12 @@
           },
           "provenance": {
             "$ref": "#/components/schemas/Provenance"
+          },
+          "recommendations": {
+            "items": {
+              "$ref": "#/components/schemas/Recommendation"
+            },
+            "type": "array"
           },
           "reference": {
             "$ref": "#/components/schemas/Result"
@@ -16162,7 +16295,7 @@
             }
           },
           {
-            "description": "stage_changes, records, journey, statements or events.",
+            "description": "stage_changes, records, journey, statements, events or recommendations.",
             "in": "query",
             "name": "family",
             "required": true,
@@ -16172,13 +16305,14 @@
                 "records",
                 "journey",
                 "statements",
-                "events"
+                "events",
+                "recommendations"
               ],
               "type": "string"
             }
           },
           {
-            "description": "Pipeline ID for stage_changes and records (empty for a connector); optional filter for statements.",
+            "description": "Pipeline ID for stage_changes and records (empty for a connector); optional filter for statements and recommendations.",
             "in": "query",
             "name": "pipeline",
             "schema": {
@@ -16186,7 +16320,7 @@
             }
           },
           {
-            "description": "The stage for stage_changes and records, the transform processor for statements, an optional filter for events.",
+            "description": "The stage for stage_changes and records, the transform processor for statements, an optional filter for events and recommendations.",
             "in": "query",
             "name": "component",
             "schema": {
@@ -16308,7 +16442,7 @@
             "description": "The run has not finished or has no report."
           }
         },
-        "summary": "One bounded page of a finished run's recorded evidence, as MCP's linea_get_execution_trace: stage_changes, records, journey, statements or events. Never executes anything. A cursor continues only the same run, family and parameters; page sizes above the server's budgets are lowered and listed in page.clamped."
+        "summary": "One bounded page of a finished run's recorded evidence, as MCP's linea_get_execution_trace: stage_changes, records, journey, statements, events or recommendations. Never executes anything. A cursor continues only the same run, family and parameters; page sizes above the server's budgets are lowered and listed in page.clamped."
       }
     },
     "/api/v1/runs/{id}/export": {

@@ -1167,7 +1167,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** One bounded page of a finished run's recorded evidence, as MCP's linea_get_execution_trace: stage_changes, records, journey, statements or events. Never executes anything. A cursor continues only the same run, family and parameters; page sizes above the server's budgets are lowered and listed in page.clamped. */
+        /** One bounded page of a finished run's recorded evidence, as MCP's linea_get_execution_trace: stage_changes, records, journey, statements, events or recommendations. Never executes anything. A cursor continues only the same run, family and parameters; page sizes above the server's budgets are lowered and listed in page.clamped. */
         get: operations["queryRunEvidence"];
         put?: never;
         post?: never;
@@ -1892,6 +1892,10 @@ export interface components {
             signal: string;
             verification: string;
         };
+        Benefit: {
+            count: number;
+            metric: string;
+        };
         BisectCulprit: {
             diff: string;
             last_good: number;
@@ -2532,6 +2536,16 @@ export interface components {
             runtime?: string;
             scenarios?: components["schemas"]["SuiteScenario"][];
         };
+        ConfigChange: {
+            component?: string;
+            group?: number;
+            index?: number;
+            op: string;
+            option?: string;
+            processors?: string[];
+            text?: string;
+            value?: string;
+        };
         ConfigGraph: {
             diagnostics?: components["schemas"]["Diagnostic"][];
             topology?: components["schemas"]["Graph"];
@@ -2668,6 +2682,10 @@ export interface components {
             source: string;
             /** Format: date-time */
             time: string;
+        };
+        Evidence: {
+            ref: string;
+            section: string;
         };
         EvidenceResult: {
             complete: boolean;
@@ -3130,6 +3148,7 @@ export interface components {
                 [key: string]: unknown;
             };
             inspection_schema: string;
+            recommendations?: components["schemas"]["Recommendation"][];
             references?: components["schemas"]["Reference"][];
             runtime?: components["schemas"]["ReportRuntime"];
             topology?: components["schemas"]["Graph"];
@@ -3341,6 +3360,19 @@ export interface components {
             reason?: string;
             size: number;
         };
+        Recommendation: {
+            benefit?: components["schemas"]["Benefit"];
+            blockers?: string[];
+            change?: components["schemas"]["ConfigChange"];
+            components?: string[];
+            confidence: string;
+            coverage?: string[];
+            evidence?: components["schemas"]["Evidence"][];
+            kind: string;
+            pipeline?: string;
+            rule: string;
+            summary: string;
+        };
         RecordLineage: {
             connector?: string;
             deliveries?: components["schemas"]["Delivery"][];
@@ -3389,6 +3421,7 @@ export interface components {
             lineage?: components["schemas"]["RecordLineage"][];
             ottl?: components["schemas"]["OttldebugReport"][];
             provenance?: components["schemas"]["Provenance"];
+            recommendations?: components["schemas"]["Recommendation"][];
             reference?: components["schemas"]["Result"];
             references?: components["schemas"]["Reference"][];
             report_schema: string;
@@ -9673,11 +9706,11 @@ export interface operations {
     queryRunEvidence: {
         parameters: {
             query: {
-                /** @description stage_changes, records, journey, statements or events. */
-                family: "stage_changes" | "records" | "journey" | "statements" | "events";
-                /** @description Pipeline ID for stage_changes and records (empty for a connector); optional filter for statements. */
+                /** @description stage_changes, records, journey, statements, events or recommendations. */
+                family: "stage_changes" | "records" | "journey" | "statements" | "events" | "recommendations";
+                /** @description Pipeline ID for stage_changes and records (empty for a connector); optional filter for statements and recommendations. */
                 pipeline?: string;
-                /** @description The stage for stage_changes and records, the transform processor for statements, an optional filter for events. */
+                /** @description The stage for stage_changes and records, the transform processor for statements, an optional filter for events and recommendations. */
                 component?: string;
                 /** @description Signal of a connector stage that has several. */
                 signal?: string;

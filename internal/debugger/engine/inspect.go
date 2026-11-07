@@ -11,6 +11,7 @@ import (
 	"github.com/lineahq/linea/internal/debugger/config"
 	"github.com/lineahq/linea/internal/debugger/hostfs"
 	"github.com/lineahq/linea/internal/debugger/mock"
+	"github.com/lineahq/linea/internal/debugger/recommend"
 	"github.com/lineahq/linea/internal/debugger/scenario"
 	"github.com/lineahq/linea/internal/debugger/topology"
 )
@@ -28,8 +29,8 @@ const (
 )
 
 // InspectionSchemaVersion versions the Inspection JSON shape. 0.2 added
-// runtime.
-const InspectionSchemaVersion = "0.2"
+// runtime, 0.3 recommendations.
+const InspectionSchemaVersion = "0.3"
 
 // InspectRequest selects a configuration to validate, by path (Config) or as
 // text (ConfigYAML). A scenario, by path or as text, or the setup of a
@@ -71,6 +72,9 @@ type Inspection struct {
 	// Runtime is the runtime that answered. The platform
 	// sets it; a worker leaves it empty.
 	Runtime *ReportRuntime `json:"runtime,omitempty"`
+	// Recommendations are the ones the configuration alone supports
+	// (confidence static); a run adds those its evidence supports.
+	Recommendations []recommend.Recommendation `json:"recommendations,omitempty"`
 }
 
 // Inspect validates the configuration with the debugger's Collector registry
@@ -191,6 +195,7 @@ func CompleteInspection(ctx context.Context, in *InspectionInput) (*Inspection, 
 	out.Diagnostics = append(out.Diagnostics, config.StandInDiagnostics(resolved.References)...)
 	g := graph(c, resolved, factories)
 	out.Topology = &g
+	out.Recommendations = recommend.Static(&g)
 	out.References = resolved.References
 	// Without a scenario the gaps say what a run's scenario has to supply.
 	plugins, err := c.Plugins()
