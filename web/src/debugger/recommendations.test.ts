@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RecommendationVerification, Report } from '../api/types';
-import { benefitChangeText, benefitText, changeText, changeTitle, componentNode, effect, holdsOf, measuredViews, moves, percent, provenance, recommendationGroups, recommendationHint, recommendationKinds, recommendationViews, relative, ruleTitle, savesText, share, totalText, verifiable, verificationView, verifyProgress } from './recommendations';
+import { benefitChangeText, benefitText, changeText, changeTitle, componentNode, effect, holdsOf, measuredViews, moves, percent, provenance, recommendationGroups, recommendationHint, recommendationKindGroups, recommendationKinds, recommendationViews, relative, ruleTitle, savesText, share, totalText, verifiable, verificationView, verifyProgress } from './recommendations';
 
 const comp = (kind: string, id: string) => ({ kind, id, type: id.split('/')[0], ref: `${kind}/${id}`, mode: 'real' });
 
@@ -193,6 +193,20 @@ describe('recommendationKinds', () => {
       ['Statement not tested', 'Redundant', 2],
     ]);
     expect(recommendationKinds([])).toEqual([]);
+  });
+
+  it('lists the kinds per group, in the order of the tab', () => {
+    const views = recommendationViews(report([
+      { rule: 'ottl.statement_never_matched', kind: 'untested', confidence: 'observed', holds: 'this_input', summary: 'A.' },
+      { rule: 'sampling.late_spans', kind: 'risk', confidence: 'observed', holds: 'this_input', summary: 'Late.' },
+      { rule: 'config.unused_component', kind: 'redundancy', confidence: 'static', holds: 'any_input', summary: 'Unused.' },
+      { rule: 'ottl.statement_never_matched', kind: 'untested', confidence: 'observed', holds: 'this_input', summary: 'B.' },
+    ]), 'abc');
+    expect(recommendationKindGroups(views).map((g) => [g.title, g.kinds.map((k) => [k.title, k.count])])).toEqual([
+      ['Holds for any input', [['Unused component', 1]]],
+      ['Depends on this input', [['Late spans skipped evaluation', 1]]],
+      ['Not tested by this input', [['Statement not tested', 2]]],
+    ]);
   });
 });
 

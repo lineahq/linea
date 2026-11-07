@@ -858,10 +858,12 @@ Assertions tab. **Key findings** lists each finding as an icon, its title and
 its actions as inline link buttons, with one muted footer line "Observed in run
 <name>" instead of per-finding provenance and detail text; it is omitted
 without findings and while the run is live. **Recommendations** shows the count
-and `recommendationHint` (how many concern data at risk and how many this input left untested), then one row per kind
-of recommendation (`recommendationKinds` in `recommendations.ts`, tested): its
-kind chip, the rule's title and "×N" when the rule fired more than once, data
-at risk first; "Open
+and `recommendationHint` (how many concern data at risk and how many this input left untested), then the Recommendations
+tab's sections in its order, each a muted heading ("Holds for any input",
+"Depends on this input", "Not tested by this input";
+`recommendationKindGroups` in `recommendations.ts`, tested) over one row per
+rule in it (`recommendationKinds`, tested): its kind chip, the rule's title and
+"×N" when the rule fired more than once, data at risk first; "Open
 recommendations" selects the Recommendations tab; it is omitted when there are
 none and while live. The warn line (`notRealLine`, tested) appears when a
 mocked component, stand-in, unsupported component or component with no recorded

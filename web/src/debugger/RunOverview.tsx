@@ -8,7 +8,7 @@ import { endpointText, simulatedEndpoints } from '../inspect/extensions';
 import { Icon } from '../ui/Icon';
 import { assertionRows, assertionsCard, coverage, environmentRows, facets, hasStandIns, notRealLine, problems } from './overview';
 import { keyFindings, type FindingAction, type Segment } from './findings';
-import { recommendationHint, recommendationKinds, recommendationViews } from './recommendations';
+import { recommendationHint, recommendationKindGroups, recommendationViews } from './recommendations';
 import { runLabel } from './runFacts';
 import { stopNode } from './recordList';
 import { keepsRunLog } from './runLog';
@@ -55,7 +55,7 @@ export function RunOverview({ view, setSearch }: { view: RunView; setSearch(patc
   const rows = useMemo(() => coverage(rep, view.events), [rep, view.events]);
   const recs = useMemo(() => (view.live || !r ? [] : recommendationViews(rep, runLabel(r.id))), [rep, r, view.live]);
   const hint = recommendationHint(recs);
-  const kinds = useMemo(() => recommendationKinds(recs), [recs]);
+  const groups = useMemo(() => recommendationKindGroups(recs), [recs]);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const details = useRef<HTMLDetailsElement>(null);
   if (!r) {
@@ -169,15 +169,20 @@ export function RunOverview({ view, setSearch }: { view: RunView; setSearch(patc
           {hint && (
             <section className="od-card" style={card} aria-label="Recommendations summary">
               <CardHead label="Recommendations" status={hint} />
-              <ul aria-label="Kinds of recommendations" style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                {kinds.map((k) => (
-                  <li key={k.rule} style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                    <span className={`od-chip od-chip--plain${k.kind.tone === 'warn' ? ' od-chip--warn' : ''}`}>{k.kind.label}</span>
-                    <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={k.title}>{k.title}</span>
-                    {k.count > 1 && <span className="od-muted" style={{ fontSize: 12 }}>×{k.count}</span>}
-                  </li>
-                ))}
-              </ul>
+              {groups.map((g) => (
+                <div key={g.id} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <div className="od-muted" style={{ fontSize: 12 }}>{g.title}</div>
+                  <ul aria-label={g.title} style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {g.kinds.map((k) => (
+                      <li key={k.rule} style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                        <span className={`od-chip od-chip--plain${k.kind.tone === 'warn' ? ' od-chip--warn' : ''}`}>{k.kind.label}</span>
+                        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={k.title}>{k.title}</span>
+                        {k.count > 1 && <span className="od-muted" style={{ fontSize: 12 }}>×{k.count}</span>}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
               <button type="button" className="od-btn od-btn--link od-btn--sm" style={cardLink} onClick={() => setSearch({ tab: 'recommendations', view: undefined })}>
                 <Icon name="flask-conical" size={14} /><span>Open recommendations</span><Icon name="arrow-right" size={14} />
               </button>

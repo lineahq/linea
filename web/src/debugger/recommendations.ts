@@ -539,6 +539,22 @@ export function recommendationKinds(views: RecommendationView[]): Recommendation
   return [...all.filter((k) => k.kind.tone === 'warn'), ...all.filter((k) => k.kind.tone !== 'warn')];
 }
 
+/** RecommendationKindGroup is one section of the Overview card: a group's rules. */
+export interface RecommendationKindGroup {
+  id: RecommendationGroup['id'];
+  title: string;
+  kinds: RecommendationKind[];
+}
+
+/**
+ * recommendationKindGroups is the Overview card's view of the tab's sections:
+ * the same groups in the same order (`recommendationGroups`), each listing its
+ * rules as `recommendationKinds` does.
+ */
+export function recommendationKindGroups(views: RecommendationView[]): RecommendationKindGroup[] {
+  return recommendationGroups(views).map((g) => ({ id: g.id, title: g.title, kinds: recommendationKinds(g.views) }));
+}
+
 /** VerifyProgress is what a pending verification shows: a sentence and, with an estimate, how far along it probably is. */
 export interface VerifyProgress { text: string; fraction?: number }
 
