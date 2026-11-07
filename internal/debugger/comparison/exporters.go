@@ -31,6 +31,9 @@ type side struct {
 	mocked   bool
 	bySeq    map[int]instrument.Event
 	payloads map[string]*telemetry.Payload
+	// records indexes each decoded payload's records by position, built
+	// once per payload: a run's records are looked up one by one.
+	records map[*telemetry.Payload]map[string]telemetry.Record
 }
 
 func newSide(s Side) *side {
@@ -39,7 +42,7 @@ func newSide(s Side) *side {
 		return &side{}
 	}
 	out := &side{report: r, shift: r.Timestamps.RebaseShift(), mocked: len(r.Result.Mocks) > 0,
-		bySeq: map[int]instrument.Event{}, payloads: map[string]*telemetry.Payload{}}
+		bySeq: map[int]instrument.Event{}, payloads: map[string]*telemetry.Payload{}, records: map[*telemetry.Payload]map[string]telemetry.Record{}}
 	for _, e := range r.Result.Events {
 		out.bySeq[e.Seq] = e
 	}

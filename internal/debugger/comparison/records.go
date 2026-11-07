@@ -369,12 +369,26 @@ func delivered(s *side, l *analysis.RecordLineage, d analysis.Delivery) (*teleme
 	if p == nil {
 		return nil, telemetry.Record{}, false
 	}
-	for _, r := range telemetry.Records(*p) {
-		if r.Ref(p.Signal) == h.Ref {
-			return p, r, true
-		}
+	if s.records == nil {
+		s.records = map[*telemetry.Payload]map[string]telemetry.Record{}
 	}
-	return nil, telemetry.Record{}, false
+	byRef, ok := s.records[p]
+	if !ok {
+		byRef = map[string]telemetry.Record{}
+		for _, r := range telemetry.Records(*p) {
+			// The first record at a position wins, as the scan did.
+			ref := r.Ref(p.Signal)
+			if _, dup := byRef[ref]; !dup {
+				byRef[ref] = r
+			}
+		}
+		s.records[p] = byRef
+	}
+	r, ok := byRef[h.Ref]
+	if !ok {
+		return nil, telemetry.Record{}, false
+	}
+	return p, r, true
 }
 
 // compareRefs orders positions like "resource[0].scope[1].log_record[10]"
