@@ -1229,6 +1229,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{id}/listing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A run as the run list shows it: its state and, once done, the summary of its report, without the report. It reads a run off the list's pages without the cost of its evidence. */
+        get: operations["getRunListing"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{id}/log": {
         parameters: {
             query?: never;
@@ -10028,6 +10045,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OperationError"];
+                };
+            };
+        };
+    };
+    getRunListing: {
+        parameters: {
+            query?: {
+                /** @description The project the request works in: the project new work and saved artifacts go to, whose runtimes and saved work it uses, and that narrows lists. Empty is the default project; operations on an existing resource use the resource's project. */
+                project?: string;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The run as listed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Run"];
+                };
+            };
+            /** @description Unknown run, or a deleted run ("run was deleted"). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
                 };
             };
         };

@@ -276,6 +276,12 @@ func paths() map[string]any {
 					"503": operationFailure("The server is shutting down."),
 				}),
 		},
+		"/api/v1/runs/{id}/listing": map[string]any{"get": op("getRunListing",
+			"A run as the run list shows it: its state and, once done, the summary of its report, without the report. It reads a run off the list's pages without the cost of its evidence.",
+			run, "", map[string]any{
+				"200": reply("The run as listed.", ref("Run")),
+				"404": failure("Unknown run, or a deleted run (\"run was deleted\")."),
+			})},
 		"/api/v1/runs/{id}/report": map[string]any{"get": op("getReport",
 			"The complete report, identical to the CLI's JSON output.",
 			append(run, map[string]any{"name": "wait", "in": "query", "schema": map[string]any{"type": "boolean"},

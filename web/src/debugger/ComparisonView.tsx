@@ -385,14 +385,17 @@ function BatchStrip({ name, cells, signal }: { name: string; cells: BatchCell[];
 
 /** Side is one identity card: role, the run, its three separate facts, and where and when it ran. */
 function Side({ role, info, run, outcomes }: { role: string; info: ComparedRun; run?: Run; outcomes: string[] }) {
-  const meta = [run && whenText(run.created), sourceText(run?.report), runtimeLabel(info.runtime), info.mode, inputCount(run?.report) !== undefined && `${inputCount(run?.report)} inputs`]
+  // The run list's entry until the run's report is read (useRunDetails).
+  const inputs = inputCount(run?.report) ?? run?.summary?.injected;
+  const scenario = run?.report?.scenario ?? run?.summary?.scenario;
+  const meta = [run && whenText(run.created), sourceText(run?.report), runtimeLabel(info.runtime), info.mode, inputs !== undefined && `${inputs} inputs`]
     .filter(Boolean).join(' · ');
   return (
     <div className="od-cmp__side">
       <span className="od-cmp__role">{role}</span>
       <div className="od-ident">
         <span className="od-ident__marker od-ident__marker--run"><Icon name="run-marker" size={14} />Run {runLabel(info.id)}</span>
-        {run?.report?.scenario && <span className="od-ident__name">{run.report.scenario}</span>}
+        {scenario && <span className="od-ident__name">{scenario}</span>}
         <span style={{ flex: 1 }} />
         <Link to="/" search={{ run: info.id }} className="od-btn od-btn--link od-btn--sm"><span>Open run</span><Icon name="arrow-right" size={14} /></Link>
       </div>

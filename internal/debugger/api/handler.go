@@ -138,6 +138,7 @@ func New(opts Options) *Server {
 	s.mux.HandleFunc("POST /api/v1/runs", s.createRun)
 	s.mux.HandleFunc("GET /api/v1/runs", s.listRuns)
 	s.mux.HandleFunc("GET /api/v1/runs/{id}", s.getRun)
+	s.mux.HandleFunc("GET /api/v1/runs/{id}/listing", s.getRunListing)
 	s.mux.HandleFunc("DELETE /api/v1/runs/{id}", s.deleteRun)
 	s.routeRunRetention()
 	s.mux.HandleFunc("GET /api/v1/runs/{id}/report", s.getReport)
@@ -386,6 +387,16 @@ func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getRun(w http.ResponseWriter, r *http.Request) {
 	run, err := s.runs.GetRun(r.Context(), callerOf(r), r.PathValue("id"))
+	if err != nil {
+		writeFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, runOf(run))
+}
+
+// getRunListing returns a run as the run list shows it, without its report.
+func (s *Server) getRunListing(w http.ResponseWriter, r *http.Request) {
+	run, err := s.runs.GetRunListing(r.Context(), callerOf(r), r.PathValue("id"))
 	if err != nil {
 		writeFailure(w, err)
 		return

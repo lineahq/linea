@@ -16838,6 +16838,52 @@
         "summary": "Keep a run: retention and prune skip it until it is unkept, and it may still be unfinished. Allowed for the run's owner and for an admin. Like every PUT, the request needs Content-Type: application/json, though it has no body."
       }
     },
+    "/api/v1/runs/{id}/listing": {
+      "get": {
+        "operationId": "getRunListing",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The project the request works in: the project new work and saved artifacts go to, whose runtimes and saved work it uses, and that narrows lists. Empty is the default project; operations on an existing resource use the resource's project.",
+            "in": "query",
+            "name": "project",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            },
+            "description": "The run as listed."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Unknown run, or a deleted run (\"run was deleted\")."
+          }
+        },
+        "summary": "A run as the run list shows it: its state and, once done, the summary of its report, without the report. It reads a run off the list's pages without the cost of its evidence."
+      }
+    },
     "/api/v1/runs/{id}/log": {
       "get": {
         "operationId": "getRunLog",

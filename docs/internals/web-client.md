@@ -583,9 +583,12 @@ whole-page "Compare runs" state (`/?run=<a>&compare=<b>`). It is reached from
 the runs drawer, the run list or "Compare with…". The earlier admitted run is
 the baseline (list order, since a pair shares its creation time). It reads the
 newest page of the run list and reads a compared run older than that page on its
-own (`runs/comparedRuns.ts`, merged newest first by `withRuns`; it shares the
-`['run', id]` query with `useRun` and `useRunDetails`, so each run is read
-once), so only a deleted or unreadable run is reported as not in the list.
+own as the list shows it (`GET /runs/{id}/listing`, its summary without the
+report, which a large run makes hundreds of megabytes; `runs/comparedRuns.ts`,
+merged newest first by `withRuns`), so only a deleted or unreadable run is
+reported as not in the list. The comparison does not wait for the runs'
+reports: the side cards show the listing's scenario and input count until
+`useRunDetails` has read them, and the batching card appears then.
 While the server compares, `debugger/Working.tsx` shows a status with the
 elapsed time (`elapsedText` in `runFacts.ts`, tested). It shows the platform
 comparison: eligibility and every inconclusive reason in the open, exporter

@@ -243,8 +243,13 @@ The root Go module is declared in `go.mod`.
   unfinished runs, suite members and the `Options.RunCache` (default 1,000)
   terminal runs read most recently; `GetRun`, `WatchRun` and every run reader
   load a cold run from the repository (`load`), listing reads pages without
-  caching, and the feed updates cached runs and adopts unfinished ones but skips
-  other terminal runs. Opening and a feed reload read unfinished runs only
+  caching handles, and the feed updates cached runs and adopts unfinished ones but skips
+  other terminal runs. Listing reads a run it does not hold, its evidence and
+  bundle included, only once while it is terminal: `listing_cache.go` keeps the
+  list entry, without the report, of up to four full pages of such runs, used
+  for the same record generation with the record's `Kept`.
+  `GetRunListing` (`GET /runs/{id}/listing`) returns one run as listed. Opening
+  and a feed reload read unfinished runs only
   (`RunQuery.Unfinished`), plus the runs stored before run indexes to index them
   once (`RunQuery.Unindexed`), so startup and memory follow the work in flight,
   not history. A run the platform cannot decode fails the reads that name it

@@ -250,6 +250,8 @@ export const api = {
   /** rerunSuite queues a new suite from a finished suite's recorded inputs (202). */
   rerunSuite: (id: string) => call<Suite>('POST', `/api/v1/suites/${encodeURIComponent(id)}/rerun`),
   run: (id: string) => call<Run>('GET', `/api/v1/runs/${encodeURIComponent(id)}`),
+  /** runListing is a run as the run list shows it: its summary, never its report. */
+  runListing: (id: string) => call<Run>('GET', `/api/v1/runs/${encodeURIComponent(id)}/listing`),
   compareRuns: (before: string, after: string) =>
     call<RunComparison>('GET', `/api/v1/runs/${encodeURIComponent(before)}/compare/${encodeURIComponent(after)}`),
   runInputs: (id: string) => call<RunInputs>('GET', `/api/v1/runs/${encodeURIComponent(id)}/inputs`),
