@@ -221,6 +221,12 @@ Every request works in one project. With none named, it works in `default`.
 | HTTP API | The `project` query parameter, such as `GET /api/v1/runs?project=payments`. Naming it twice is refused. |
 | MCP | The `Linea-Project` header, or `?project=` on the MCP URL. `linea_list_projects` lists the projects the caller can use. |
 
+Lists of runs, suites, saved work and captures show only the named project's
+work. With no project named they show every project you may read, which is
+what the CLI and API do without `--project` or `?project=`. Opening a run or
+artifact by its ID works from any project you may read it in, so a link to it
+keeps working after you switch.
+
 A project you hold no permission in is refused as forbidden, as is reading
 another project's run or artifact by its ID.
 

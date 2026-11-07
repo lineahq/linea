@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, setWorkProject } from '../api/client';
 import { Icon } from './Icon';
-import { chooseProject, DEFAULT_PROJECT, workProjects } from './project';
+import { chooseProject, workProjects } from './project';
 
 const KEY = 'linea.project';
 
@@ -64,13 +64,13 @@ export function ProjectMenu() {
   const choose = (id: string) => {
     setOpen(false);
     if (id === current) return;
-    // Requests that named no project already worked in the default one.
-    const reread = current !== '' || id !== DEFAULT_PROJECT;
+    // Reread even when the first known project is the default one: a list
+    // that named no project holds every project the caller may read.
     current = id;
     setWorkProject(id);
     remember(id);
     listeners.forEach((l) => l());
-    if (reread) void client.resetQueries({ predicate: (q) => q.queryKey[0] !== 'session' && q.queryKey[0] !== 'projects' });
+    void client.resetQueries({ predicate: (q) => q.queryKey[0] !== 'session' && q.queryKey[0] !== 'projects' });
   };
 
   useEffect(() => {

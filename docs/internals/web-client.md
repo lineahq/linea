@@ -1180,7 +1180,9 @@ Projects:
   read from `?project=` in the URL, then the `linea.project` localStorage key
   (per-viewer; reads and writes are guarded), else `default`
   (`chooseProject`). Switching resets every query except `session` and
-  `projects`, so no page shows another project's data.
+  `projects`, so no page shows another project's data. That includes the
+  first choice after load, even of `default`: until then requests name no
+  project, and a list without one holds every project the session may read.
 - `/saved/library` (`saved/LibraryPage.tsx`) lists `GET /library`: the items
   shared with the work project, or for `library.publish` holders the whole
   library ("Show"). "Copy into project" copies an item

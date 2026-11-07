@@ -875,13 +875,16 @@ func (s *Service) ListCaptureSessions(ctx context.Context, caller Caller, req Co
 	if err := s.begin(ctx, caller, authz.CaptureRead); err != nil {
 		return nil, err
 	}
+	projects, err := s.listIn(caller, authz.CaptureRead)
+	if err != nil {
+		return nil, err
+	}
 	r := s.collectors
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := r.check(); err != nil {
 		return nil, err
 	}
-	projects := s.projects(caller, authz.CaptureRead)
 	items := make([]CaptureSessionSummary, 0, len(r.sessions))
 	for _, c := range r.sessions {
 		if inProjects(projects, c.view.Project) {

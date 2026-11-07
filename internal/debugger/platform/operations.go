@@ -227,7 +227,11 @@ func (s *Service) ListRuns(ctx context.Context, caller Caller, q RunQuery) (_ *R
 	if err := q.validate(); err != nil {
 		return nil, classify(err, CodeInvalidRequest)
 	}
-	page, err := s.list(ctx, q, s.projects(caller, authz.RunRead))
+	projects, err := s.listIn(caller, authz.RunRead)
+	if err != nil {
+		return nil, err
+	}
+	page, err := s.list(ctx, q, projects)
 	return page, classify(err, CodeInternal)
 }
 

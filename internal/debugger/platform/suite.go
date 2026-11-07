@@ -286,12 +286,15 @@ func (s *Service) ListSuites(ctx context.Context, caller Caller) (_ []Suite, err
 	if err := s.begin(ctx, caller, authz.RunRead); err != nil {
 		return nil, err
 	}
+	projects, err := s.listIn(caller, authz.RunRead)
+	if err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return nil, classify(ErrClosed, CodeUnavailable)
 	}
-	projects := s.projects(caller, authz.RunRead)
 	out := make([]Suite, 0, len(s.suiteOrder))
 	for i := len(s.suiteOrder) - 1; i >= 0; i-- {
 		if suite := s.suites[s.suiteOrder[i]]; inProjects(projects, suite.Project) {
