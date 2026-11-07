@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RecommendationVerification, Report } from '../api/types';
-import { benefitChangeText, benefitText, changeText, componentNode, provenance, recommendationHint, recommendationKinds, recommendationViews, ruleTitle, verifiable, verificationView, verifyProgress } from './recommendations';
+import { benefitChangeText, benefitText, changeText, componentNode, effect, percent, provenance, recommendationHint, recommendationKinds, recommendationViews, ruleTitle, share, verifiable, verificationView, verifyProgress } from './recommendations';
 
 const comp = (kind: string, id: string) => ({ kind, id, type: id.split('/')[0], ref: `${kind}/${id}`, mode: 'real' });
 
@@ -188,5 +188,43 @@ describe('verifyProgress', () => {
   it('shows only the elapsed time without an estimate', () => {
     expect(verifyProgress(3_000)).toEqual({ text: "Running the change on this run's input: 3 s" });
     expect(verifyProgress(3_000, 400)).toEqual({ text: "Running the change on this run's input: 3 s" });
+  });
+});
+
+describe('effect and share', () => {
+  it('words what a change does to the exported data, settled by a verification', () => {
+    expect(effect('unchanged', 'observed')).toEqual({ text: "Exported data stays the same on this run's input.", tone: 'neutral' });
+    expect(effect('unchanged', 'static')?.text).toBe('Exported data stays the same.');
+    expect(effect('unchanged', 'verified_on_input')?.tone).toBe('pass');
+    expect(effect('unchanged', 'differs_on_input')?.tone).toBe('warn');
+    expect(effect('regrouped', 'observed')).toEqual({ text: 'Same records, sent in other batches or groups.', tone: 'neutral' });
+    expect(effect('regrouped', 'differs_on_input')?.tone).toBe('warn');
+    expect(effect('changed', 'verified_on_input')).toEqual({ text: 'Changes what the exporters receive.', tone: 'warn' });
+    expect(effect(undefined, 'observed')).toBeUndefined();
+  });
+
+  it('puts a saving against its total, and gives none without a total', () => {
+    expect(share('records_without_effect', 2217, 160000)).toEqual({ text: "1.4% of the 160,000 record passes through the pipeline's processors", fraction: 2217 / 160000 });
+    expect(share('evaluations_without_effect', 20, 20)?.text).toBe('100% of the 20 evaluations of its statements or conditions');
+    expect(share('new_metric', 1, 4)?.text).toBe('25% of the 4 new metric');
+    expect(share('records_without_effect', 3, undefined)).toBeUndefined();
+    expect(share('records_without_effect', 3, 0)).toBeUndefined();
+    expect(share('records_without_effect', 9, 4)?.fraction).toBe(1);
+  });
+
+  it('words a percentage without a false zero', () => {
+    expect(percent(0)).toBe('0%');
+    expect(percent(0.0004)).toBe('<0.1%');
+    expect(percent(0.05)).toBe('5%');
+    expect(percent(0.0567)).toBe('5.7%');
+    expect(percent(0.456)).toBe('46%');
+  });
+
+  it('adds both to the card view, and formats large counts', () => {
+    const report = { recommendations: [{ rule: 'processor.no_effect', kind: 'redundancy', confidence: 'observed', summary: 's', output: 'unchanged', benefit: { metric: 'records_without_effect', count: 20000, of: 160000 } }] } as unknown as Report;
+    const [v] = recommendationViews(report, 'r1');
+    expect(v.saves).toBe('20,000 records passed through unchanged in this run');
+    expect(v.share?.text).toBe("13% of the 160,000 record passes through the pipeline's processors");
+    expect(v.effect?.tone).toBe('neutral');
   });
 });

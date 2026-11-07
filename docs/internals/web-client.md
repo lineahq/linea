@@ -884,7 +884,11 @@ shows when there are none. A live run says assertions are available when it
 finishes. The
 Recommendations tab (`debugger/RecommendationsTab.tsx`, its count on the tab;
 `debugger/recommendations.ts`, tested) lists them: per recommendation its kind, a title from its rule, the server's summary, the
-suggested change as text, what it would save, its limits and coverage, a
+what the change does to the exported data (`effect`, from the report's
+`output`: stays the same, regrouped, or changes what the exporters receive;
+a verification's confidence settles it), the suggested change as text, what
+it would save with its share of the run's total and a small bar (`share`),
+its limits and coverage, a
 link to each component it names and what it rests on. It words them only:
 it adds, ranks or hides none, and a change is never applied to the draft.
 A recommendation whose change is a processor order has "Verify on this

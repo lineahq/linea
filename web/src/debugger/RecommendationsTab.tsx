@@ -39,9 +39,19 @@ export function RecommendationsTab({ view, setSearch }: { view: RunView; setSear
             <span className="t-body-strong">{x.title}</span>
             {x.pipeline && <span className="od-muted" style={{ fontSize: 12 }}>in <code>{x.pipeline}</code></span>}
           </div>
+          {x.effect && <div className={`od-effect od-effect--${x.effect.tone}`} style={{ fontSize: 12.5 }}>{x.effect.text}</div>}
           <div style={{ fontSize: 12.5 }}>{x.summary}</div>
           {x.change && <div style={{ fontSize: 12.5 }}><span className="od-muted">Suggested change: </span><Text parts={x.change} /></div>}
-          {x.saves && <div className="od-muted" style={{ fontSize: 12.5 }}>{x.saves}</div>}
+          {x.saves && (
+            <div className="od-muted" style={{ fontSize: 12.5, display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span>{x.saves}{x.share && <>: {x.share.text}</>}</span>
+              {x.share && (
+                <div className="od-progress" role="img" aria-label={x.share.text} style={{ maxWidth: 240 }}>
+                  <span style={{ width: `${Math.max(x.share.fraction * 100, 1)}%` }} />
+                </div>
+              )}
+            </div>
+          )}
           {x.blockers.map((b, i) => <div key={i} className="lim-warning" style={{ fontSize: 12 }}>⚠ {b}</div>)}
           {x.coverage.map((c, i) => <div key={i} className="od-muted" style={{ fontSize: 12 }}>{c}</div>)}
           {x.actions.length > 0 && (

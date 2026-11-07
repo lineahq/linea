@@ -54,6 +54,14 @@ const BENEFITS: Record<string, [string, string]> = {
   resource_blocks_merged: ['resource block would merge', 'resource blocks would merge'],
 };
 
+/** What the change's total is, per metric: the thing `benefit.of` counts. */
+const TOTALS: Record<string, string> = {
+  evaluations_without_effect: 'evaluations of its statements or conditions',
+  records_without_effect: "record passes through the pipeline's processors",
+  records_not_processed: "record passes through the pipeline's processors",
+  resource_blocks_merged: 'resource blocks the batch processor sent',
+};
+
 export type Provenance = { text: string; tone: 'observed' | 'verified' | 'preview' };
 
 export interface RecommendationAction {
@@ -75,9 +83,62 @@ export interface RecommendationView {
   summary: string;
   change?: Segment[];
   saves?: string;
+  /** effect says what the change does to the exported data; old reports give none. */
+  effect?: Effect;
+  /** share puts the saving against its total in this run. */
+  share?: Share;
   blockers: string[];
   coverage: string[];
   actions: RecommendationAction[];
+}
+
+export interface Effect {
+  text: string;
+  tone: 'pass' | 'warn' | 'neutral';
+}
+
+export interface Share {
+  text: string;
+  /** fraction is the saving over its total, from 0 to 1. */
+  fraction: number;
+}
+
+const count = (n: number) => n.toLocaleString('en-US');
+
+/**
+ * effect words what applying a recommendation does to the exported data: the
+ * rule's declared output, settled by a verification when there is one.
+ */
+export function effect(output: string | undefined, confidence: string): Effect | undefined {
+  switch (output) {
+    case 'unchanged':
+      if (confidence === 'verified_on_input') return { text: 'Exported data stays the same: verified on this input.', tone: 'pass' };
+      if (confidence === 'differs_on_input') return { text: 'Meant to keep the exported data the same, but it changed on this input.', tone: 'warn' };
+      if (confidence === 'static') return { text: 'Exported data stays the same.', tone: 'neutral' };
+      return { text: "Exported data stays the same on this run's input.", tone: 'neutral' };
+    case 'regrouped':
+      if (confidence === 'differs_on_input') return { text: 'Meant to only regroup records, but the output changed on this input.', tone: 'warn' };
+      return { text: 'Same records, sent in other batches or groups.', tone: 'neutral' };
+    case 'changed':
+      return { text: 'Changes what the exporters receive.', tone: 'warn' };
+  }
+  return undefined;
+}
+
+/** percent words a fraction for a share: one decimal below 10%, never a false 0%. */
+export function percent(fraction: number): string {
+  const p = fraction * 100;
+  if (p > 0 && p < 0.1) return '<0.1%';
+  if (p < 10) return `${Number(p.toFixed(1))}%`;
+  return `${Math.round(p)}%`;
+}
+
+/** share puts a benefit against its total; a benefit without a total has none. */
+export function share(metric: string, n: number, of: number | undefined): Share | undefined {
+  if (!of || of <= 0) return undefined;
+  const fraction = Math.min(1, Math.max(0, n / of));
+  const total = TOTALS[metric] ?? metric.replaceAll('_', ' ');
+  return { text: `${percent(fraction)} of the ${count(of)} ${total}`, fraction };
 }
 
 /** provenance says what a recommendation rests on. */
@@ -129,10 +190,10 @@ export function changeText(c: RecommendationChange, pipeline?: string): Segment[
 }
 
 /** benefitText: what the run shows the change would save. */
-export function benefitText(metric: string, count: number): string {
+export function benefitText(metric: string, n: number): string {
   const words = BENEFITS[metric];
-  if (!words) return `${count} ${metric.replaceAll('_', ' ')}`;
-  return `${count} ${count === 1 ? words[0] : words[1]} in this run`;
+  if (!words) return `${count(n)} ${metric.replaceAll('_', ' ')}`;
+  return `${count(n)} ${n === 1 ? words[0] : words[1]} in this run`;
 }
 
 /**
@@ -181,6 +242,8 @@ export function recommendationViews(report: Report | undefined, runName: string)
       summary: r.summary,
       change: r.change ? changeText(r.change, r.pipeline) : undefined,
       saves: r.benefit ? benefitText(r.benefit.metric, r.benefit.count) : undefined,
+      effect: effect(r.output, r.confidence),
+      share: r.benefit ? share(r.benefit.metric, r.benefit.count, r.benefit.of) : undefined,
       blockers: r.blockers ?? [],
       coverage: r.coverage ?? [],
       actions,

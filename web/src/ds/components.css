@@ -112,6 +112,11 @@
 .od-prov--preview { color: var(--warn); }
 .od-prov--verified { color: var(--pass); }
 
+/* What a suggested change does to the exported data */
+.od-effect { font-weight: 500; color: var(--fg-muted); }
+.od-effect--pass { color: var(--pass); }
+.od-effect--warn { color: var(--warn); }
+
 .od-signal { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 6px 0 4px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--fg-muted); font: 500 11.5px/1 var(--font-sans); background: var(--bg-surface); }
 
 /* ---------- Run facets: never one combined badge ---------- */

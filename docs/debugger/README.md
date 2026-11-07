@@ -215,7 +215,8 @@ values. The report also contains:
 - recommendations: work the run shows was avoidable (a filter condition or
   OTTL statement that never matched, a processor that changed nothing), batch
   settings the input never reached, and orderings that risk data, each with
-  its evidence, what it would save and what the input did not cover. They
+  its evidence, whether it keeps the exported data the same, what it would
+  save as a share of the run's work, and what the input did not cover. They
   are suggestions; nothing changes your configuration. On request
   (Verify on a recommendation in the web client,
   `linea run --verify-recommendations`, or over HTTP or MCP; try
