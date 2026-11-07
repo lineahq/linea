@@ -227,7 +227,7 @@ func TestCapturedRelativeFileURIsKeepCollectorWorkingDirectorySemantics(t *testi
 
 func TestSnapshotDecodingAccountsForRepeatedEscapedRootURI(t *testing.T) {
 	uri := "file:/" + strings.Repeat("&", 3900)
-	snapshot := &Snapshot{data: snapshotData{Schema: snapshotSchema, URIs: []string{uri}, Values: map[string]capturedValue{uri: {Content: []byte("root: bytes")}}, Environment: &EnvironmentPolicy{}}}
+	snapshot := &Snapshot{data: snapshotData{Schema: capturedSchema, URIs: []string{uri}, Values: map[string]capturedValue{uri: {Content: []byte("root: bytes")}}, Environment: &EnvironmentPolicy{}}}
 	raw, err := json.Marshal(snapshot)
 	if err != nil {
 		t.Fatal(err)
@@ -238,5 +238,65 @@ func TestSnapshotDecodingAccountsForRepeatedEscapedRootURI(t *testing.T) {
 	}
 	if _, err := DecodeSnapshot(raw, CaptureLimits{Bytes: 3000}); !errors.Is(err, ErrCaptureLimit) {
 		t.Fatalf("decoded bound was not enforced: %v", err)
+	}
+}
+
+func TestSnapshotOverridesLayerAfterTheRootAndSurviveEncoding(t *testing.T) {
+	factories, _ := registry.Factories()
+	text := "receivers: {otlp: {protocols: {grpc: {}}}}\nprocessors: {batch: {}, filter: {}}\nexporters: {debug: {}}\nservice: {pipelines: {logs: {receivers: [otlp], processors: [batch, filter], exporters: [debug]}}}\n"
+	r, err := CaptureSource(context.Background(), Source{YAML: text}, factories, nil, CaptureLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := r.Snapshot.WithOverrides(nil); err != nil || got != r.Snapshot {
+		t.Fatalf("no overrides = %p, %v; want the same snapshot", got, err)
+	}
+	for _, bad := range []string{"file:other.yaml", "yaml:", "env:X"} {
+		if _, err := r.Snapshot.WithOverrides([]string{bad}); !errors.Is(err, ErrOverride) {
+			t.Fatalf("override %q = %v, want ErrOverride", bad, err)
+		}
+	}
+	over := `yaml:service::pipelines::logs::processors: ["filter","batch"]`
+	s, err := r.Snapshot.WithOverrides([]string{over})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Snapshot.Overrides() != nil || !reflect.DeepEqual(s.Overrides(), []string{over}) {
+		t.Fatalf("overrides = %v and %v", r.Snapshot.Overrides(), s.Overrides())
+	}
+	raw, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeSnapshot(raw, CaptureLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(decoded.SourceBytes()) != text {
+		t.Fatalf("root changed: %q", decoded.SourceBytes())
+	}
+	resolved, err := decoded.Resolve(context.Background(), factories)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, p := range resolved.Config.Service.Pipelines {
+		if got := []string{p.Processors[0].String(), p.Processors[1].String()}; !reflect.DeepEqual(got, []string{"filter", "batch"}) {
+			t.Fatalf("pipeline %s processors = %v", id, got)
+		}
+	}
+	// A captured snapshot is still written as schema 3, and schema 4 needs
+	// overrides while earlier schemas have none.
+	captured, _ := json.Marshal(r.Snapshot)
+	if !bytes.Contains(captured, []byte(`"schema":3`)) {
+		t.Fatalf("captured snapshot schema: %s", captured)
+	}
+	for _, raw := range []string{
+		strings.Replace(string(captured), `"schema":3`, `"schema":4`, 1),
+		strings.Replace(string(raw), `"schema":4`, `"schema":3`, 1),
+		strings.Replace(string(raw), `yaml:service::`, `file:service::`, 1),
+	} {
+		if _, err := DecodeSnapshot([]byte(raw), CaptureLimits{}); !errors.Is(err, ErrSnapshot) {
+			t.Fatalf("invalid snapshot accepted: %s, %v", raw, err)
+		}
 	}
 }

@@ -2,7 +2,7 @@
 // rules in internal/debugger/recommend). This module only words them: it adds
 // no recommendation and drops none, and a change stays a suggestion the user
 // applies to their own configuration.
-import type { Recommendation, RecommendationChange, Report } from '../api/types';
+import type { Recommendation, RecommendationChange, RecommendationVerification, Report } from '../api/types';
 import { nodeKey } from '../graph/layout';
 import type { Segment } from './findings';
 
@@ -16,6 +16,7 @@ const TITLES: Record<string, string> = {
   'filter.no_effect': 'Filter dropped nothing',
   'filter.condition_never_matched': 'Filter condition never matched',
   'filter.after_batch': 'Filter runs after batch',
+  'filter.move_earlier': 'Filter can run earlier',
   'ottl.statement_never_matched': 'Statement never matched',
   'ottl.statement_no_change': 'Statement changed nothing',
   'ottl.duplicate_statement': 'Repeated statement',
@@ -48,6 +49,10 @@ export interface RecommendationAction {
 
 export interface RecommendationView {
   id: string;
+  /** index is the recommendation's position in the report, as the server names it. */
+  index: number;
+  /** verifiable: the server can run the change as a candidate (a processor order). */
+  verifiable: boolean;
   rule: string;
   title: string;
   kind: { label: string; tone: 'warn' | 'plain' };
@@ -124,6 +129,8 @@ export function recommendationViews(report: Report | undefined, runName: string)
     }
     return {
       id: `${i}:${r.rule}`,
+      index: i,
+      verifiable: r.change?.op === 'swap',
       rule: r.rule,
       title: TITLES[r.rule] ?? r.rule,
       kind: KINDS[r.kind] ?? { label: r.kind, tone: 'plain' },
@@ -137,4 +144,53 @@ export function recommendationViews(report: Report | undefined, runName: string)
       actions,
     };
   });
+}
+
+export interface VerificationView {
+  /** provenance replaces the recommendation's own once a verification settles it. */
+  provenance?: Provenance;
+  /** text says what the candidate run showed. */
+  text: string;
+  tone: 'pass' | 'warn' | 'fail' | 'neutral';
+  reasons: string[];
+  /** assertions are the scenario assertions whose outcome the change changed. */
+  assertions: string[];
+  /** candidate is the candidate run's ID, to compare with the run. */
+  candidate: string;
+}
+
+/**
+ * verificationView words a verification's result. It decides nothing: the
+ * confidence and the reasons are the server's comparison.
+ */
+export function verificationView(v: RecommendationVerification, runName: string): VerificationView {
+  const candidate = v.candidate.id;
+  const reasons = (v.comparison?.reasons ?? []).map((r) => r.message);
+  const assertions = (v.comparison?.assertions ?? []).filter((a) => a.changed)
+    .map((a) => `${a.name}: ${a.before ?? 'not evaluated'} in this run, ${a.after ?? 'not evaluated'} with the change`);
+  const base = { reasons, assertions, candidate };
+  if (v.error) return { ...base, text: `The candidate run failed: ${v.error}`, tone: 'fail' };
+  switch (v.confidence) {
+    case 'verified_on_input':
+      return { ...base, provenance: provenance(v.confidence, runName), text: 'With the change, this input gives the same output.', tone: 'pass' };
+    case 'differs_on_input': {
+      const broke = (v.comparison?.assertions ?? []).filter((a) => a.changed && a.before === 'pass' && a.after !== 'pass').length;
+      const text = broke
+        ? `With the change, this input gives a different output and ${broke === 1 ? '1 assertion that passed no longer passes' : `${broke} assertions that passed no longer pass`}.`
+        : 'With the change, this input gives a different output. Compare the runs to see what changed.';
+      return { ...base, provenance: provenance(v.confidence, runName), text, tone: broke ? 'fail' : 'warn' };
+    }
+  }
+  return { ...base, text: 'The comparison was inconclusive.', tone: 'neutral' };
+}
+
+/**
+ * recommendationHint is the Overview's one line about a finished run's
+ * recommendations; none gives no hint.
+ */
+export function recommendationHint(views: RecommendationView[]): string | undefined {
+  if (!views.length) return undefined;
+  const risky = views.filter((v) => v.kind.tone === 'warn').length;
+  const count = `${views.length} ${views.length === 1 ? 'recommendation' : 'recommendations'}`;
+  return risky ? `${count}, ${risky} about data at risk` : count;
 }

@@ -120,3 +120,12 @@
     resources.
   receiver: otlp
   expect: pass
+- id: filter-order
+  title: "Ordering: a filter that depends on an earlier processor"
+  description: >-
+    filter/noise drops the debug logs transform/tag marks, after batch. The
+    debugger recommends moving the filter before batch and names
+    transform/tag as the limit; verifying the recommendation runs the move on
+    this input and shows the debug logs leaving.
+  receiver: otlp
+  expect: pass

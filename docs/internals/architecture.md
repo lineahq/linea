@@ -581,6 +581,9 @@ The root Go module is declared in `go.mod`.
   members. `linea_compare_configs` and `linea_compare_runs` (`tools_compare.go`)
   submit a configuration pair on one input and compare runs, returning the
   comparison and its Markdown; waiting never cancels either run.
+  `linea_verify_recommendation` (`tools_compare.go`) runs one
+  recommendation's change as a candidate and returns its comparison and
+  confidence (`docs/internals/recommendations.md`).
   `linea_list_runtimes`, `linea_build_runtime` (with `sources`) and
   `linea_get_runtime_build` (`tools_runtime.go`) list and build runtimes,
   waiting only to observe, `linea_get_default_runtime` and
@@ -924,7 +927,8 @@ The root Go module is declared in `go.mod`.
   (`environment`, `mocks.files` by path), then the host under the policy, then a
   stand-in string with a reason, never reading what the policy refuses.
   `CaptureSnapshot` captures without component factories, for a runtime that
-  resolves elsewhere. See `docs/internals/config-resolution.md` and
+  resolves elsewhere. `WithOverrides` layers a candidate's `yaml:` overrides
+  after the root (snapshot schema 4; `config-resolution.md`). See `docs/internals/config-resolution.md` and
   `docs/internals/environment-bindings.md`.
 - `internal/debugger/topology/` — static pipeline graph and component execution
   modes derived from a resolved config.

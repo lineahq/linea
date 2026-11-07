@@ -21,9 +21,16 @@ import (
 	"github.com/lineahq/linea/internal/debugger/hostfs"
 )
 
-// snapshotSchema 3 adds scenario files and stand-ins; 1 and 2 stay
-// readable.
-const snapshotSchema = 3
+// snapshotSchema 4 adds provider overrides (WithOverrides); a snapshot
+// without them is still written as schema 3. Schema 3 adds scenario files
+// and stand-ins; 1 to 3 stay readable.
+const snapshotSchema = 4
+
+// capturedSchema is the schema of new captures, which have no overrides.
+const capturedSchema = 3
+
+// ErrOverride rejects a provider override that is not a yaml: URI.
+var ErrOverride = errors.New("invalid configuration override")
 
 var ErrCaptureLimit = errors.New("configuration capture limit exceeded")
 var ErrUncaptured = errors.New("configuration dependency was not captured")
@@ -114,8 +121,13 @@ func DecodeSnapshot(raw []byte, limits CaptureLimits) (*Snapshot, error) {
 	if err := d.Decode(new(any)); err != io.EOF {
 		return nil, ErrSnapshot
 	}
-	if len(data.URIs) != 1 || data.Values == nil {
+	if len(data.URIs) == 0 || data.Values == nil || len(data.URIs) > 1 && data.Schema < 4 || len(data.URIs) == 1 && data.Schema == 4 {
 		return nil, ErrSnapshot
+	}
+	for _, uri := range data.URIs[1:] {
+		if !strings.HasPrefix(uri, "yaml:") {
+			return nil, ErrSnapshot
+		}
 	}
 	if data.Schema == 1 && data.Environment != nil || data.Schema > 1 && data.Environment == nil {
 		return nil, ErrSnapshot
@@ -145,6 +157,12 @@ func DecodeSnapshot(raw []byte, limits CaptureLimits) (*Snapshot, error) {
 	}
 	if strings.HasPrefix(root, "yaml:") && int64(len(root)) > limits.Bytes-used {
 		return nil, ErrCaptureLimit
+	}
+	for _, uri := range data.URIs[1:] {
+		if int64(len(uri)) > limits.Bytes-used {
+			return nil, ErrCaptureLimit
+		}
+		used += int64(len(uri))
 	}
 	if strings.HasPrefix(root, "file:") {
 		if _, ok := data.Values[root]; !ok {
@@ -200,7 +218,7 @@ var providerScheme = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]+$`)
 // SourceBytes returns a fresh copy of the original root config, without rereading
 // the host path. The root URI remains logical source identity, never a temp path.
 func (s *Snapshot) SourceBytes() []byte {
-	if len(s.data.URIs) != 1 {
+	if len(s.data.URIs) == 0 {
 		return nil
 	}
 	uri := s.data.URIs[0]
@@ -208,6 +226,36 @@ func (s *Snapshot) SourceBytes() []byte {
 		return []byte(strings.TrimPrefix(uri, "yaml:"))
 	}
 	return bytes.Clone(s.data.Values[uri].Content)
+}
+
+// WithOverrides returns a copy of the snapshot whose resolution layers the
+// given yaml: URIs after the root, in order, as confmap merges later URIs
+// over earlier ones (a list value replaces the list). The root and every
+// captured value stay as they are: the user's configuration is unchanged,
+// and an override that references a file or environment value not captured
+// fails on retrieval. No overrides returns s.
+func (s *Snapshot) WithOverrides(overrides []string) (*Snapshot, error) {
+	if len(overrides) == 0 {
+		return s, nil
+	}
+	for _, uri := range overrides {
+		if !strings.HasPrefix(uri, "yaml:") || len(uri) == len("yaml:") {
+			return nil, fmt.Errorf("%w: %q is not a yaml: URI", ErrOverride, uri)
+		}
+	}
+	data := s.data
+	data.Schema = snapshotSchema
+	data.URIs = append(slices.Clone(s.data.URIs), overrides...)
+	return &Snapshot{data: data}, nil
+}
+
+// Overrides are the yaml: URIs layered after the root (schema 4), nil for a
+// captured configuration.
+func (s *Snapshot) Overrides() []string {
+	if len(s.data.URIs) < 2 {
+		return nil
+	}
+	return slices.Clone(s.data.URIs[1:])
 }
 
 func (s *Snapshot) Resolve(ctx context.Context, factories otelcol.Factories) (*Resolved, error) {
@@ -414,7 +462,7 @@ func captureWith(ctx context.Context, src Source, env map[string]string, opts Ca
 	if refusal != nil {
 		return nil, nil, refusal
 	}
-	snapshot := &Snapshot{data: snapshotData{Schema: snapshotSchema, URIs: []string{uri}, Values: c.values, Environment: &policy}}
+	snapshot := &Snapshot{data: snapshotData{Schema: capturedSchema, URIs: []string{uri}, Values: c.values, Environment: &policy}}
 	if err != nil {
 		return nil, nil, withStandInHint(err, snapshot.References())
 	}

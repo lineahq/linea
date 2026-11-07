@@ -274,3 +274,65 @@ func TestLateSpansSuggestALongerDecisionWait(t *testing.T) {
 		t.Fatalf("summary = %q", recs[0].Summary)
 	}
 }
+
+// TestFilterMoveEarlierFollowsThePlacementChecks: the filter moves before
+// the leading processors whose checks passed and names the first blocker;
+// behind a batch, filter.after_batch takes the placement's checks instead of
+// its "not checked" blocker.
+func TestFilterMoveEarlierFollowsThePlacementChecks(t *testing.T) {
+	health := analysis.FilterCondition{Index: 0, Condition: `IsMatch(body, "^health")`, Evaluated: 4, Matched: 1, Records: 1}
+	fs := []*analysis.Filtering{filtering(4, 1, analysis.FilterVerified, health)}
+	place := func(checks ...PlacementCheck) []Placement {
+		return []Placement{{Filter: "filter/health", Pipeline: "logs", Signal: "logs", Requests: 1, Records: 4, Dropped: 1, Checks: checks}}
+	}
+	cases := []struct {
+		name       string
+		processors []string
+		placements []Placement
+		rule       string
+		order      []string
+		blockers   []string
+	}{
+		{"to the start", []string{"resource", "attributes", "filter/health"},
+			place(PlacementCheck{Processor: "attributes"}, PlacementCheck{Processor: "resource"}),
+			"filter.move_earlier processor/filter/health,processor/resource,processor/attributes",
+			[]string{"filter/health", "resource", "attributes"}, nil},
+		{"up to a blocker", []string{"memory_limiter", "transform", "filter/health"},
+			place(PlacementCheck{Processor: "transform"}, PlacementCheck{Processor: "memory_limiter", Blocker: "guards"}),
+			"filter.move_earlier processor/filter/health,processor/transform",
+			[]string{"memory_limiter", "filter/health", "transform"}, []string{"guards"}},
+		{"blocked at once", []string{"transform", "filter/health"},
+			place(PlacementCheck{Processor: "transform", Blocker: "reads"}), "", nil, nil},
+		{"after batch, checked", []string{"batch", "transform", "filter/health"},
+			place(PlacementCheck{Processor: "transform"}, PlacementCheck{Processor: "batch", Blocker: "buffers"}),
+			"filter.after_batch processor/batch,processor/filter/health",
+			[]string{"filter/health", "batch", "transform"}, nil},
+		{"after batch, dependent", []string{"batch", "transform", "filter/health"},
+			place(PlacementCheck{Processor: "transform", Blocker: "reads"}),
+			"filter.after_batch processor/batch,processor/filter/health",
+			[]string{"filter/health", "batch", "transform"}, []string{"reads"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			recs := Recommend(Input{Topology: graph(map[string][]string{"logs": c.processors}), Filtering: fs, Placements: c.placements})
+			var found []Recommendation
+			for _, r := range recs {
+				if r.Rule == "filter.move_earlier" || r.Rule == "filter.after_batch" {
+					found = append(found, r)
+				}
+			}
+			if c.rule == "" {
+				if len(found) != 0 {
+					t.Fatalf("rules = %q, want none", rulesOf(found))
+				}
+				return
+			}
+			if got := rulesOf(found); len(got) != 1 || got[0] != c.rule {
+				t.Fatalf("rules = %q, want %q", got, c.rule)
+			}
+			if r := found[0]; !slices.Equal(r.Change.Processors, c.order) || !slices.Equal(r.Blockers, c.blockers) {
+				t.Fatalf("change = %v, blockers %q", r.Change.Processors, r.Blockers)
+			}
+		})
+	}
+}

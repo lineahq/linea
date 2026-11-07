@@ -1,6 +1,9 @@
 package mcp
 
 import (
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -85,5 +88,41 @@ func TestCompareConfigsWaitDoesNotCancelEitherRun(t *testing.T) {
 	r, out = callTool(t, ctx, session, "linea_compare_runs", map[string]any{"before_run_id": "", "after_run_id": after["run_id"]})
 	assertToolError(t, r, out, platform.CodeInvalidRequest, false)
 	r, out = callTool(t, ctx, session, "linea_compare_runs", map[string]any{"before_run_id": "missing", "after_run_id": after["run_id"]})
+	assertToolError(t, r, out, platform.CodeNotFound, false)
+}
+
+// TestVerifyRecommendationToolRunsTheCandidate: logs-cleanup's filter move,
+// verified through MCP, gives the run's output; the summary names no
+// component, and an unknown recommendation is not_found.
+func TestVerifyRecommendationToolRunsTheCandidate(t *testing.T) {
+	ctx, session, service := newTestClient(t, platform.Options{Paths: platform.PathPolicy{Unrestricted: true}})
+	dir := filepath.Join("..", "..", "..", "samples", "logs-cleanup")
+	config, err := os.ReadFile(filepath.Join(dir, "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := service.SubmitRun(ctx, caller, platform.RunRequest{Mode: platform.ModeScenario, Config: platform.Source{Text: string(config)},
+		Scenario: &platform.ScenarioInput{Scenario: platform.Source{Path: filepath.Join(dir, "scenario.yaml")}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep, err := service.GetRunReport(ctx, caller, run.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	move := slices.IndexFunc(rep.Recommendations, func(r platform.Recommendation) bool { return r.Rule == "filter.move_earlier" })
+	if move < 0 {
+		t.Fatalf("no filter.move_earlier in %+v", rep.Recommendations)
+	}
+	r, out := callTool(t, ctx, session, "linea_verify_recommendation", map[string]any{"run_id": run.ID, "recommendation": move})
+	text := r.Content[0].(*sdk.TextContent).Text
+	candidate, _ := out["candidate"].(map[string]any)
+	if r.IsError || out["confidence"] != "verified_on_input" || candidate["state"] != "done" || !strings.HasSuffix(text, "(verified_on_input).") {
+		t.Fatalf("text %q, result %+v", text, out)
+	}
+	if strings.Contains(text, "filter/health") {
+		t.Fatalf("text %q names a component", text)
+	}
+	r, out = callTool(t, ctx, session, "linea_verify_recommendation", map[string]any{"run_id": run.ID, "recommendation": len(rep.Recommendations)})
 	assertToolError(t, r, out, platform.CodeNotFound, false)
 }

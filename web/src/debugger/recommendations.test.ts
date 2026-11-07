@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { Report } from '../api/types';
-import { benefitText, changeText, componentNode, provenance, recommendationViews } from './recommendations';
+import type { RecommendationVerification, Report } from '../api/types';
+import { benefitText, changeText, componentNode, provenance, recommendationHint, recommendationViews, verificationView } from './recommendations';
 
 const comp = (kind: string, id: string) => ({ kind, id, type: id.split('/')[0], ref: `${kind}/${id}`, mode: 'real' });
 
@@ -80,5 +80,65 @@ describe('componentNode', () => {
     expect(componentNode(r, 'processor/batch', 'logs/pager')).toBe('logs/archive|processor/batch');
     expect(componentNode(r, 'exporter/debug')).toBe('exporter/debug');
     expect(componentNode(r, 'processor/attributes')).toBeUndefined();
+  });
+});
+
+describe('verification', () => {
+  it('marks only processor-order changes verifiable, by their report position', () => {
+    const views = recommendationViews(report([
+      { rule: 'config.unused_component', kind: 'redundancy', confidence: 'static', summary: 'Unused.' },
+      { rule: 'filter.after_batch', kind: 'ordering', confidence: 'observed', pipeline: 'logs/archive', summary: 'Late.', change: { op: 'swap', processors: ['transform/route', 'batch'] } },
+      { rule: 'sampling.late_spans', kind: 'risk', confidence: 'observed', summary: 'Late.', change: { op: 'set_option', component: 'tail_sampling', option: 'decision_wait' } },
+    ]), 'abc');
+    expect(views.map((v) => [v.index, v.verifiable])).toEqual([[0, false], [1, true], [2, false]]);
+  });
+
+  const verification = (v: Partial<RecommendationVerification>) =>
+    ({ run: 'r1', recommendation: 1, rule: 'filter.after_batch', candidate: { id: 'c1' }, ...v }) as RecommendationVerification;
+
+  it('words what the server comparison found and keeps its reasons', () => {
+    expect(verificationView(verification({ confidence: 'verified_on_input' }), 'abc')).toMatchObject({
+      provenance: { text: 'Verified on the input of run abc', tone: 'verified' }, tone: 'pass', candidate: 'c1',
+    });
+    expect(verificationView(verification({ confidence: 'differs_on_input' }), 'abc')).toMatchObject({
+      provenance: { text: 'Changes the output on the input of run abc', tone: 'preview' }, tone: 'warn',
+    });
+    const inconclusive = verificationView(verification({ comparison: { reasons: [{ code: 'x', message: 'Inputs differ.' }] } as RecommendationVerification['comparison'] }), 'abc');
+    expect(inconclusive.provenance).toBeUndefined();
+    expect(inconclusive).toMatchObject({ tone: 'neutral', reasons: ['Inputs differ.'] });
+    expect(verificationView(verification({ error: 'boom' }), 'abc')).toMatchObject({ tone: 'fail', text: 'The candidate run failed: boom' });
+  });
+});
+
+describe('verification assertions', () => {
+  const verification = (v: Partial<RecommendationVerification>) =>
+    ({ run: 'r1', recommendation: 0, rule: 'filter.after_batch', candidate: { id: 'c1' }, confidence: 'differs_on_input', ...v }) as RecommendationVerification;
+
+  it('names the assertions a different output broke', () => {
+    const v = verificationView(verification({ comparison: { assertions: [
+      { name: 'debug logs are dropped', before: 'pass', after: 'fail', changed: true },
+      { name: 'unchanged', before: 'pass', after: 'pass', changed: false },
+    ] } as RecommendationVerification['comparison'] }), 'abc');
+    expect(v).toMatchObject({
+      tone: 'fail',
+      text: 'With the change, this input gives a different output and 1 assertion that passed no longer passes.',
+      assertions: ['debug logs are dropped: pass in this run, fail with the change'],
+    });
+  });
+
+  it('keeps the plain wording when no assertion changed', () => {
+    expect(verificationView(verification({}), 'abc')).toMatchObject({ tone: 'warn', assertions: [] });
+  });
+});
+
+describe('recommendationHint', () => {
+  it('counts the recommendations and those about data at risk', () => {
+    const views = recommendationViews(report([
+      { rule: 'config.unused_component', kind: 'redundancy', confidence: 'static', summary: 'Unused.' },
+      { rule: 'sampling.late_spans', kind: 'risk', confidence: 'observed', summary: 'Late.' },
+    ]), 'abc');
+    expect(recommendationHint(views)).toBe('2 recommendations, 1 about data at risk');
+    expect(recommendationHint(views.slice(0, 1))).toBe('1 recommendation');
+    expect(recommendationHint([])).toBeUndefined();
   });
 });

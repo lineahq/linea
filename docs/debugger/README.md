@@ -216,7 +216,11 @@ values. The report also contains:
   OTTL statement that never matched, a processor that changed nothing), batch
   settings the input never reached, and orderings that risk data, each with
   its evidence, what it would save and what the input did not cover. They
-  are suggestions; nothing changes your configuration;
+  are suggestions; nothing changes your configuration. On request
+  (Verify on a recommendation in the web client,
+  `linea run --verify-recommendations`, or over HTTP or MCP; try
+  `samples/filter-order`), a suggested processor order runs on the same input and the output is
+  compared with the run's;
 - mocked dependencies and stand-ins: components outside the distribution, and
   references with no value supplied.
 

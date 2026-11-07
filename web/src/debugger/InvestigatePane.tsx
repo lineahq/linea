@@ -7,8 +7,9 @@ import { EventsList } from '../inspect/EventsList';
 import { INVESTIGATE_TABS, RUN_TABS } from '../workspace/inspectorTabs';
 import { RunOverview } from './RunOverview';
 import { RecordsTab } from './RecordsTab';
+import { RecommendationsTab } from './RecommendationsTab';
 
-/** Props of the Investigate state's left pane (Overview, Records, Timeline). */
+/** Props of the Investigate state's left pane (Overview, Records, Timeline, Recommendations). */
 export interface InvestigatePaneProps {
   runId: string;
   view: RunView;
@@ -22,7 +23,8 @@ const RUN_TAB_IDS = RUN_TABS.map((t) => t.id);
 /**
  * InvestigatePane is the left pane of a selected run: whole-run views only.
  * Overview is the run's outcome and findings, Records follows record
- * journeys and Timeline lists the recorded events; component views live in
+ * journeys, Timeline lists the recorded events and Recommendations lists the
+ * report's suggestions; component views live in
  * the bottom pane. The URL's `tab` names one of them when no component tab is
  * chosen; the pane remembers its own tab while a component tab is.
  */
@@ -34,6 +36,7 @@ export function InvestigatePane({ runId, view, search, setSearch }: InvestigateP
   }, [urlTab]);
 
   const records = view.run?.report?.lineage?.length;
+  const recommendations = view.live ? undefined : view.run?.report?.recommendations?.length;
   const choose = (id: string) => {
     setTab(id);
     // A component tab in the URL belongs to the bottom pane; leave it alone.
@@ -69,6 +72,7 @@ export function InvestigatePane({ runId, view, search, setSearch }: InvestigateP
           >
             {t.label}
             {t.id === 'journey' && records !== undefined && <span className="od-tab__count">{records}</span>}
+            {t.id === 'recommendations' && !!recommendations && <span className="od-tab__count">{recommendations}</span>}
           </button>
         ))}
       </div>
@@ -77,6 +81,8 @@ export function InvestigatePane({ runId, view, search, setSearch }: InvestigateP
           <RecordsTab view={view} search={search} setSearch={setSearch} />
         ) : tab === 'events' ? (
           <EventsList events={view.events} onStep={(s) => setSearch({ node: s.node, input: s.input, record: undefined, tab: 'telemetry', view: undefined })} />
+        ) : tab === 'recommendations' ? (
+          <RecommendationsTab view={view} setSearch={setSearch} />
         ) : tab === 'compare' ? (
           <ComparePanel runId={runId} other={search.compare} onOther={(compare) => setSearch({ compare })} />
         ) : (

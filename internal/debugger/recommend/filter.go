@@ -168,7 +168,13 @@ func filterAfterBatch(in Input) []Recommendation {
 		order = slices.Insert(order, batch, r.processor)
 		var blockers []string
 		if between := ids[batch+1 : at]; len(between) > 0 {
-			blockers = append(blockers, fmt.Sprintf("Not checked: the filter would run before %s; whether its conditions read what they set is not verified on this input.", strings.Join(between, ", ")))
+			pl, ok := placementFor(in, r.processor, r.pipeline)
+			switch {
+			case !ok:
+				blockers = append(blockers, fmt.Sprintf("Not checked: the filter would run before %s; whether its conditions read what they set is not verified on this input.", strings.Join(between, ", ")))
+			case pl.movable() < len(between):
+				blockers = append(blockers, pl.blocker())
+			}
 		}
 		out = append(out, Recommendation{
 			Kind: KindOrdering, Confidence: ConfidenceObserved, Pipeline: r.pipeline,

@@ -94,6 +94,7 @@ export type GroupRequest = S['GroupRequest'];
 export type GroupAttribute = S['GroupAttribute'];
 export type Recommendation = S['Recommendation'];
 export type RecommendationChange = S['ConfigChange'];
+export type RecommendationVerification = S['RecommendationVerification'];
 export type RecommendationEvidence = S['Evidence'];
 export type Suite = S['Suite'];
 export type SuiteRequest = S['SuiteRequest'];

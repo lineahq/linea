@@ -6,9 +6,10 @@ export const RUN_TABS: InspectorTab[] = [
   { id: 'run', label: 'Overview', purpose: 'Run outcome, captured totals, checks and evidence limits across all pipelines.' },
   { id: 'journey', label: 'Records', purpose: 'Where records went across the whole run. Open a record to follow its path.' },
   { id: 'events', label: 'Timeline', purpose: 'Recorded execution order across all components. Open an event to inspect its payload.' },
+  { id: 'recommendations', label: 'Recommendations', purpose: 'Suggestions from this run’s evidence, each with what it rests on. Verify a processor order on this run’s input.' },
   { id: 'compare', label: 'Compare runs', purpose: 'Compare this run with another run: the outcome, each exporter’s records and the injected records that ended or changed differently.' },
 ];
-/** The three views of the Investigate left pane; Compare runs is reached from the run header. */
+/** The four views of the Investigate left pane; Compare runs is reached from the run header. */
 export const INVESTIGATE_TABS: InspectorTab[] = RUN_TABS.filter((t) => t.id !== 'compare');
 
 /** Before any run the component's views explain what the next run will do. */

@@ -82,7 +82,7 @@ var unsupportedScheme = regexp.MustCompile(`scheme "([A-Za-z][A-Za-z0-9+.-]+)" i
 // sorted by scheme and target.
 func (s *Snapshot) References() []Reference {
 	root := ""
-	if len(s.data.URIs) == 1 {
+	if len(s.data.URIs) > 0 {
 		root = s.data.URIs[0]
 	}
 	where := referenceLocations(s.SourceBytes())

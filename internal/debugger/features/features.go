@@ -15,6 +15,7 @@ import (
 	"slices"
 
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/pipeline"
 
 	"github.com/lineahq/linea/internal/debugger/analysis"
 	"github.com/lineahq/linea/internal/debugger/ottldebug"
@@ -108,6 +109,95 @@ type SamplingFunc func(ctx context.Context, processor, pipeline string, cfg comp
 // returned for the input, if any.
 type FilterFunc func(ctx context.Context, processor string, cfg component.Config, inputSeq int, input telemetry.Payload, outputSeq int, output *telemetry.Payload, stageError string) (*analysis.Filtering, error)
 
+// FilterVerdictFunc evaluates a filter processor's conditions on any
+// payload and returns the positions of the items they would remove (refs
+// as in analysis.FilterDrop); reason is set when the verdict cannot be
+// determined.
+type FilterVerdictFunc func(ctx context.Context, cfg component.Config, input telemetry.Payload) (drops []string, reason string)
+
+// Level is where in a payload a field lives.
+type Level string
+
+const (
+	LevelResource Level = "resource"
+	LevelScope    Level = "scope"
+	// LevelRecord: the record itself (log record, span or data point).
+	LevelRecord Level = "record"
+)
+
+// FieldRead is one field a condition reads: its level, its top field as
+// OTTL names it ("attributes", "body", "severity_text") and the first map
+// key below it, if literal. Event is the span event field a span event
+// condition reads (Field is then "events").
+type FieldRead struct {
+	Level Level
+	Field string
+	Key   string
+	Event string
+}
+
+// FilterReadsFunc lists the fields a filter processor's conditions for a
+// signal read; reason is set when they cannot be listed.
+type FilterReadsFunc func(cfg component.Config, signal pipeline.Signal) (reads []FieldRead, reason string)
+
+// WritesFunc lists the fields a processor's configuration for a signal may
+// write, as FieldRead values (an empty Key is any key of the field); reason
+// is set when they cannot be listed, which callers must treat as writing
+// everything.
+type WritesFunc func(cfg component.Config, signal pipeline.Signal) (writes []FieldRead, reason string)
+
+// PathSegment is one segment of an OTTL path: its name and its first map
+// key when that key is a literal string.
+type PathSegment struct {
+	Name string
+	Key  string
+}
+
+// PathField maps an OTTL path, given by its segments, in context ctx to the
+// level and field it names. pathContext is the context the parser resolved
+// for the path, if any. A leading context name is the context's own prefix
+// (log.attributes) or another level (resource.attributes from the log
+// context). Cache paths name no telemetry (ok is false).
+func PathField(ctx, pathContext string, segs []PathSegment) (f FieldRead, ok bool) {
+	if len(segs) == 0 {
+		return FieldRead{}, false
+	}
+	level := levelOf(ctx)
+	if pathContext != "" && pathContext != ctx {
+		level = levelOf(pathContext)
+	}
+	switch name := segs[0].Name; {
+	case name == ctx && len(segs) > 1:
+		segs = segs[1:]
+	case (name == "resource" || name == "scope" || name == "instrumentation_scope") && len(segs) > 1:
+		level = levelOf(name)
+		segs = segs[1:]
+	case name == "span" && ctx == "spanevent" && len(segs) > 1:
+		// A span event path naming its span.
+		segs = segs[1:]
+		ctx = "span"
+	}
+	if segs[0].Name == "cache" {
+		return FieldRead{}, false
+	}
+	f = FieldRead{Level: level, Field: segs[0].Name, Key: segs[0].Key}
+	if ctx == "spanevent" && level == LevelRecord {
+		// Span events are fields of their span's record.
+		f.Field, f.Event = "events", segs[0].Name
+	}
+	return f, true
+}
+
+func levelOf(ctx string) Level {
+	switch ctx {
+	case "resource":
+		return LevelResource
+	case "scope", "instrumentation_scope":
+		return LevelScope
+	}
+	return LevelRecord
+}
+
 // The provided functions; nil when the runtime lacks the feature. They are
 // set only during package initialization.
 var (
@@ -117,10 +207,16 @@ var (
 	routing  RoutingFunc
 	sampling SamplingFunc
 	filter   FilterFunc
+	verdict  FilterVerdictFunc
+	reads    FilterReadsFunc
+	writes   WritesFunc
 )
 
-// ProvideTransform provides OTTLReplay. Call it only from an init function.
-func ProvideTransform(r ReplayFunc, e EvaluateFunc) { replay, evaluate = r, e }
+// ProvideTransform provides OTTLReplay and the fields a transform
+// processor's statements write. Call it only from an init function.
+func ProvideTransform(r ReplayFunc, e EvaluateFunc, w WritesFunc) {
+	replay, evaluate, writes = r, e, w
+}
 
 // ProvideCount provides CountAggregation. Call it only from an init function.
 func ProvideCount(f CountFunc) { count = f }
@@ -135,13 +231,19 @@ func ProvideSampling(f SamplingFunc) { sampling = f }
 
 // ProvideFilter provides FilterExplanation. Call it only from an init
 // function.
-func ProvideFilter(f FilterFunc) { filter = f }
+func ProvideFilter(f FilterFunc, v FilterVerdictFunc, r FilterReadsFunc) {
+	filter, verdict, reads = f, v, r
+}
 
 // Replay is the transform statement replay, or nil.
 func Replay() ReplayFunc { return replay }
 
 // Evaluate is the transform statement evaluation of OTTL previews, or nil.
 func Evaluate() EvaluateFunc { return evaluate }
+
+// TransformWrites lists the fields a transform processor's statements
+// write, or nil.
+func TransformWrites() WritesFunc { return writes }
 
 // Count is the count connector explanation, or nil.
 func Count() CountFunc { return count }
@@ -155,11 +257,17 @@ func Sampling() SamplingFunc { return sampling }
 // Filter is the filter processor explanation, or nil.
 func Filter() FilterFunc { return filter }
 
+// FilterVerdict is the filter processor's verdict on any payload, or nil.
+func FilterVerdict() FilterVerdictFunc { return verdict }
+
+// FilterReads lists the fields a filter processor's conditions read, or nil.
+func FilterReads() FilterReadsFunc { return reads }
+
 // Has reports whether this process provides the feature.
 func Has(n Name) bool {
 	switch n {
 	case OTTLReplay:
-		return replay != nil && evaluate != nil
+		return replay != nil && evaluate != nil && writes != nil
 	case CountAggregation:
 		return count != nil
 	case RoutingExplanation:
@@ -167,7 +275,7 @@ func Has(n Name) bool {
 	case SamplingExplanation:
 		return sampling != nil
 	case FilterExplanation:
-		return filter != nil
+		return filter != nil && verdict != nil && reads != nil
 	}
 	return false
 }

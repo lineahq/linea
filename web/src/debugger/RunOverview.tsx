@@ -8,7 +8,7 @@ import { endpointText, simulatedEndpoints } from '../inspect/extensions';
 import { Icon } from '../ui/Icon';
 import { assertionRows, coverage, environmentRows, facets, hasStandIns, problems } from './overview';
 import { keyFindings, type FindingAction, type Segment } from './findings';
-import { recommendationViews } from './recommendations';
+import { recommendationHint, recommendationViews } from './recommendations';
 import { runLabel } from './runFacts';
 import { stopNode } from './recordList';
 import { keepsRunLog } from './runLog';
@@ -38,7 +38,7 @@ export function RunOverview({ view, setSearch }: { view: RunView; setSearch(patc
   const res = rep?.result;
   const findings = useMemo(() => (view.live ? [] : keyFindings(rep)), [rep, view.live]);
   const rows = useMemo(() => coverage(rep, view.events), [rep, view.events]);
-  const recs = useMemo(() => (view.live || !r ? [] : recommendationViews(rep, runLabel(r.id))), [rep, r, view.live]);
+  const hint = useMemo(() => (view.live || !r ? undefined : recommendationHint(recommendationViews(rep, runLabel(r.id)))), [rep, r, view.live]);
   if (!r) {
     return (
       <div className="od-muted" style={{ padding: 14 }} role={view.error ? 'alert' : 'status'}>
@@ -134,35 +134,11 @@ export function RunOverview({ view, setSearch }: { view: RunView; setSearch(patc
         </section>
       )}
 
-      {recs.length > 0 && (
-        <section style={section} aria-label="Recommendations">
-          <h2 className="od-section-label" style={label}>Recommendations</h2>
-          <div className="od-muted" style={{ fontSize: 12 }}>Suggestions from this run's evidence. Nothing here changes your configuration; check each against your own traffic.</div>
-          {recs.map((x) => (
-            <div key={x.id} className="od-card" style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <span className={`od-chip od-chip--plain${x.kind.tone === 'warn' ? ' od-chip--warn' : ''}`}>{x.kind.label}</span>
-                <span className="t-body-strong">{x.title}</span>
-                {x.pipeline && <span className="od-muted" style={{ fontSize: 12 }}>in <code>{x.pipeline}</code></span>}
-              </div>
-              <div style={{ fontSize: 12.5 }}>{x.summary}</div>
-              {x.change && <div style={{ fontSize: 12.5 }}><span className="od-muted">Suggested change: </span><Text parts={x.change} /></div>}
-              {x.saves && <div className="od-muted" style={{ fontSize: 12.5 }}>{x.saves}</div>}
-              {x.blockers.map((b, i) => <div key={i} className="lim-warning" style={{ fontSize: 12 }}>⚠ {b}</div>)}
-              {x.coverage.map((c, i) => <div key={i} className="od-muted" style={{ fontSize: 12 }}>{c}</div>)}
-              {x.actions.length > 0 && (
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  {x.actions.map((a) => (
-                    <button key={a.node} type="button" className="od-btn od-btn--link od-btn--sm" onClick={() => open(a.node)}>
-                      <span>{a.label}</span><Icon name="arrow-right" size={14} />
-                    </button>
-                  ))}
-                </div>
-              )}
-              <span className={`od-prov od-prov--${x.provenance.tone}`} title={x.rule}><Icon name="eye" size={12} />{x.provenance.text}</span>
-            </div>
-          ))}
-        </section>
+      {hint && (
+        <button type="button" className="od-btn od-btn--link od-btn--sm" style={{ alignSelf: 'flex-start' }}
+          onClick={() => setSearch({ tab: 'recommendations', view: undefined })}>
+          <Icon name="flask-conical" size={14} /><span>{hint}</span><Icon name="arrow-right" size={14} />
+        </button>
       )}
 
       {asr.length > 0 && (

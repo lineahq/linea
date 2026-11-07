@@ -30,6 +30,38 @@ type compareRunsInput struct {
 	Ignore      []string `json:"ignore,omitempty" jsonschema:"OTTL paths whose differences are counted but do not make the runs different, such as log.attributes[\"request.id\"]."`
 }
 
+type verifyRecommendationInput struct {
+	RunID          string `json:"run_id" jsonschema:"Plain ID of a finished run."`
+	Recommendation int    `json:"recommendation" jsonschema:"Position of the recommendation in the run's report.recommendations, as its evidence ref recommendation:<n> names it."`
+}
+
+// verificationResult is a recommendation verification with the candidate run
+// in the shape the run tools return.
+type verificationResult struct {
+	RunID          string               `json:"run_id"`
+	Recommendation int                  `json:"recommendation"`
+	Rule           string               `json:"rule"`
+	Overrides      []string             `json:"overrides"`
+	Candidate      runResult            `json:"candidate"`
+	Confidence     string               `json:"confidence,omitempty"`
+	Comparison     *platform.Comparison `json:"comparison,omitempty"`
+	Error          string               `json:"error,omitempty"`
+}
+
+// summary states the outcome without component names or values.
+func (r verificationResult) summary() string {
+	text := fmt.Sprintf("Recommendation %d (%s) of run %s: candidate run %s ", r.Recommendation, r.Rule, r.RunID, r.Candidate.RunID)
+	switch {
+	case r.Error != "":
+		return text + "failed."
+	case r.Confidence == string(platform.ConfidenceVerifiedOnInput):
+		return text + "gave the same output on the run's inputs (verified_on_input)."
+	case r.Confidence == string(platform.ConfidenceDiffersOnInput):
+		return text + "changed the output on the run's inputs (differs_on_input)."
+	}
+	return text + "could not be compared conclusively; see comparison.reasons."
+}
+
 // comparisonResult is a comparison with its Markdown rendering. A
 // configuration comparison also carries both runs; while either is
 // unfinished it has no comparison yet.
@@ -136,6 +168,18 @@ func addComparisonTools(server *sdk.Server, service *platform.Service, web webLi
 				return nil, err
 			}
 			return comparisonResult{Comparison: c, Markdown: c.Markdown()}, nil
+		})
+	addTool(server, "linea_verify_recommendation", "Run a recommendation's suggested change on its run's captured inputs and runtime, without changing the user's configuration (the change is layered as provider overrides), and compare the candidate with the run: verified_on_input when the output is the same, differs_on_input when it changes. One more run; waits for it. Only processor-order (swap) changes are verifiable; others are refused as invalid_request.",
+		func(ctx context.Context, in verifyRecommendationInput) (summarized, error) {
+			if in.RunID == "" {
+				return nil, invalidRequest("run_id must not be empty")
+			}
+			v, err := service.VerifyRecommendation(ctx, callerOf(ctx), platform.VerifyRecommendationRequest{Run: in.RunID, Recommendation: in.Recommendation})
+			if err != nil {
+				return nil, err
+			}
+			return verificationResult{RunID: v.Run, Recommendation: v.Recommendation, Rule: v.Rule, Overrides: v.Overrides,
+				Candidate: runView(v.Candidate, web), Confidence: string(v.Confidence), Comparison: v.Comparison, Error: v.Error}, nil
 		})
 }
 

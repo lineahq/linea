@@ -1,0 +1,34 @@
+# Drop debug logs, but only after batch: transform/tag marks them and
+# filter/noise drops what it marked. The debugger recommends moving the
+# filter before batch; verify that recommendation to see why it cannot move
+# alone.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  batch:
+  transform/tag:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        statements:
+          - set(log.attributes["noise"], true) where log.severity_number < SEVERITY_NUMBER_INFO
+  filter/noise:
+    error_mode: ignore
+    logs:
+      log_record:
+        - attributes["noise"] == true
+
+exporters:
+  otlp/backend:
+    endpoint: backend.example.invalid:4317
+
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [batch, transform/tag, filter/noise]
+      exporters: [otlp/backend]

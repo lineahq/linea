@@ -1,5 +1,5 @@
 import type { CollectorGroup, CollectorGroupPage, CollectorGroupMembersPage, CaptureMetadataUpdate } from './types';
-import type { ComparisonRequest, ComparisonRuns, Evaluation, EvaluationInfo, StatementTest, StatementTestRequest } from './types';
+import type { ComparisonRequest, ComparisonRuns, Evaluation, EvaluationInfo, RecommendationVerification, StatementTest, StatementTestRequest } from './types';
 import type {
   CaptureStream, CaptureRecordsPage, CaptureDeriveRequest, CaptureFixture, CaptureScenarioRequest, CaptureScenario, CaptureExportRequest, CaptureExport,
   CaptureSelection,
@@ -259,6 +259,13 @@ export const api = {
   /** testStatementOnRun runs an edited statement on a run's recorded inputs (202 queued, 200 for an invalid candidate). */
   testStatementOnRun: (id: string, req: StatementTestRequest) =>
     call<StatementTest>('POST', `/api/v1/runs/${encodeURIComponent(id)}/statements/test`, req),
+  /**
+   * verifyRecommendation runs recommendation n (its position in the report)
+   * of a finished run as a candidate on the run's inputs and waits for the
+   * comparison (200); one more run. Only processor-order changes verify.
+   */
+  verifyRecommendation: (id: string, n: number) =>
+    call<RecommendationVerification>('POST', `/api/v1/runs/${encodeURIComponent(id)}/recommendations/${n}/verify`, {}),
   /** runEvaluations lists the assertion evaluations recorded beside a run (by MCP), oldest first, without results. */
   runEvaluations: (id: string) => call<EvaluationInfo[]>('GET', `/api/v1/runs/${encodeURIComponent(id)}/evaluations`),
   runEvaluation: (id: string, evaluation: string) =>

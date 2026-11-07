@@ -818,7 +818,7 @@ covered by its tests and `panes.test.ts`. The panes are the left pane (inputs,
 or the run's whole-run views), the graph and the bottom pane (the selected
 component, or the run's progress). The product UI dropped pane expand and
 restore. `inspectorTabs.ts` defines the information architecture. The whole-run
-Overview, Records (record journeys) and Timeline (`INVESTIGATE_TABS`) live in
+Overview, Records (record journeys), Timeline and Recommendations (`INVESTIGATE_TABS`) live in
 the Investigate pane (`debugger/InvestigatePane.tsx`). A failed run, or one
 whose execution ended partial or failed, adds a Collector log disclosure to the
 Overview (`RunLogPanel.tsx`; `keepsRunLog` and `runLogView` in `runLog.ts`,
@@ -828,12 +828,26 @@ checks recorded beside it ("Recorded checks", `RecordedChecks.tsx`,
 `debugger/evaluations.ts`, tested; `GET /runs/{id}/evaluations`), such as an
 agent's `linea_evaluate_assertions`, each opening to its results; the web's own
 checks are not recorded, and nothing shows when there are none. A finished
-run's Overview lists `report.recommendations` in an open "Recommendations"
-section after Key findings (`debugger/recommendations.ts`, tested): per
-recommendation its kind, a title from its rule, the server's summary, the
+run's Overview shows one line about `report.recommendations` after Key
+findings (`recommendationHint`: the count and how many concern data at risk)
+that opens the Recommendations tab; nothing shows when there are none. The
+Recommendations tab (`debugger/RecommendationsTab.tsx`, its count on the tab;
+`debugger/recommendations.ts`, tested) lists them: per recommendation its kind, a title from its rule, the server's summary, the
 suggested change as text, what it would save, its limits and coverage, a
 link to each component it names and what it rests on. It words them only:
 it adds, ranks or hides none, and a change is never applied to the draft.
+A recommendation whose change is a processor order has "Verify on this
+input" (`VerifyRecommendation.tsx`; `verificationView` in
+`recommendations.ts`, tested), disabled without `run.submit`. It is on
+demand, one more run: `POST /runs/{id}/recommendations/{n}/verify` runs the
+change as a candidate on the run's inputs and waits. The card then shows the
+server's outcome (same output, different output, inconclusive with the
+comparison's reasons, or the candidate's failure), each scenario assertion
+whose outcome the change changed, saying so in the outcome when one that
+passed no longer passes, the provenance the
+verification earns, and a link comparing the candidate with the run
+(`/?run=<candidate>&compare=<run>`). The result lives in the card only;
+reopening the run shows the rule's own confidence.
 Component views
 live in the bottom pane (`debugger/ComponentPane.tsx`; before a run,
 `PREPARE_TABS` explains how the component will run and shows its configuration).

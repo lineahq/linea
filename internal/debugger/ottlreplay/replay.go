@@ -64,7 +64,7 @@ const (
 	VerificationNotVerifiable  = ottldebug.VerificationNotVerifiable
 )
 
-func init() { features.ProvideTransform(Replay, Evaluate) }
+func init() { features.ProvideTransform(Replay, Evaluate, Writes) }
 
 // Replay replays cfg's statements for the input's signal on input and
 // compares the result to output, the processor's correlated stage.output

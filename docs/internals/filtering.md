@@ -105,3 +105,35 @@ with up to three removed record names per drop; the web client shows it in
 the filter processor's Filter tab, with each removed record opening its
 path and, for several requests, each condition's counts summed over the
 run's verified requests.
+
+## Fields a condition reads
+
+Verified against `pkg/ottl` v0.162.0 (source, 2026-11-07). Each context's
+path parser and the grammar types are unexported, but `ottl.NewParser[K]`
+takes any `PathExpressionParser`, so a parser built with the processor's
+function set and a path parser that records each `ottl.Path` instead of
+resolving it lists every path a condition reads, through the real grammar.
+The parser fails with "keys indexing ... were not used" unless the recorder
+calls `Keys()` on every segment, and enum symbols need
+`ottl.WithEnumParser`. A path starts with its context name when it carries
+one (`log.attributes`, `resource.attributes`); `cache` paths read no
+telemetry. `filterreplay.Reads` does this for the filter processor (exposed
+as `features.FilterReads`), returning each read's level (resource, scope or
+record), field, first literal key and, in the span event context, the event
+field. `features.PathField` maps a recorded path to that shape for both
+packages. The filter placement checks (`recommendations.md`) compare these
+reads with what the earlier processors' configurations may write and with
+the changes lineage recorded.
+
+The same parser lists what a transform statement writes
+(`ottlreplay.Writes`, exposed as `features.TransformWrites`). An
+`ottl.Factory` cannot be implemented outside `pkg/ottl`, but
+`ottl.NewFactory` can rebuild one from another's name and default
+arguments, so each function is wrapped to receive its parsed `Arguments`
+struct. A path the editor declares as a Setter, GetSetter, PMapGetSetter or
+PSliceGetSetter is written; it is found by calling `Set` on those fields
+(reflectively: `PMapGetSetter.Set` takes a `pcommon.Map`, not `any`), which
+reaches the recorder's setter. Fields declared as getters are read only,
+even when the same recording value is passed. Verified against `pkg/ottl`
+v0.162.0 (2026-11-07); the 0.160 API has the same `NewFactory`,
+`ParseStatement` and `Path.Context`.

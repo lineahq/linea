@@ -5949,6 +5949,44 @@
         ],
         "type": "object"
       },
+      "RecommendationVerification": {
+        "properties": {
+          "candidate": {
+            "$ref": "#/components/schemas/Run"
+          },
+          "comparison": {
+            "$ref": "#/components/schemas/RunComparison"
+          },
+          "confidence": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "overrides": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "recommendation": {
+            "type": "integer"
+          },
+          "rule": {
+            "type": "string"
+          },
+          "run": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "candidate",
+          "recommendation",
+          "rule",
+          "run"
+        ],
+        "type": "object"
+      },
       "RecordLineage": {
         "properties": {
           "connector": {
@@ -16751,6 +16789,102 @@
           }
         },
         "summary": "The tail of a failed or partial run's Collector log: at most 64 KB of whole lines at info level and above, with every environment value the configuration read redacted. Only a run that failed, or whose execution ended partial or failed, keeps it; kept is false otherwise. It is deleted with the run. Sent with Cache-Control: no-store."
+      }
+    },
+    "/api/v1/runs/{id}/recommendations/{n}/verify": {
+      "post": {
+        "operationId": "verifyRecommendation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The recommendation's position in the report's recommendations.",
+            "in": "path",
+            "name": "n",
+            "required": true,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The project the request works in: the project new work and saved artifacts go to, whose runtimes and saved work it uses, and that narrows lists. Empty is the default project; operations on an existing resource use the resource's project.",
+            "in": "query",
+            "name": "project",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecommendationVerification"
+                }
+              }
+            },
+            "description": "The candidate run and its comparison with the run."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The recommendation's change cannot be verified, or n is not a number."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Unknown run or recommendation, or the run's bundle is not kept."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The run is not done, or the candidate would run on another runtime build."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Storage admission or evidence reservation exceeds its limits."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The platform queue is full or execution admission is closed."
+          }
+        },
+        "summary": "Run one recommendation's change as a candidate: the run's captured bundle with the change layered as provider overrides after its unchanged configuration, on the same inputs and runtime, without reading the host. Waits for the candidate, which is an ordinary run, and compares it with the run: confidence verified_on_input when the output is the same, differs_on_input when it differs. Ending the request cancels the candidate. Only swap changes are verifiable. Send an empty JSON body."
       }
     },
     "/api/v1/runs/{id}/report": {

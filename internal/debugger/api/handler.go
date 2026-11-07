@@ -157,6 +157,7 @@ func New(opts Options) *Server {
 	s.mux.HandleFunc("POST /api/v1/runs/{id}/export", s.exportScenario)
 	s.mux.HandleFunc("GET /api/v1/runs/{id}/compare/{after}", s.compareRuns)
 	s.mux.HandleFunc("POST /api/v1/comparisons", s.createComparison)
+	s.mux.HandleFunc("POST /api/v1/runs/{id}/recommendations/{n}/verify", s.verifyRecommendation)
 	s.mux.HandleFunc("POST /api/v1/suites", s.createSuite)
 	s.mux.HandleFunc("GET /api/v1/suites", s.listSuites)
 	s.mux.HandleFunc("GET /api/v1/suites/{id}", s.getSuite)

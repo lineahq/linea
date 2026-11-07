@@ -22,6 +22,7 @@ func runCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs.BoolVar(&req.Normalize, "normalize", false, "canonical order and fixed run IDs and times, for golden files")
 	fs.StringVar(&req.Runtime, "runtime", "", "built runtime to run on (see 'runtime list'), or a runtime image reference; empty is the built-in registry")
 	runtimeCacheFlag(fs)
+	verify := fs.Bool("verify-recommendations", false, "run each suggested change on the run's inputs and compare (one more run per change)")
 	format := fs.String("format", "", "output format: json or text (default: text on a terminal, json otherwise)")
 	verbose := fs.Bool("verbose", false, "write Collector logs to stderr")
 	imports := importEnvFlag(fs)
@@ -50,7 +51,7 @@ func runCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return fail(stderr, err)
 		}
 		return runConnected(ctx, c, api.Request{ConfigLabel: config, FixtureLabel: fixture, ScenarioLabel: scenario, Receiver: receiver,
-			Compare: req.Compare, Normalize: req.Normalize, Runtime: req.Runtime}, *format, stdout, stderr)
+			Compare: req.Compare, Normalize: req.Normalize, Runtime: req.Runtime}, *format, *verify, stdout, stderr)
 	}
 	req.Config = platform.Source{Path: config}
 	if fixture != "" {
@@ -73,20 +74,50 @@ func runCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	service := platform.New(platform.Options{Logger: logger, Environment: env, Paths: platform.PathPolicy{Unrestricted: true}, Runtimes: dockerRuntimes()})
 	defer service.Close()
-	rep, err := service.ExecuteRun(ctx, cliCaller, req)
+	var rep *platform.Report
+	var verified []verification
+	if !*verify {
+		rep, err = service.ExecuteRun(ctx, cliCaller, req)
+	} else {
+		// A verification names a stored run; submit to keep it.
+		var run platform.Run
+		if run, err = service.SubmitRun(ctx, cliCaller, req); err == nil {
+			if rep, err = service.GetRunReport(ctx, cliCaller, run.ID, true); err == nil {
+				verified, err = verifyAll(rep, verifyLocal(ctx, service, run.ID))
+			}
+		}
+	}
 	if err != nil {
 		return fail(stderr, err)
 	}
-	if *format == "json" {
-		err = platform.Encode(stdout, rep)
-	} else {
-		err = writeText(stdout, rep)
-	}
-	if err != nil {
+	if err := writeRun(stdout, stderr, *format, rep, nil, verified); err != nil {
 		return fail(stderr, err)
 	}
 	if rep.Mismatch() {
 		return exitMismatch
 	}
 	return exitOK
+}
+
+// writeRun prints a run's report: raw as the server sent it when given and
+// no verification changed it, and the verifications in text after the
+// report, or on stderr beside JSON.
+func writeRun(stdout, stderr io.Writer, format string, rep *platform.Report, raw []byte, verified []verification) error {
+	var err error
+	switch {
+	case format != "json":
+		err = writeText(stdout, rep)
+		if err == nil {
+			err = writeVerifications(stdout, verified)
+		}
+		return err
+	case raw != nil && verified == nil:
+		_, err = stdout.Write(raw)
+	default:
+		err = platform.Encode(stdout, rep)
+	}
+	if err == nil {
+		err = writeVerifications(stderr, verified)
+	}
+	return err
 }

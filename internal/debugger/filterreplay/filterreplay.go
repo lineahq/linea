@@ -26,7 +26,7 @@ import (
 
 // The explanation is an optional feature: the generated registry imports
 // this package only when the manifest has the filter processor.
-func init() { features.ProvideFilter(Explain) }
+func init() { features.ProvideFilter(Explain, Verdict, Reads) }
 
 // Explain explains one input of a filter processor. output is the
 // processor's correlated emission (nil when it emitted nothing) and
@@ -82,6 +82,35 @@ func Explain(ctx context.Context, processor string, cfg component.Config, inputS
 		out.Notes = append(out.Notes, "a condition failed under error_mode propagate: the processor returned the error and the pipeline dropped the whole request")
 	}
 	return out, nil
+}
+
+// Verdict evaluates the processor's conditions on a payload it did not
+// necessarily receive, such as an earlier stage's input, and returns the
+// positions of the items they would remove. reason is set when the verdict
+// cannot be determined: settings the replay does not evaluate, conditions
+// that do not parse, or a condition failing under error_mode propagate,
+// which drops the whole request.
+func Verdict(ctx context.Context, cfg component.Config, input telemetry.Payload) (drops []string, reason string) {
+	c, ok := cfg.(*filterprocessor.Config)
+	if !ok {
+		return nil, fmt.Sprintf("unexpected configuration %T", cfg)
+	}
+	p, err := newPlan(c, input.Signal)
+	if err != nil {
+		return nil, "the conditions could not be parsed: " + err.Error()
+	}
+	if p.unsupported != "" {
+		return nil, p.unsupported
+	}
+	e := &evaluation{ctx: ctx, conditions: p.conditions}
+	if err := e.run(p.groups, input.Clone()); err != nil {
+		return nil, "a condition failed under error_mode propagate: " + err.Error()
+	}
+	drops = []string{}
+	for _, d := range e.drops {
+		drops = append(drops, d.Ref)
+	}
+	return drops, ""
 }
 
 // run applies the groups in turn, as the processor runs its consumers, and

@@ -350,8 +350,12 @@ func Execute(ctx context.Context, req Request) (*Report, error) {
 	if rep.OTTL, err = replayTransforms(ctx, resolved, rep.Stages, rep.Result); err != nil {
 		return nil, err
 	}
+	placements, err := placeFilters(ctx, resolved, rep.Topology, rep.Stages, rep.Lineage, rep.Filtering, rep.Result)
+	if err != nil {
+		return nil, err
+	}
 	rep.Recommendations = recommend.Recommend(recommend.Input{Topology: rep.Topology, Stages: rep.Stages, Filtering: rep.Filtering,
-		OTTL: rep.OTTL, Batching: rep.Batching, Grouping: rep.Grouping, Sampling: rep.Sampling})
+		OTTL: rep.OTTL, Batching: rep.Batching, Grouping: rep.Grouping, Sampling: rep.Sampling, Placements: placements})
 	if len(assertions) > 0 {
 		if rep.Assertions, err = assertion.Evaluate(assertions, rep.Topology, rep.Result); err != nil {
 			return nil, err

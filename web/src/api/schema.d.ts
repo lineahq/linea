@@ -1246,6 +1246,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{id}/recommendations/{n}/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run one recommendation's change as a candidate: the run's captured bundle with the change layered as provider overrides after its unchanged configuration, on the same inputs and runtime, without reading the host. Waits for the candidate, which is an ordinary run, and compares it with the run: confidence verified_on_input when the output is the same, differs_on_input when it differs. Ending the request cancels the candidate. Only swap changes are verifiable. Send an empty JSON body. */
+        post: operations["verifyRecommendation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{id}/report": {
         parameters: {
             query?: never;
@@ -3372,6 +3389,16 @@ export interface components {
             pipeline?: string;
             rule: string;
             summary: string;
+        };
+        RecommendationVerification: {
+            candidate: components["schemas"]["Run"];
+            comparison?: components["schemas"]["RunComparison"];
+            confidence?: string;
+            error?: string;
+            overrides?: string[];
+            recommendation: number;
+            rule: string;
+            run: string;
         };
         RecordLineage: {
             connector?: string;
@@ -10005,6 +10032,78 @@ export interface operations {
             };
             /** @description Unknown or deleted run. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    verifyRecommendation: {
+        parameters: {
+            query?: {
+                /** @description The project the request works in: the project new work and saved artifacts go to, whose runtimes and saved work it uses, and that narrows lists. Empty is the default project; operations on an existing resource use the resource's project. */
+                project?: string;
+            };
+            header?: never;
+            path: {
+                id: string;
+                /** @description The recommendation's position in the report's recommendations. */
+                n: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The candidate run and its comparison with the run. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecommendationVerification"];
+                };
+            };
+            /** @description The recommendation's change cannot be verified, or n is not a number. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Unknown run or recommendation, or the run's bundle is not kept. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The run is not done, or the candidate would run on another runtime build. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Storage admission or evidence reservation exceeds its limits. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The platform queue is full or execution admission is closed. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

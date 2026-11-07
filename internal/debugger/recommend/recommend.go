@@ -148,6 +148,8 @@ type Input struct {
 	Batching  []*analysis.Batching
 	Grouping  []*analysis.Grouping
 	Sampling  []*analysis.Sampling
+	// Placements are what the run shows about moving each filter earlier.
+	Placements []Placement
 }
 
 type rule struct {
@@ -164,6 +166,7 @@ var rules = []rule{
 	{"filter.no_effect", filterNoEffect},
 	{"filter.condition_never_matched", conditionNeverMatched},
 	{"filter.after_batch", filterAfterBatch},
+	{"filter.move_earlier", filterMoveEarlier},
 	{"ottl.statement_never_matched", statementNeverMatched},
 	{"ottl.statement_no_change", statementNoChange},
 	{"ottl.duplicate_statement", duplicateStatement},

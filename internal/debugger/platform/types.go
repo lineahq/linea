@@ -42,10 +42,12 @@ type (
 	// RecommendationChange the configuration change it suggests.
 	Recommendation       = recommend.Recommendation
 	RecommendationChange = recommend.ConfigChange
-	ArtifactKind         = artifact.Kind
-	ArtifactMetadata     = artifact.Metadata
-	ArtifactRevision     = artifact.RevisionData
-	ArtifactPage         = artifact.Page
+	// Confidence is what a recommendation rests on.
+	Confidence       = recommend.Confidence
+	ArtifactKind     = artifact.Kind
+	ArtifactMetadata = artifact.Metadata
+	ArtifactRevision = artifact.RevisionData
+	ArtifactPage     = artifact.Page
 	// ArtifactRevisionPage is one page of an artifact's revisions, newest first.
 	ArtifactRevisionPage = artifact.RevisionPage
 	SavedArtifact        = artifact.Saved
@@ -66,6 +68,12 @@ const (
 	ChangeSwap            = recommend.OpSwap
 	ChangeRemoveStatement = recommend.OpRemoveStatement
 	ChangeSetOption       = recommend.OpSetOption
+)
+
+// Confidences a verification gives a recommendation (VerifyRecommendation).
+const (
+	ConfidenceVerifiedOnInput = recommend.ConfidenceVerifiedOnInput
+	ConfidenceDiffersOnInput  = recommend.ConfidenceDiffersOnInput
 )
 
 // TimestampsRebased marks a report whose input timestamps were rebased.

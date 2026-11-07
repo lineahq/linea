@@ -14,7 +14,23 @@ Verified against `otelcol v0.162.0`, `confmap v1.68.0`.
   URIs are merged after the file and can override single keys with `::`
   paths, e.g. `yaml:exporters::otlp::endpoint: 127.0.0.1:4317`. The debugger
   never does this to the user's config; only the reference run uses it, to
-  redirect network endpoints.
+  redirect network endpoints, and a recommendation's candidate run, to apply
+  the suggested change beside the unchanged file (below).
+- A `yaml:` URI whose value is a list replaces the list at that key; it is
+  not merged element by element. `yaml:service::pipelines::logs::processors:
+  [a, b]` gives the pipeline exactly `[a, b]`
+  (`TestVerifyRecommendationRunsTheChangeOnTheRunsInputs`, verified against
+  `otelcol v0.162.0` on 2026-11-07).
+
+## Candidate overrides
+
+A sealed snapshot normally holds one URI, the root. A recommendation's
+candidate run (`engine.CandidateRequest`) layers its change as `yaml:` URIs
+after the root (`Snapshot.WithOverrides`): the user's file is captured and
+digested unchanged, and the overrides are recorded beside it. A snapshot with
+overrides is written as schema 4; one without stays schema 3, so existing
+bundles and new ordinary runs read and write as before. `DecodeSnapshot`
+accepts several URIs only at schema 4, and only `yaml:` URIs after the root.
 
 ## Scenario environment
 
