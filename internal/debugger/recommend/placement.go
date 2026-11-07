@@ -108,7 +108,7 @@ func filterMoveEarlier(in Input) []Recommendation {
 				itemNoun(pl.Signal), skipped[0], pick(pl.Dropped, "that", "those"), nounFor(pl.Dropped, itemNoun(pl.Signal)),
 				pick(pl.Dropped, "skips", "skip"), plural(n, "processor")),
 			Evidence: evidence,
-			Benefit:  &Benefit{MetricRecordsNotProcessed, pl.Dropped * n},
+			Benefit:  &Benefit{Metric: MetricRecordsNotProcessed, Count: pl.Dropped * n},
 			Change:   &ConfigChange{Op: OpSwap, Processors: order},
 			Blockers: blockers,
 			Coverage: placementCoverage(pl),

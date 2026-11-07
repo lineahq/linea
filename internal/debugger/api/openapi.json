@@ -553,6 +553,9 @@
           },
           "metric": {
             "type": "string"
+          },
+          "of": {
+            "type": "integer"
           }
         },
         "required": [
@@ -5932,6 +5935,9 @@
             "type": "array"
           },
           "kind": {
+            "type": "string"
+          },
+          "output": {
             "type": "string"
           },
           "pipeline": {

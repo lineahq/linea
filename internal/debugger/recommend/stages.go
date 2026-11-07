@@ -49,7 +49,7 @@ func processorNoEffect(in Input) []Recommendation {
 			Summary: fmt.Sprintf("%s changed none of the %s it received in pipeline %s and dropped none.",
 				s.Component, plural(records, itemNoun(s.Signal)), s.Pipeline),
 			Evidence: []Evidence{{SectionStages, processorRef(s.Component)}},
-			Benefit:  &Benefit{MetricRecordsWithoutEffect, records},
+			Benefit:  &Benefit{Metric: MetricRecordsWithoutEffect, Count: records},
 			Coverage: []string{fmt.Sprintf("Observed on %s; another input may hold records it changes.", plural(len(s.Inputs), "request"))},
 		})
 	}
@@ -82,7 +82,7 @@ func groupingNoEffect(in Input) []Recommendation {
 			Summary: fmt.Sprintf("%s (%s) moved no attribute and merged no resource: none of the %s it received carried its keys, and no two resources were equal.",
 				g.Processor, keys, plural(records, itemNoun(g.Signal))),
 			Evidence: []Evidence{{SectionGrouping, processorRef(g.Processor)}},
-			Benefit:  &Benefit{MetricRecordsWithoutEffect, records},
+			Benefit:  &Benefit{Metric: MetricRecordsWithoutEffect, Count: records},
 			Coverage: []string{fmt.Sprintf("Observed on %s; another input may carry the keys.", plural(len(g.Requests), "request"))},
 		})
 	}

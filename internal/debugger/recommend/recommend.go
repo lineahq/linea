@@ -61,6 +61,22 @@ const (
 	OpSetOption Op = "set_option"
 )
 
+// Output says what applying a recommendation does to what the exporters
+// receive. Each rule states it; a verification confirms or refutes it on the
+// run's input.
+type Output string
+
+const (
+	// OutputUnchanged: the exporters receive the same records.
+	OutputUnchanged Output = "unchanged"
+	// OutputRegrouped: the same records, in other batches, requests or
+	// resource blocks.
+	OutputRegrouped Output = "regrouped"
+	// OutputChanged: the exporters receive other records or values; that
+	// is the change's purpose.
+	OutputChanged Output = "changed"
+)
+
 // Benefit metrics: what the run shows a change would save.
 const (
 	// MetricEvaluationsWithoutEffect: condition or statement evaluations
@@ -103,7 +119,10 @@ type Recommendation struct {
 	// text, an attribute (`resource.attributes["k"]`), a sampling policy's
 	// name. Rule, pipeline, components and subject identify a
 	// recommendation across runs of changed configurations.
-	Subject  string        `json:"subject,omitempty"`
+	Subject string `json:"subject,omitempty"`
+	// Output is what applying the change does to what the exporters
+	// receive, as the rule states it.
+	Output   Output        `json:"output,omitempty"`
 	Summary  string        `json:"summary"`
 	Evidence []Evidence    `json:"evidence,omitempty"`
 	Benefit  *Benefit      `json:"benefit,omitempty"`
@@ -127,6 +146,12 @@ type Evidence struct {
 type Benefit struct {
 	Metric string `json:"metric"`
 	Count  int    `json:"count"`
+	// Of is the total Count is part of, so it can be weighed: for the
+	// record metrics every record a processor of the pipeline received,
+	// for evaluations every evaluation of the component's statements or
+	// conditions, for resource blocks every block the batch processor
+	// sent. Zero when the run does not show it.
+	Of int `json:"of,omitempty"`
 }
 
 // ConfigChange is a suggested configuration change. Applying it is up to the
@@ -175,34 +200,37 @@ type Input struct {
 }
 
 type rule struct {
-	id  string
-	run func(Input) []Recommendation
+	id string
+	// output is what applying the rule's change does to the exporters'
+	// records (Recommendation.Output).
+	output Output
+	run    func(Input) []Recommendation
 }
 
 // rules in catalog order, which is also the order recommendations are listed
 // in.
 var rules = []rule{
-	{"config.memory_limiter_not_first", memoryLimiterNotFirst},
-	{"config.unused_component", unusedComponent},
-	{"batch.chained", batchChained},
-	{"filter.no_effect", filterNoEffect},
-	{"filter.condition_never_matched", conditionNeverMatched},
-	{"filter.after_batch", filterAfterBatch},
-	{"filter.move_earlier", filterMoveEarlier},
-	{"ottl.statement_never_matched", statementNeverMatched},
-	{"ottl.statement_no_change", statementNoChange},
-	{"ottl.duplicate_statement", duplicateStatement},
-	{"attribute.dead_write", attributeDeadWrite},
-	{"processor.no_effect", processorNoEffect},
-	{"grouping.no_effect", groupingNoEffect},
-	{"batch.size_never_reached", sizeNeverReached},
-	{"batch.tiny_batchers", tinyBatchers},
-	{"batch.drops_client_context", batchDropsClientContext},
-	{"grouping.after_batch", groupingAfterBatch},
-	{"sampling.late_spans", lateSpans},
-	{"sampling.policy_never_decides", policyNeverDecides},
-	{"sampling.policy_shadowed", policyShadowed},
-	{"sampling.late_in_pipeline", samplingLateInPipeline},
+	{"config.memory_limiter_not_first", OutputUnchanged, memoryLimiterNotFirst},
+	{"config.unused_component", OutputUnchanged, unusedComponent},
+	{"batch.chained", OutputRegrouped, batchChained},
+	{"filter.no_effect", OutputUnchanged, filterNoEffect},
+	{"filter.condition_never_matched", OutputUnchanged, conditionNeverMatched},
+	{"filter.after_batch", OutputUnchanged, filterAfterBatch},
+	{"filter.move_earlier", OutputUnchanged, filterMoveEarlier},
+	{"ottl.statement_never_matched", OutputUnchanged, statementNeverMatched},
+	{"ottl.statement_no_change", OutputUnchanged, statementNoChange},
+	{"ottl.duplicate_statement", OutputUnchanged, duplicateStatement},
+	{"attribute.dead_write", OutputUnchanged, attributeDeadWrite},
+	{"processor.no_effect", OutputUnchanged, processorNoEffect},
+	{"grouping.no_effect", OutputUnchanged, groupingNoEffect},
+	{"batch.size_never_reached", OutputRegrouped, sizeNeverReached},
+	{"batch.tiny_batchers", OutputRegrouped, tinyBatchers},
+	{"batch.drops_client_context", OutputChanged, batchDropsClientContext},
+	{"grouping.after_batch", OutputRegrouped, groupingAfterBatch},
+	{"sampling.late_spans", OutputChanged, lateSpans},
+	{"sampling.policy_never_decides", OutputUnchanged, policyNeverDecides},
+	{"sampling.policy_shadowed", OutputUnchanged, policyShadowed},
+	{"sampling.late_in_pipeline", OutputUnchanged, samplingLateInPipeline},
 }
 
 // Recommend applies every rule. Rules whose sections are absent produce
@@ -216,6 +244,10 @@ func Recommend(in Input) []Recommendation {
 		found := r.run(in)
 		for i := range found {
 			found[i].Rule = r.id
+			found[i].Output = r.output
+			if b := found[i].Benefit; b != nil && b.Of == 0 {
+				b.Of = benefitTotal(in, r.id, found[i])
+			}
 			if found[i].Components == nil {
 				found[i].Components = []string{}
 			}

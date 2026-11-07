@@ -243,7 +243,7 @@ func groupingAfterBatch(in Input) []Recommendation {
 					id, ids[batch], p.ID, plural(gain.received, "resource block"), plural(gain.requests, "request"), plural(gain.emitted, "resource block"),
 					ids[batch], plural(gain.resources, "resource block"), plural(gain.sends, "send"), gain.distinct,
 					ids[batch], id, plural(gain.distinct, "resource block"), plural(gain.resources, "block"))
-				rec.Benefit = &Benefit{MetricResourcesMerged, gain.resources - gain.distinct}
+				rec.Benefit = &Benefit{Metric: MetricResourcesMerged, Count: gain.resources - gain.distinct, Of: gain.resources}
 				rec.Coverage = []string{fmt.Sprintf("Observed on %s; another input may repeat fewer or more resources within a batch.", plural(gain.requests, "request"))}
 			} else {
 				rec.Confidence = ConfidenceStatic

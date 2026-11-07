@@ -1929,6 +1929,7 @@ export interface components {
         Benefit: {
             count: number;
             metric: string;
+            of?: number;
         };
         BisectCulprit: {
             diff: string;
@@ -3404,6 +3405,7 @@ export interface components {
             coverage?: string[];
             evidence?: components["schemas"]["Evidence"][];
             kind: string;
+            output?: string;
             pipeline?: string;
             rule: string;
             subject?: string;

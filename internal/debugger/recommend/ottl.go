@@ -120,7 +120,7 @@ func statementNeverMatched(in Input) []Recommendation {
 			Summary: fmt.Sprintf("%s never matched: its where clause was false on all %s it was evaluated on in %s, so it changed nothing. If this input holds items it should change, the where clause is wrong rather than unneeded.",
 				t.name(), plural(t.notMatched, contextNoun(t.context)), pipelinesPhrase(t.pipelines)),
 			Evidence: []Evidence{{SectionOTTL, t.ref()}},
-			Benefit:  &Benefit{MetricEvaluationsWithoutEffect, t.notMatched},
+			Benefit:  &Benefit{Metric: MetricEvaluationsWithoutEffect, Count: t.notMatched},
 			Change:   t.change(),
 			Coverage: t.coverage(),
 		})
@@ -143,7 +143,7 @@ func statementNoChange(in Input) []Recommendation {
 			Summary: fmt.Sprintf("%s ran on %s and changed none of them: each already held what it sets.",
 				t.name(), plural(t.matched, contextNoun(t.context))),
 			Evidence: []Evidence{{SectionOTTL, t.ref()}},
-			Benefit:  &Benefit{MetricEvaluationsWithoutEffect, t.matched},
+			Benefit:  &Benefit{Metric: MetricEvaluationsWithoutEffect, Count: t.matched},
 			Change:   t.change(),
 			Coverage: t.coverage(),
 		})
@@ -165,7 +165,7 @@ func duplicateStatement(in Input) []Recommendation {
 			Summary: fmt.Sprintf("%s repeats the statement before it and changed none of the %s it ran on.",
 				t.name(), plural(t.matched, contextNoun(t.context))),
 			Evidence: []Evidence{{SectionOTTL, t.ref()}},
-			Benefit:  &Benefit{MetricEvaluationsWithoutEffect, t.matched},
+			Benefit:  &Benefit{Metric: MetricEvaluationsWithoutEffect, Count: t.matched},
 			Change:   t.change(),
 			Coverage: t.coverage(),
 		})

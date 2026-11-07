@@ -54,7 +54,7 @@ func attributeDeadWrite(in Input) []Recommendation {
 			Summary: fmt.Sprintf("%s set %s on %s in pipeline %s, and %s %s on each of them before any processor read it. If the value is meant to reach the output, %s undoes it; otherwise the write is not needed.",
 				d.Writer, name, plural(d.Records, itemNoun(d.Signal)), d.Pipeline, d.Overwriter, after, d.Overwriter),
 			Evidence: []Evidence{{SectionStages, processorRef(d.Writer)}, {SectionStages, processorRef(d.Overwriter)}},
-			Benefit:  &Benefit{MetricRecordsWithoutEffect, d.Records},
+			Benefit:  &Benefit{Metric: MetricRecordsWithoutEffect, Count: d.Records},
 			Coverage: []string{fmt.Sprintf("Observed on %s; on another input, records %s leaves alone keep the value.",
 				plural(d.Records, itemNoun(d.Signal)), d.Overwriter)},
 		})

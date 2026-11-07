@@ -102,7 +102,7 @@ func TestFilterRulesUseVerifiedCounts(t *testing.T) {
 		t.Fatalf("after batch = %+v, blockers %q", c, recs[0].Blockers)
 	}
 	recs = Recommend(Input{Topology: graph(map[string][]string{"logs": {"filter/health"}}), Filtering: []*analysis.Filtering{filtering(4, 1, analysis.FilterVerified, health, debug)}})
-	if c := recs[0].Change; c.Op != OpRemoveStatement || *c.Index != 1 || c.Text != "severity_number < 5" || recs[0].Benefit.Count != 3 {
+	if c := recs[0].Change; c.Op != OpRemoveStatement || *c.Index != 1 || c.Text != "severity_number < 5" || recs[0].Benefit.Count != 3 || recs[0].Benefit.Of != 7 {
 		t.Fatalf("condition change = %+v, benefit %+v", c, recs[0].Benefit)
 	}
 }
@@ -148,8 +148,14 @@ func TestStatementRulesSeparateNeverMatchedUnchangedAndDuplicates(t *testing.T) 
 			t.Fatalf("%s: change %+v, pipeline %q, coverage %q", r.Rule, r.Change, r.Pipeline, r.Coverage)
 		}
 	}
-	if recs[0].Benefit.Count != 4 || recs[1].Benefit.Count != 4 {
+	// Of counts every statement's evaluations in the two verified replays.
+	if recs[0].Benefit.Count != 4 || recs[1].Benefit.Count != 4 || recs[0].Benefit.Of != 20 || recs[1].Benefit.Of != 20 {
 		t.Fatalf("benefits = %+v, %+v", recs[0].Benefit, recs[1].Benefit)
+	}
+	for _, r := range recs {
+		if r.Output != OutputUnchanged {
+			t.Fatalf("%s output = %q", r.Rule, r.Output)
+		}
 	}
 }
 
@@ -210,7 +216,8 @@ func TestStageRulesNeedEveryInputUnchanged(t *testing.T) {
 	if got := rulesOf(recs); !slices.Equal(got, want) {
 		t.Fatalf("rules = %q, want %q", got, want)
 	}
-	if recs[0].Benefit.Count != 6 {
+	// Of is every record the pipeline's processors received: 6 + 6 + 3.
+	if recs[0].Benefit.Count != 6 || recs[0].Benefit.Of != 15 {
 		t.Fatalf("benefit = %+v", recs[0].Benefit)
 	}
 }
@@ -334,5 +341,21 @@ func TestFilterMoveEarlierFollowsThePlacementChecks(t *testing.T) {
 				t.Fatalf("change = %v, blockers %q", r.Change.Processors, r.Blockers)
 			}
 		})
+	}
+}
+
+// TestEveryRuleStatesItsOutput: each rule says what its change does to the
+// exporters' records, and only the batching and grouping rules regroup.
+func TestEveryRuleStatesItsOutput(t *testing.T) {
+	for _, r := range rules {
+		switch r.output {
+		case OutputUnchanged, OutputChanged:
+			if strings.HasPrefix(r.id, "batch.size") || r.id == "batch.tiny_batchers" {
+				t.Errorf("%s output = %s, want regrouped", r.id, r.output)
+			}
+		case OutputRegrouped:
+		default:
+			t.Errorf("%s has no output", r.id)
+		}
 	}
 }

@@ -76,7 +76,7 @@ func filterNoEffect(in Input) []Recommendation {
 			Summary: fmt.Sprintf("%s dropped none of the %s it received in %s: none of its conditions matched. If this input holds items it should drop, a condition is wrong rather than unneeded.",
 				r.processor, plural(r.records, itemNoun(r.signal)), pipelinesPhrase(r.pipelines)),
 			Evidence: []Evidence{{SectionFiltering, processorRef(r.processor)}},
-			Benefit:  &Benefit{MetricRecordsWithoutEffect, r.records},
+			Benefit:  &Benefit{Metric: MetricRecordsWithoutEffect, Count: r.records},
 			Coverage: []string{requestsCoverage(len(r.requests), r.records, r.signal)},
 		})
 	}
@@ -131,7 +131,7 @@ func conditionNeverMatched(in Input) []Recommendation {
 				Summary: fmt.Sprintf("Condition %s of %s never matched: evaluated %s, it removed nothing; the other conditions removed all %d dropped %s. If this input holds items it should drop, the condition is wrong rather than unneeded.",
 					t.c.Source, r.processor, plural(t.evaluated, "time"), r.dropped, nounFor(r.dropped, itemNoun(r.signal))),
 				Evidence: []Evidence{{SectionFiltering, ref}},
-				Benefit:  &Benefit{MetricEvaluationsWithoutEffect, t.evaluated},
+				Benefit:  &Benefit{Metric: MetricEvaluationsWithoutEffect, Count: t.evaluated},
 				Change:   &ConfigChange{Op: OpRemoveStatement, Component: r.processor, Index: ptr(t.c.Index), Text: t.c.Condition, Path: t.c.Source},
 				Coverage: slices.Clone(coverage),
 			})
@@ -182,7 +182,7 @@ func filterAfterBatch(in Input) []Recommendation {
 			Summary: fmt.Sprintf("%s runs after %s in pipeline %s and dropped %s that %s had already buffered and sent. Placed before it, they are dropped before they are batched.",
 				r.processor, ids[batch], r.pipeline, plural(r.dropped, itemNoun(r.signal)), ids[batch]),
 			Evidence: []Evidence{{SectionTopology, "pipeline/" + r.pipeline}, {SectionFiltering, processorRef(r.processor)}},
-			Benefit:  &Benefit{MetricRecordsNotProcessed, r.dropped},
+			Benefit:  &Benefit{Metric: MetricRecordsNotProcessed, Count: r.dropped},
 			Change:   &ConfigChange{Op: OpSwap, Processors: order},
 			Blockers: blockers,
 		})

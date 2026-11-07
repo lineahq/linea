@@ -299,7 +299,7 @@ func TestGroupingAfterBatch(t *testing.T) {
 				if !slices.Equal(r.Evidence, want) {
 					t.Fatalf("evidence = %+v", r.Evidence)
 				}
-				if r.Benefit == nil || *r.Benefit != (Benefit{MetricResourcesMerged, 2}) {
+				if r.Benefit == nil || *r.Benefit != (Benefit{Metric: MetricResourcesMerged, Count: 2, Of: 3}) {
 					t.Fatalf("benefit = %+v", r.Benefit)
 				}
 			} else if r.Benefit != nil {
