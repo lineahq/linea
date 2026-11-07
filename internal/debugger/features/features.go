@@ -123,6 +123,10 @@ const (
 	LevelScope    Level = "scope"
 	// LevelRecord: the record itself (log record, span or data point).
 	LevelRecord Level = "record"
+	// LevelClient: the request's client context (OTTL otelcol.client and
+	// otelcol.grpc paths), not telemetry. Fields: address, auth (Key an
+	// auth attribute), metadata and grpc_metadata (Key the header).
+	LevelClient Level = "client"
 )
 
 // FieldRead is one field a condition reads: its level, its top field as
@@ -140,11 +144,11 @@ type FieldRead struct {
 // signal read; reason is set when they cannot be listed.
 type FilterReadsFunc func(cfg component.Config, signal pipeline.Signal) (reads []FieldRead, reason string)
 
-// WritesFunc lists the fields a processor's configuration for a signal may
-// write, as FieldRead values (an empty Key is any key of the field); reason
-// is set when they cannot be listed, which callers must treat as writing
-// everything.
-type WritesFunc func(cfg component.Config, signal pipeline.Signal) (writes []FieldRead, reason string)
+// AccessFunc lists the fields a processor's configuration for a signal may
+// read and write, as FieldRead values (an empty Key is any key of the
+// field); reason is set when they cannot be listed, which callers must
+// treat as reading and writing everything.
+type AccessFunc func(cfg component.Config, signal pipeline.Signal) (reads, writes []FieldRead, reason string)
 
 // PathSegment is one segment of an OTTL path: its name and its first map
 // key when that key is a literal string.
@@ -161,6 +165,12 @@ type PathSegment struct {
 func PathField(ctx, pathContext string, segs []PathSegment) (f FieldRead, ok bool) {
 	if len(segs) == 0 {
 		return FieldRead{}, false
+	}
+	if pathContext == "otelcol" || segs[0].Name == "otelcol" {
+		if segs[0].Name == "otelcol" {
+			segs = segs[1:]
+		}
+		return clientField(segs)
 	}
 	level := levelOf(ctx)
 	if pathContext != "" && pathContext != ctx {
@@ -188,6 +198,30 @@ func PathField(ctx, pathContext string, segs []PathSegment) (f FieldRead, ok boo
 	return f, true
 }
 
+// clientField maps an otelcol path below its context name:
+// client.addr, client.auth.attributes["k"], client.metadata["k"],
+// grpc.metadata["k"] (pkg/ottl v0.162.0 contexts/internal/ctxotelcol).
+func clientField(segs []PathSegment) (FieldRead, bool) {
+	if len(segs) < 2 {
+		return FieldRead{}, false
+	}
+	f := FieldRead{Level: LevelClient, Field: segs[1].Name, Key: segs[1].Key}
+	switch {
+	case segs[0].Name == "client" && segs[1].Name == "addr":
+		f.Field = "address"
+	case segs[0].Name == "client" && segs[1].Name == "auth":
+		f.Key = ""
+		if len(segs) > 2 {
+			f.Key = segs[2].Key
+		}
+	case segs[0].Name == "grpc" && segs[1].Name == "metadata":
+		f.Field = "grpc_metadata"
+	case segs[0].Name != "client":
+		return FieldRead{}, false
+	}
+	return f, true
+}
+
 func levelOf(ctx string) Level {
 	switch ctx {
 	case "resource":
@@ -209,13 +243,13 @@ var (
 	filter   FilterFunc
 	verdict  FilterVerdictFunc
 	reads    FilterReadsFunc
-	writes   WritesFunc
+	access   AccessFunc
 )
 
 // ProvideTransform provides OTTLReplay and the fields a transform
-// processor's statements write. Call it only from an init function.
-func ProvideTransform(r ReplayFunc, e EvaluateFunc, w WritesFunc) {
-	replay, evaluate, writes = r, e, w
+// processor's statements access. Call it only from an init function.
+func ProvideTransform(r ReplayFunc, e EvaluateFunc, a AccessFunc) {
+	replay, evaluate, access = r, e, a
 }
 
 // ProvideCount provides CountAggregation. Call it only from an init function.
@@ -241,9 +275,9 @@ func Replay() ReplayFunc { return replay }
 // Evaluate is the transform statement evaluation of OTTL previews, or nil.
 func Evaluate() EvaluateFunc { return evaluate }
 
-// TransformWrites lists the fields a transform processor's statements
-// write, or nil.
-func TransformWrites() WritesFunc { return writes }
+// TransformAccess lists the fields a transform processor's statements
+// read and write, or nil.
+func TransformAccess() AccessFunc { return access }
 
 // Count is the count connector explanation, or nil.
 func Count() CountFunc { return count }
@@ -267,7 +301,7 @@ func FilterReads() FilterReadsFunc { return reads }
 func Has(n Name) bool {
 	switch n {
 	case OTTLReplay:
-		return replay != nil && evaluate != nil && writes != nil
+		return replay != nil && evaluate != nil && access != nil
 	case CountAggregation:
 		return count != nil
 	case RoutingExplanation:

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -172,5 +173,101 @@ func TestTouchesMatchesReadsToRecordedChanges(t *testing.T) {
 		if got := touches(c.read, analysis.Change{Entity: c.entity, Path: c.path}); got != c.want {
 			t.Errorf("touches(%+v, %s %s) = %v, want %v", c.read, c.entity, c.path, got, c.want)
 		}
+	}
+}
+
+// TestDeadWriteNeedsEveryRecordUndoneUnread runs samples/logs-cleanup's
+// input through processors that set an attribute and later remove or
+// replace it: the write is reported only when nothing between them reads
+// the key.
+func TestDeadWriteNeedsEveryRecordUndoneUnread(t *testing.T) {
+	dir := filepath.Join("..", "..", "..", "samples", "logs-cleanup")
+	config := func(processors string) string {
+		return `receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+processors:
+  attributes/tag:
+    actions:
+      - key: tier
+        value: gold
+        action: upsert
+  attributes/strip:
+    actions:
+      - key: tier
+        action: delete
+  resource/env:
+    attributes:
+      - key: deployment.environment
+        value: demo
+        action: upsert
+  transform/env:
+    log_statements:
+      - context: resource
+        statements:
+          - set(attributes["deployment.environment"], "prod")
+  filter/tier:
+    logs:
+      log_record:
+        - attributes["tier"] == "none"
+  transform/other:
+    log_statements:
+      - context: log
+        statements:
+          - set(attributes["x"], "y")
+exporters:
+  debug:
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [` + processors + `]
+      exporters: [debug]
+`
+	}
+	cases := []struct {
+		name, processors string
+		want             []string // writer, overwriter, level, key, removed
+	}{
+		{"removed", "attributes/tag, transform/other, attributes/strip", []string{"attributes/tag", "attributes/strip", "record", "tier", "true"}},
+		{"replaced at the resource", "resource/env, transform/env", []string{"resource/env", "transform/env", "resource", "deployment.environment", "false"}},
+		{"read between", "attributes/tag, filter/tier, attributes/strip", nil},
+		{"kept", "attributes/tag", nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			rep, err := Execute(ctx, Request{ConfigYAML: config(c.processors), Scenario: filepath.Join(dir, "scenario.yaml")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var found []recommend.Recommendation
+			for _, r := range rep.Recommendations {
+				if r.Rule == "attribute.dead_write" {
+					found = append(found, r)
+				}
+			}
+			if c.want == nil {
+				if len(found) != 0 {
+					t.Fatalf("attribute.dead_write = %+v, want none", found)
+				}
+				return
+			}
+			if len(found) != 1 {
+				t.Fatalf("attribute.dead_write = %+v (all %+v)", found, rep.Recommendations)
+			}
+			r := found[0]
+			want := []string{"processor/" + c.want[0], "processor/" + c.want[1]}
+			if !slices.Equal(r.Components, want) || r.Benefit == nil || r.Benefit.Count != 4 || !strings.Contains(r.Summary, strconv.Quote(c.want[3])) {
+				t.Fatalf("recommendation = %+v", r)
+			}
+			removed := strings.Contains(r.Summary, "removed it")
+			if strconv.FormatBool(removed) != c.want[4] {
+				t.Fatalf("summary = %q, want removed %s", r.Summary, c.want[4])
+			}
+		})
 	}
 }

@@ -72,6 +72,9 @@ const (
 	// MetricRecordsNotProcessed: records earlier components would no
 	// longer process.
 	MetricRecordsNotProcessed = "records_not_processed"
+	// MetricResourcesMerged: resource blocks the batch processor sent that
+	// a regrouping after it would merge into equal ones.
+	MetricResourcesMerged = "resource_blocks_merged"
 )
 
 // Evidence sections, named after the report fields they point into.
@@ -107,7 +110,8 @@ type Recommendation struct {
 
 // Evidence points into one report section. Ref is the component ref, with
 // "#" and the item inside it where one applies: "#condition[0]",
-// "#group[0].statement[2]", "#seq[7]", "#trace[<id>]".
+// "#group[0].statement[2]", "#seq[7]", "#trace[<id>]", "#policy[<name>]"
+// (a tail sampling policy by its configured name).
 type Evidence struct {
 	Section string `json:"section"`
 	Ref     string `json:"ref"`
@@ -150,6 +154,13 @@ type Input struct {
 	Sampling  []*analysis.Sampling
 	// Placements are what the run shows about moving each filter earlier.
 	Placements []Placement
+	// DeadWrites are attribute writes a later processor undid on every
+	// record they reached.
+	DeadWrites []DeadWrite
+	// ContextLosses are client context reads a batch processor before the
+	// reader does not pass on; computed from the configuration, so static
+	// recommendations have them too.
+	ContextLosses []ContextLoss
 }
 
 type rule struct {
@@ -170,10 +181,17 @@ var rules = []rule{
 	{"ottl.statement_never_matched", statementNeverMatched},
 	{"ottl.statement_no_change", statementNoChange},
 	{"ottl.duplicate_statement", duplicateStatement},
+	{"attribute.dead_write", attributeDeadWrite},
 	{"processor.no_effect", processorNoEffect},
 	{"grouping.no_effect", groupingNoEffect},
 	{"batch.size_never_reached", sizeNeverReached},
+	{"batch.tiny_batchers", tinyBatchers},
+	{"batch.drops_client_context", batchDropsClientContext},
+	{"grouping.after_batch", groupingAfterBatch},
 	{"sampling.late_spans", lateSpans},
+	{"sampling.policy_never_decides", policyNeverDecides},
+	{"sampling.policy_shadowed", policyShadowed},
+	{"sampling.late_in_pipeline", samplingLateInPipeline},
 }
 
 // Recommend applies every rule. Rules whose sections are absent produce
@@ -200,7 +218,9 @@ func Recommend(in Input) []Recommendation {
 }
 
 // Static is the recommendations the configuration alone supports.
-func Static(g *topology.Graph) []Recommendation { return Recommend(Input{Topology: g}) }
+func Static(g *topology.Graph, losses []ContextLoss) []Recommendation {
+	return Recommend(Input{Topology: g, ContextLosses: losses})
+}
 
 // processorRef is the topology ref of a processor ID.
 func processorRef(id string) string { return string(topology.KindProcessor) + "/" + id }

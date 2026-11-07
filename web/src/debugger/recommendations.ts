@@ -20,10 +20,17 @@ const TITLES: Record<string, string> = {
   'ottl.statement_never_matched': 'Statement never matched',
   'ottl.statement_no_change': 'Statement changed nothing',
   'ottl.duplicate_statement': 'Repeated statement',
+  'attribute.dead_write': 'Attribute overwritten before use',
   'processor.no_effect': 'Processor changed nothing',
   'grouping.no_effect': 'Grouping changed nothing',
   'batch.size_never_reached': 'Batch size never reached',
+  'batch.tiny_batchers': 'metadata_keys split batches small',
+  'batch.drops_client_context': 'Batch drops the client context',
+  'grouping.after_batch': 'Group after batching',
   'sampling.late_spans': 'Late spans skipped evaluation',
+  'sampling.policy_never_decides': 'Sampling policy never decided',
+  'sampling.policy_shadowed': 'Sampling policy shadowed',
+  'sampling.late_in_pipeline': 'Work spent on unsampled traces',
 };
 
 const KINDS: Record<string, { label: string; tone: 'warn' | 'plain' }> = {
@@ -38,6 +45,7 @@ const BENEFITS: Record<string, [string, string]> = {
   evaluations_without_effect: ['evaluation had no effect', 'evaluations had no effect'],
   records_without_effect: ['record passed through unchanged', 'records passed through unchanged'],
   records_not_processed: ['record would skip the earlier processors', 'records would skip the earlier processors'],
+  resource_blocks_merged: ['resource block would merge', 'resource blocks would merge'],
 };
 
 export type Provenance = { text: string; tone: 'observed' | 'verified' | 'preview' };

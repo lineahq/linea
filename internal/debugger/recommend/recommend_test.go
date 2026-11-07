@@ -45,7 +45,7 @@ func TestStaticRulesReadTheTopologyOnly(t *testing.T) {
 		"logs":   {"attributes", "memory_limiter", "batch", "batch/2"},
 		"traces": {"memory_limiter", "batch"},
 	}, "exporter/unused")
-	recs := Static(g)
+	recs := Static(g, nil)
 	want := []string{
 		"config.memory_limiter_not_first processor/memory_limiter",
 		"config.unused_component exporter/unused",
