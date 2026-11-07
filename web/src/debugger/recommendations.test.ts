@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RecommendationVerification, Report } from '../api/types';
-import { benefitChangeText, benefitText, changeText, componentNode, effect, measuredViews, percent, provenance, recommendationHint, recommendationKinds, recommendationViews, relative, ruleTitle, share, verifiable, verificationView, verifyProgress } from './recommendations';
+import { benefitChangeText, benefitText, changeText, componentNode, effect, measuredViews, percent, provenance, recommendationHint, recommendationKinds, recommendationViews, relative, ruleTitle, share, totalText, verifiable, verificationView, verifyProgress } from './recommendations';
 
 const comp = (kind: string, id: string) => ({ kind, id, type: id.split('/')[0], ref: `${kind}/${id}`, mode: 'real' });
 
@@ -204,12 +204,19 @@ describe('effect and share', () => {
   });
 
   it('puts a saving against its total, and gives none without a total', () => {
-    expect(share('records_without_effect', 2217, 160000)).toEqual({ text: "1.4% of the 160,000 record passes through the pipeline's processors", fraction: 2217 / 160000 });
-    expect(share('evaluations_without_effect', 20, 20)?.text).toBe('100% of the 20 evaluations of its statements or conditions');
-    expect(share('new_metric', 1, 4)?.text).toBe('25% of the 4 new metric');
-    expect(share('records_without_effect', 3, undefined)).toBeUndefined();
-    expect(share('records_without_effect', 3, 0)).toBeUndefined();
-    expect(share('records_without_effect', 9, 4)?.fraction).toBe(1);
+    expect(share(2217, 160000, 'x')).toEqual({ text: '1.4% of the 160,000 x', fraction: 2217 / 160000 });
+    expect(share(3, undefined, 'x')).toBeUndefined();
+    expect(share(3, 0, 'x')).toBeUndefined();
+    expect(share(9, 4, 'x')?.fraction).toBe(1);
+  });
+
+  it('names whose total it is', () => {
+    const filter = { rule: 'filter.condition_never_matched', pipeline: 'logs', components: ['processor/filter/debug'] };
+    expect(totalText(filter, 'evaluations_without_effect')).toBe('condition evaluations of filter/debug');
+    expect(totalText({ ...filter, rule: 'ottl.statement_no_change', components: ['processor/transform/enrich'] }, 'evaluations_without_effect')).toBe('statement evaluations of transform/enrich');
+    expect(totalText(filter, 'records_without_effect')).toBe('record passes through the processors of logs');
+    expect(totalText({ rule: 'grouping.after_batch', components: ['processor/batch'] }, 'resource_blocks_merged')).toBe('resource blocks batch sent');
+    expect(totalText({ rule: 'x' }, 'new_metric')).toBe('new metric');
   });
 
   it('words a percentage without a false zero', () => {
@@ -224,7 +231,7 @@ describe('effect and share', () => {
     const report = { recommendations: [{ rule: 'processor.no_effect', kind: 'redundancy', confidence: 'observed', summary: 's', output: 'unchanged', benefit: { metric: 'records_without_effect', count: 20000, of: 160000 } }] } as unknown as Report;
     const [v] = recommendationViews(report, 'r1');
     expect(v.saves).toBe('20,000 records passed through unchanged in this run');
-    expect(v.share?.text).toBe("13% of the 160,000 record passes through the pipeline's processors");
+    expect(v.share?.text).toBe('13% of the 160,000 record passes through the processors');
     expect(v.effect?.tone).toBe('neutral');
   });
 });
@@ -233,7 +240,7 @@ describe('measured impact of a verification', () => {
   const verification = (v: Partial<RecommendationVerification>) =>
     ({ run: 'r1', recommendation: 0, rule: 'ottl.statement_never_matched', candidate: { id: 'c1' }, confidence: 'verified_on_input', ...v }) as RecommendationVerification;
 
-  it('words the counts the change moved, and the records the exporters received', () => {
+  it('words the counts the change moved, and always the records the exporters received', () => {
     const v = verification({
       measured: [
         { metric: 'evaluations', subject: 'processor/transform/enrich', before: 25000, after: 20000 },
@@ -244,11 +251,10 @@ describe('measured impact of a verification', () => {
     });
     expect(measuredViews(v)).toEqual([
       { label: 'Evaluations of transform/enrich', before: '25,000', after: '20,000', change: '−20%', tone: 'pass' },
-      { label: 'Record passes through the processors of logs', before: '29,423', after: '29,423', change: '', tone: 'neutral' },
       { label: 'Sends by the batch processors of logs', before: '10', after: '5', change: '−50%', tone: 'pass' },
       { label: 'Records the exporters received', before: '4,423', after: '4,400', change: '−0.5%', tone: 'warn' },
     ]);
-    expect(verificationView(v, 'abc').measured).toHaveLength(4);
+    expect(verificationView(v, 'abc').measured).toHaveLength(3);
     expect(verificationView(verification({ error: 'boom', measured: v.measured }), 'abc').measured).toEqual([]);
   });
 

@@ -119,6 +119,28 @@ export function runTotals(list: Filtering[]): RunTotals {
   return out;
 }
 
+export interface ConditionSum {
+  evaluated: number;
+  matched: number;
+  records: number;
+  errors: number;
+}
+
+/**
+ * conditionSum adds up the counts of all conditions: the processor's
+ * evaluations in all, the total a recommendation's share is part of.
+ */
+export function conditionSum(conditions: { evaluated: number; matched: number; records: number; errors: number }[]): ConditionSum {
+  const out: ConditionSum = { evaluated: 0, matched: 0, records: 0, errors: 0 };
+  for (const c of conditions) {
+    out.evaluated += c.evaluated;
+    out.matched += c.matched;
+    out.records += c.records;
+    out.errors += c.errors;
+  }
+  return out;
+}
+
 /** totalsSummary is the one sentence above the whole-run table. */
 export function totalsSummary(t: RunTotals, signal: string): string {
   const parts = [`${t.requests} requests, ${itemNoun(signal, t.records)} in, ${t.dropped} dropped.`];

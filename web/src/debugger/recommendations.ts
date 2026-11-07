@@ -54,13 +54,26 @@ const BENEFITS: Record<string, [string, string]> = {
   resource_blocks_merged: ['resource block would merge', 'resource blocks would merge'],
 };
 
-/** What the change's total is, per metric: the thing `benefit.of` counts. */
-const TOTALS: Record<string, string> = {
-  evaluations_without_effect: 'evaluations of its statements or conditions',
-  records_without_effect: "record passes through the pipeline's processors",
-  records_not_processed: "record passes through the pipeline's processors",
-  resource_blocks_merged: 'resource blocks the batch processor sent',
-};
+/**
+ * totalText names what a recommendation's `benefit.of` counts, with its
+ * subject: whose evaluations, which pipeline's processors.
+ */
+export function totalText(r: Pick<Recommendation, 'rule' | 'pipeline' | 'components'>, metric: string): string {
+  const component = r.components?.[0];
+  const name = component ? component.slice(component.indexOf('/') + 1) : undefined;
+  switch (metric) {
+    case 'evaluations_without_effect': {
+      const kind = r.rule.startsWith('filter.') ? 'condition evaluations' : r.rule.startsWith('ottl.') ? 'statement evaluations' : 'evaluations';
+      return name ? `${kind} of ${name}` : kind;
+    }
+    case 'records_without_effect':
+    case 'records_not_processed':
+      return r.pipeline ? `record passes through the processors of ${r.pipeline}` : 'record passes through the processors';
+    case 'resource_blocks_merged':
+      return name ? `resource blocks ${name} sent` : 'resource blocks the batch processor sent';
+  }
+  return metric.replaceAll('_', ' ');
+}
 
 export type Provenance = { text: string; tone: 'observed' | 'verified' | 'preview' };
 
@@ -133,11 +146,13 @@ export function percent(fraction: number): string {
   return `${Math.round(p)}%`;
 }
 
-/** share puts a benefit against its total; a benefit without a total has none. */
-export function share(metric: string, n: number, of: number | undefined): Share | undefined {
+/**
+ * share puts a benefit against its total, named by `total` (totalText); a
+ * benefit without a total has none.
+ */
+export function share(n: number, of: number | undefined, total: string): Share | undefined {
   if (!of || of <= 0) return undefined;
   const fraction = Math.min(1, Math.max(0, n / of));
-  const total = TOTALS[metric] ?? metric.replaceAll('_', ' ');
   return { text: `${percent(fraction)} of the ${count(of)} ${total}`, fraction };
 }
 
@@ -243,7 +258,7 @@ export function recommendationViews(report: Report | undefined, runName: string)
       change: r.change ? changeText(r.change, r.pipeline) : undefined,
       saves: r.benefit ? benefitText(r.benefit.metric, r.benefit.count) : undefined,
       effect: effect(r.output, r.confidence),
-      share: r.benefit ? share(r.benefit.metric, r.benefit.count, r.benefit.of) : undefined,
+      share: r.benefit ? share(r.benefit.count, r.benefit.of, totalText(r, r.benefit.metric)) : undefined,
       blockers: r.blockers ?? [],
       coverage: r.coverage ?? [],
       actions,
@@ -302,12 +317,13 @@ export function relative(before: number, after: number): string {
 
 /**
  * measuredViews words what a verification measured: the server's counts of
- * the work the recommendation is about, then the records the exporters
- * received (from the comparison). Less work is the change's aim; fewer
- * exported records is a warning.
+ * the work the recommendation is about that the change moved, then the
+ * records the exporters received (from the comparison), shown even when
+ * equal since that is the data staying the same. Less work is the change's
+ * aim; fewer exported records is a warning.
  */
 export function measuredViews(v: RecommendationVerification): MeasuredView[] {
-  const out: MeasuredView[] = (v.measured ?? []).map((m) => ({
+  const out: MeasuredView[] = (v.measured ?? []).filter((m) => m.before !== m.after).map((m) => ({
     label: measureLabel(m.metric, m.subject),
     before: count(m.before),
     after: count(m.after),

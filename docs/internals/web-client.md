@@ -887,7 +887,9 @@ Recommendations tab (`debugger/RecommendationsTab.tsx`, its count on the tab;
 what the change does to the exported data (`effect`, from the report's
 `output`: stays the same, regrouped, or changes what the exporters receive;
 a verification's confidence settles it), the suggested change as text, what
-it would save with its share of the run's total and a small bar (`share`),
+it would save with its share of the run's total and a small bar (`share`;
+`totalText` names whose total: the condition or statement evaluations of
+the component, the record passes through the processors of the pipeline),
 its limits and coverage, a
 link to each component it names and what it rests on. It words them only:
 it adds, ranks or hides none, and a change is never applied to the draft.
@@ -902,8 +904,8 @@ reports no progress, so it is an estimate. The card then shows the
 server's outcome (same output, different output, inconclusive with the
 comparison's reasons, or the candidate's failure), a table of what it
 measured on this input, now and with the change (`measuredViews` in
-`recommendations.ts`, tested: the server's `measured` counts with their
-relative change, less work in the pass colour, then the records the
+`recommendations.ts`, tested: the server's `measured` counts the change
+moved, with their relative change, less work in the pass colour, then always the records the
 exporters received from the comparison, a change there in the warning
 colour), each scenario assertion
 whose outcome the change changed, saying so in the outcome when one that
@@ -922,7 +924,9 @@ beside the blocks out with the attributes moved up from the records and each
 record linked to its path; it reads `report.grouping`, named and summarized
 in `grouping.ts`); filter opens on Filter (`FilteringPanel.tsx`: with several requests, each
 condition's counts over the whole run; then per request each condition with
-its counts and whether it removed nothing, without listing records, which
+its counts and whether it removed nothing, both tables ending with an "All
+conditions" row of their sums (`conditionSum`, the total a filter
+recommendation's share is part of), without listing records, which
 Changes shows; it reads `report.filtering`, summed and summarized in
 `filtering.ts`);
 tail_sampling opens on Decisions

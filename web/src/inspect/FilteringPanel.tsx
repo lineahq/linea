@@ -1,7 +1,22 @@
 import type { Filtering } from '../api/types';
 import type { WorkspaceSearch } from '../router';
 import { itemNoun } from './batching';
-import { filterSummary, runTotals, totalsSummary, unused } from './filtering';
+import { conditionSum, filterSummary, runTotals, totalsSummary, unused } from './filtering';
+
+/** AllConditions is the table's last row: every condition's counts added up. */
+function AllConditions({ conditions }: { conditions: Parameters<typeof conditionSum>[0] }) {
+  if (conditions.length < 2) return null;
+  const t = conditionSum(conditions);
+  return (
+    <tfoot>
+      <tr>
+        <th scope="row" />
+        <td>All conditions</td>
+        <td className="bt-num">{t.evaluated}</td><td className="bt-num">{t.matched}</td><td className="bt-num">{t.records}</td><td className="bt-num">{t.errors}</td>
+      </tr>
+    </tfoot>
+  );
+}
 
 /**
  * FilteringPanel answers how each configured condition of a filter processor
@@ -57,6 +72,7 @@ export function FilteringPanel({ filtering, live, search, setSearch }: {
               </tr>
             ))}
           </tbody>
+          {verified && <AllConditions conditions={selected.conditions!} />}
         </table>
       )}
       {(selected.notes ?? []).map((n) => <p key={n} className="muted small">{n}</p>)}
@@ -95,6 +111,7 @@ function WholeRun({ filtering }: { filtering: Filtering[] }) {
               </tr>
             ))}
           </tbody>
+          <AllConditions conditions={t.conditions} />
         </table>
       )}
     </section>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Filtering } from '../api/types';
-import { filterSummary, filteringFor, refLabel, removedBy, removedByText, runTotals, totalsSummary, unused } from './filtering';
+import { conditionSum, filterSummary, filteringFor, refLabel, removedBy, removedByText, runTotals, totalsSummary, unused } from './filtering';
 
 const verified: Filtering = {
   processor: 'filter/health', pipeline: 'logs', signal: 'logs', input: 7, output: 8, verification: 'replay_verified', records: 4, dropped: 3,
@@ -78,5 +78,15 @@ describe('filtering', () => {
     expect(t.conditions.map((c) => [c.index, c.evaluated, c.matched, c.records])).toEqual([[0, 3, 1, 2], [1, 3, 2, 2], [2, 2, 0, 0]]);
     expect(totalsSummary(t, 'logs')).toBe('3 requests, 11 log records in, 4 dropped. Condition counts cover the 2 requests whose evaluation reproduces the output.');
     expect(totalsSummary(runTotals([verified, second]), 'logs')).toBe('2 requests, 6 log records in, 4 dropped.');
+  });
+});
+
+describe('conditionSum', () => {
+  it("adds up every condition, the filter processor's evaluations in all", () => {
+    expect(conditionSum([
+      { evaluated: 5000, matched: 577, records: 577, errors: 0 },
+      { evaluated: 4423, matched: 0, records: 0, errors: 1 },
+    ])).toEqual({ evaluated: 9423, matched: 577, records: 577, errors: 1 });
+    expect(conditionSum([])).toEqual({ evaluated: 0, matched: 0, records: 0, errors: 0 });
   });
 });
