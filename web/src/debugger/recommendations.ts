@@ -8,7 +8,7 @@ import type { Segment } from './findings';
 
 const code = (s: string): Segment => ({ code: s });
 
-/** Short titles of the known rules; an unknown rule shows its ID. */
+/** Short titles of the known rules; an unknown rule shows its ID (`ruleTitle`). */
 const TITLES: Record<string, string> = {
   'config.memory_limiter_not_first': 'memory_limiter is not first',
   'config.unused_component': 'Unused component',
@@ -32,6 +32,11 @@ const TITLES: Record<string, string> = {
   'sampling.policy_shadowed': 'Sampling policy shadowed',
   'sampling.late_in_pipeline': 'Work spent on unsampled traces',
 };
+
+/** ruleTitle is the short title of a rule; an unknown rule shows its ID. */
+export function ruleTitle(rule: string): string {
+  return TITLES[rule] ?? rule;
+}
 
 const KINDS: Record<string, { label: string; tone: 'warn' | 'plain' }> = {
   ordering: { label: 'Ordering', tone: 'plain' },
@@ -87,6 +92,23 @@ export function provenance(confidence: string, runName: string): Provenance {
   return { text: `Observed in run ${runName}`, tone: 'observed' };
 }
 
+/**
+ * verifiable mirrors the server's check: a processor swap, a removed
+ * statement or condition the run located, or an option with a value. The
+ * server may still refuse one against the run's configuration.
+ */
+export function verifiable(c: RecommendationChange | undefined): boolean {
+  switch (c?.op) {
+    case 'swap':
+      return (c.processors?.length ?? 0) > 0;
+    case 'remove_statement':
+      return !!c.path && !!c.text;
+    case 'set_option':
+      return !!c.option && !!c.value;
+  }
+  return false;
+}
+
 /** changeText words a suggested change, as the CLI does. */
 export function changeText(c: RecommendationChange, pipeline?: string): Segment[] {
   const at = c.index !== undefined ? ` ${c.index}` : '';
@@ -110,6 +132,17 @@ export function benefitText(metric: string, count: number): string {
   const words = BENEFITS[metric];
   if (!words) return `${count} ${metric.replaceAll('_', ' ')}`;
   return `${count} ${count === 1 ? words[0] : words[1]} in this run`;
+}
+
+/**
+ * benefitChangeText words how what a change would save moved between two runs
+ * ("12 → 3 evaluations had no effect"). Counts of two different metrics are not
+ * comparable, so they give no text.
+ */
+export function benefitChangeText(before: { metric: string; count: number }, after: { metric: string; count: number }): string | undefined {
+  if (before.metric !== after.metric || before.count === after.count) return undefined;
+  const words = BENEFITS[after.metric]?.[1] ?? after.metric.replaceAll('_', ' ');
+  return `${before.count} → ${after.count} ${words}`;
 }
 
 /**
@@ -138,9 +171,9 @@ export function recommendationViews(report: Report | undefined, runName: string)
     return {
       id: `${i}:${r.rule}`,
       index: i,
-      verifiable: r.change?.op === 'swap',
+      verifiable: verifiable(r.change),
       rule: r.rule,
-      title: TITLES[r.rule] ?? r.rule,
+      title: ruleTitle(r.rule),
       kind: KINDS[r.kind] ?? { label: r.kind, tone: 'plain' },
       provenance: provenance(r.confidence, runName),
       pipeline: r.pipeline,

@@ -1255,7 +1255,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Run one recommendation's change as a candidate: the run's captured bundle with the change layered as provider overrides after its unchanged configuration, on the same inputs and runtime, without reading the host. Waits for the candidate, which is an ordinary run, and compares it with the run: confidence verified_on_input when the output is the same, differs_on_input when it differs. Ending the request cancels the candidate. Only swap changes are verifiable. Send an empty JSON body. */
+        /** Run one recommendation's change as a candidate: the run's captured bundle with the change layered as provider overrides after its unchanged configuration, on the same inputs and runtime, without reading the host. Waits for the candidate, which is an ordinary run, and compares it with the run: confidence verified_on_input when the output is the same, differs_on_input when it differs. Ending the request cancels the candidate. Verifiable changes: a processor swap, a removed transform statement or filter condition (its list replaced, rebuilt from the run's configuration text) and an option with a value; others are invalid_request. Send an empty JSON body. */
         post: operations["verifyRecommendation"];
         delete?: never;
         options?: never;
@@ -2559,6 +2559,7 @@ export interface components {
             index?: number;
             op: string;
             option?: string;
+            path?: string;
             processors?: string[];
             text?: string;
             value?: string;
@@ -3388,6 +3389,23 @@ export interface components {
             kind: string;
             pipeline?: string;
             rule: string;
+            subject?: string;
+            summary: string;
+        };
+        RecommendationDiff: {
+            after?: components["schemas"]["RecommendationSide"];
+            before?: components["schemas"]["RecommendationSide"];
+            components?: string[];
+            pipeline?: string;
+            rule: string;
+            status: string;
+            subject?: string;
+        };
+        RecommendationSide: {
+            benefit?: components["schemas"]["Benefit"];
+            confidence: string;
+            index: number;
+            kind: string;
             summary: string;
         };
         RecommendationVerification: {
@@ -3399,6 +3417,12 @@ export interface components {
             recommendation: number;
             rule: string;
             run: string;
+        };
+        Recommendations: {
+            items?: components["schemas"]["RecommendationDiff"][];
+            new: number;
+            persists: number;
+            resolved: number;
         };
         RecordLineage: {
             connector?: string;
@@ -3646,6 +3670,7 @@ export interface components {
             notes?: string[];
             outcome: string;
             reasons?: components["schemas"]["ComparisonReason"][];
+            recommendations?: components["schemas"]["Recommendations"];
             records?: components["schemas"]["ComparisonRecords"];
             routes?: components["schemas"]["ComparisonRoute"][];
         };

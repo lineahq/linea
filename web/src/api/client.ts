@@ -262,7 +262,8 @@ export const api = {
   /**
    * verifyRecommendation runs recommendation n (its position in the report)
    * of a finished run as a candidate on the run's inputs and waits for the
-   * comparison (200); one more run. Only processor-order changes verify.
+   * comparison (200); one more run. Swaps, removed statements or conditions
+   * and options with a value verify.
    */
   verifyRecommendation: (id: string, n: number) =>
     call<RecommendationVerification>('POST', `/api/v1/runs/${encodeURIComponent(id)}/recommendations/${n}/verify`, {}),

@@ -104,7 +104,12 @@ type Comparison struct {
 	Assertions []Assertion  `json:"assertions"`
 	// Ignored counts the record differences each ignore rule matched.
 	Ignored []Ignored `json:"ignored"`
-	Notes   []string  `json:"notes,omitempty"`
+	// Recommendations pairs the runs' recommendations: which a change
+	// resolved, which are new and which persist. Absent when neither run has
+	// any, or a stored report was cut for size (Notes say so). It never
+	// changes the outcome.
+	Recommendations *Recommendations `json:"recommendations,omitempty"`
+	Notes           []string         `json:"notes,omitempty"`
 }
 
 type Reason struct {
@@ -314,6 +319,7 @@ func Compare(req Request) (*Comparison, error) {
 	}
 	out.compareErrors(req.Before.Run, req.After.Run)
 	out.compareAssertions(req.Before.Run.Report, req.After.Run.Report)
+	out.compareRecommendations(req.Before.Run.Report, req.After.Run.Report)
 	for i, r := range rules {
 		out.Ignored[i].Count = r.count
 	}

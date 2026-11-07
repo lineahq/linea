@@ -97,11 +97,17 @@ type Recommendation struct {
 	// Pipeline is empty for a recommendation about the whole configuration.
 	Pipeline string `json:"pipeline,omitempty"`
 	// Components are topology refs ("processor/filter/health").
-	Components []string      `json:"components"`
-	Summary    string        `json:"summary"`
-	Evidence   []Evidence    `json:"evidence,omitempty"`
-	Benefit    *Benefit      `json:"benefit,omitempty"`
-	Change     *ConfigChange `json:"change,omitempty"`
+	Components []string `json:"components"`
+	// Subject names the item inside the components a rule is about, where
+	// one rule can report several: a filter condition's or OTTL statement's
+	// text, an attribute (`resource.attributes["k"]`), a sampling policy's
+	// name. Rule, pipeline, components and subject identify a
+	// recommendation across runs of changed configurations.
+	Subject  string        `json:"subject,omitempty"`
+	Summary  string        `json:"summary"`
+	Evidence []Evidence    `json:"evidence,omitempty"`
+	Benefit  *Benefit      `json:"benefit,omitempty"`
+	Change   *ConfigChange `json:"change,omitempty"`
 	// Blockers name why a stronger suggestion was not made.
 	Blockers []string `json:"blockers,omitempty"`
 	// Coverage says what this input did not exercise.
@@ -136,8 +142,13 @@ type ConfigChange struct {
 	Group *int   `json:"group,omitempty"`
 	Index *int   `json:"index,omitempty"`
 	Text  string `json:"text,omitempty"`
-	// Option and Value are the setting (set_option); an empty Value leaves
-	// the value to the user.
+	// Path is where the statement or condition is configured in the
+	// component: "log_statements[0].statements[1]" (a flat statement list is
+	// group 0), "log_conditions[0].conditions[1]" or "logs.log_record[0]".
+	Path string `json:"path,omitempty"`
+	// Option and Value are the setting (set_option): Value is YAML, a
+	// JSON-encoded value where the rule knows it; an empty Value leaves the
+	// value to the user.
 	Option string `json:"option,omitempty"`
 	Value  string `json:"value,omitempty"`
 }

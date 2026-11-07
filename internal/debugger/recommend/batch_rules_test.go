@@ -165,7 +165,7 @@ func TestBatchDropsClientContext(t *testing.T) {
 			OpSwap, []string{"k8sattributes", "batch", "batch/2", "resource"}, ""},
 		{"metadata kept by metadata_keys", []string{"batch", "transform"},
 			ContextLoss{Component: "processor/transform", Batch: "batch", MetadataKeys: []string{"region"}, Batches: []string{"batch"}, Lost: tenant},
-			OpSetOption, []string{"[region, tenant]"}, ""},
+			OpSetOption, []string{`["region","tenant"]`}, ""},
 		{"metadata behind two batches", []string{"batch", "resource", "batch/2", "transform"},
 			ContextLoss{Component: "processor/transform", Batch: "batch", Batches: []string{"batch", "batch/2"}, Lost: tenant},
 			"", nil, "would have to list tenant"},

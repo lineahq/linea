@@ -23,6 +23,15 @@ type DeadWrite struct {
 
 // attributeDeadWrite: a write no record kept, because a later processor
 // removed or replaced the attribute before anything read it.
+// attributePath names an attribute as an OTTL path from the record's
+// context: attributes["k"], resource.attributes["k"].
+func attributePath(level, key string) string {
+	if level == "record" {
+		return "attributes[" + strconv.Quote(key) + "]"
+	}
+	return level + ".attributes[" + strconv.Quote(key) + "]"
+}
+
 func attributeDeadWrite(in Input) []Recommendation {
 	var out []Recommendation
 	for _, d := range in.DeadWrites {
@@ -41,7 +50,7 @@ func attributeDeadWrite(in Input) []Recommendation {
 		}
 		out = append(out, Recommendation{
 			Kind: KindRedundancy, Confidence: ConfidenceObserved, Pipeline: d.Pipeline,
-			Components: []string{processorRef(d.Writer), processorRef(d.Overwriter)},
+			Components: []string{processorRef(d.Writer), processorRef(d.Overwriter)}, Subject: attributePath(d.Level, d.Key),
 			Summary: fmt.Sprintf("%s set %s on %s in pipeline %s, and %s %s on each of them before any processor read it. If the value is meant to reach the output, %s undoes it; otherwise the write is not needed.",
 				d.Writer, name, plural(d.Records, itemNoun(d.Signal)), d.Pipeline, d.Overwriter, after, d.Overwriter),
 			Evidence: []Evidence{{SectionStages, processorRef(d.Writer)}, {SectionStages, processorRef(d.Overwriter)}},

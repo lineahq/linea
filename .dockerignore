@@ -23,3 +23,4 @@ internal/debugger/workersrc/static/*.tar.gz
 *.test
 .idea
 .vscode
+.claude

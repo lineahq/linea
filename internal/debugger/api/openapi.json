@@ -2937,6 +2937,9 @@
           "option": {
             "type": "string"
           },
+          "path": {
+            "type": "string"
+          },
           "processors": {
             "items": {
               "type": "string"
@@ -5937,6 +5940,9 @@
           "rule": {
             "type": "string"
           },
+          "subject": {
+            "type": "string"
+          },
           "summary": {
             "type": "string"
           }
@@ -5945,6 +5951,65 @@
           "confidence",
           "kind",
           "rule",
+          "summary"
+        ],
+        "type": "object"
+      },
+      "RecommendationDiff": {
+        "properties": {
+          "after": {
+            "$ref": "#/components/schemas/RecommendationSide"
+          },
+          "before": {
+            "$ref": "#/components/schemas/RecommendationSide"
+          },
+          "components": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "pipeline": {
+            "type": "string"
+          },
+          "rule": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "rule",
+          "status"
+        ],
+        "type": "object"
+      },
+      "RecommendationSide": {
+        "properties": {
+          "benefit": {
+            "$ref": "#/components/schemas/Benefit"
+          },
+          "confidence": {
+            "type": "string"
+          },
+          "index": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "confidence",
+          "index",
+          "kind",
           "summary"
         ],
         "type": "object"
@@ -5984,6 +6049,31 @@
           "recommendation",
           "rule",
           "run"
+        ],
+        "type": "object"
+      },
+      "Recommendations": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RecommendationDiff"
+            },
+            "type": "array"
+          },
+          "new": {
+            "type": "integer"
+          },
+          "persists": {
+            "type": "integer"
+          },
+          "resolved": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "new",
+          "persists",
+          "resolved"
         ],
         "type": "object"
       },
@@ -6940,6 +7030,9 @@
               "$ref": "#/components/schemas/ComparisonReason"
             },
             "type": "array"
+          },
+          "recommendations": {
+            "$ref": "#/components/schemas/Recommendations"
           },
           "records": {
             "$ref": "#/components/schemas/ComparisonRecords"
@@ -16884,7 +16977,7 @@
             "description": "The platform queue is full or execution admission is closed."
           }
         },
-        "summary": "Run one recommendation's change as a candidate: the run's captured bundle with the change layered as provider overrides after its unchanged configuration, on the same inputs and runtime, without reading the host. Waits for the candidate, which is an ordinary run, and compares it with the run: confidence verified_on_input when the output is the same, differs_on_input when it differs. Ending the request cancels the candidate. Only swap changes are verifiable. Send an empty JSON body."
+        "summary": "Run one recommendation's change as a candidate: the run's captured bundle with the change layered as provider overrides after its unchanged configuration, on the same inputs and runtime, without reading the host. Waits for the candidate, which is an ordinary run, and compares it with the run: confidence verified_on_input when the output is the same, differs_on_input when it differs. Ending the request cancels the candidate. Verifiable changes: a processor swap, a removed transform statement or filter condition (its list replaced, rebuilt from the run's configuration text) and an option with a value; others are invalid_request. Send an empty JSON body."
       }
     },
     "/api/v1/runs/{id}/report": {

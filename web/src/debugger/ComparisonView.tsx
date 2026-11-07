@@ -14,6 +14,8 @@ import {
 } from '../runs/compare';
 import { differingInputs } from '../runs/inputDiff';
 import { batchingChanges, batchingHeadline, type BatchCell, type BatchingChange } from '../runs/batchingCompare';
+import { recommendationChanges, type RecommendationChangesView } from '../runs/recommendationsCompare';
+import { pageOf } from '../inspect/pages';
 import { itemNoun, TRIGGER_LABELS, type Trigger } from '../inspect/batching';
 import { followRows } from '../runs/followBoth';
 import { useComparedRuns } from '../runs/comparedRuns';
@@ -246,6 +248,8 @@ function Comparison({ c, runs }: { c: RunComparison; runs: Run[] }) {
 
       <BatchingComparison changes={batchingChanges(sides.runs.get(c.before.id)?.report?.batching, sides.runs.get(c.after.id)?.report?.batching)} label={label} />
 
+      <RecommendationsComparison view={recommendationChanges(c)} c={c} label={label} />
+
       {open ? <Details c={c} label={label} /> : (
         <section className="od-card" style={{ opacity: 0.6 }} aria-label="Record changes">
           <div className="od-card__head"><h2 className="od-card__title" style={{ margin: 0 }}>Record changes</h2><span className="od-chip od-chip--warn"><Icon name="triangle-alert" size={12} />Not conclusive</span></div>
@@ -254,6 +258,63 @@ function Comparison({ c, runs }: { c: RunComparison; runs: Run[] }) {
       )}
       {(c.notes ?? []).map((n, k) => <p key={k} className="od-muted" style={{ fontSize: 12.5, margin: 0 }}>{n}</p>)}
     </>
+  );
+}
+
+/**
+ * RecommendationsComparison lists which recommendations the change resolved,
+ * which are new in the candidate and which persist, from the platform
+ * comparison. It words them only: it never changes the comparison's outcome.
+ */
+function RecommendationsComparison({ view, c, label }: { view?: RecommendationChangesView; c: RunComparison; label: { before: string; after: string } }) {
+  const [page, setPage] = useState(0);
+  if (!view) return null;
+  const runIds = { before: c.before.id, after: c.after.id };
+  const p = pageOf(view.rows, page);
+  return (
+    <section className="od-card" style={{ overflow: 'hidden' }} aria-label="Recommendations">
+      <div className="od-card__head">
+        <h2 className="od-card__title" style={{ margin: 0 }}>Recommendations</h2>
+        <span className="od-subtle" style={{ fontSize: 12 }}>{view.summary}</span>
+      </div>
+      {view.rows.length ? (
+        <table className="od-table">
+          <thead><tr><th>Change</th><th>Recommendation</th><th>Where</th><th aria-label="Open" /></tr></thead>
+          <tbody>
+            {p.shown.map((r) => (
+              <tr key={r.key}>
+                <td><span className={`od-chip ${r.tone === 'neutral' ? 'od-chip--plain' : `od-chip--${r.tone}`}`}>{r.statusLabel}</span></td>
+                <td>
+                  <div className="t-body-strong" title={r.rule}>{r.title}</div>
+                  <div style={{ fontSize: 12.5 }}>{r.summary}</div>
+                  {r.benefitChange && <div className="od-muted" style={{ fontSize: 12.5 }}>{r.benefitChange}</div>}
+                </td>
+                <td style={{ fontSize: 12.5 }}>
+                  {r.pipeline && <div className="od-muted">pipeline <code>{r.pipeline}</code></div>}
+                  {r.components.map((x) => <div key={x}><code>{x}</code></div>)}
+                  {r.subject && <div><code>{r.subject}</code></div>}
+                </td>
+                <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  {r.runs.map((side) => (
+                    <Link key={side} to="/" search={{ run: runIds[side] }} className="od-btn od-btn--link od-btn--sm"><span>Open in {label[side]}</span></Link>
+                  ))}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+      {p.pages > 1 && (
+        <div className="od-pager">
+          <span>{`${p.start + 1}–${p.start + p.shown.length} of ${view.rows.length}`}</span>
+          <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+            <button type="button" className="od-btn od-btn--ghost od-btn--sm" disabled={p.page === 0} onClick={() => setPage(p.page - 1)}>Previous recommendations</button>
+            <span>Page {p.page + 1} of {p.pages}</span>
+            <button type="button" className="od-btn od-btn--ghost od-btn--sm" disabled={p.page + 1 >= p.pages} onClick={() => setPage(p.page + 1)}>Next recommendations</button>
+          </span>
+        </div>
+      )}
+    </section>
   );
 }
 

@@ -24,10 +24,11 @@ A recommendation has:
 | `confidence` | `static` (the configuration alone), `observed` (this run's events). A verification (below) gives `verified_on_input` (the changed configuration gave the same output on this run's input) or `differs_on_input` (it changed the output); the stored report keeps the rule's own confidence. |
 | `pipeline` | The pipeline it is about; empty when it concerns the whole configuration or a processor shared by several pipelines. |
 | `components` | Topology refs (`processor/filter/health`). |
+| `subject` | The item inside the components, where a rule can report several: a filter condition's or OTTL statement's text, an attribute (`resource.attributes["k"]`), a tail_sampling policy's name. With rule, pipeline and components it identifies the recommendation across runs (Comparison, below). |
 | `summary` | One self-contained sentence or two, with the counts. |
 | `evidence` | `{section, ref}` pointers into the report: `section` names a report field (`topology`, `stages`, `filtering`, `ottl`, `batching`, `grouping`, `sampling`); `ref` is a component ref (or `pipeline/<id>` in `topology`), with `#condition[i]`, `#group[g].statement[s]`, `#trace[<id>]` or `#policy[<name>]` (a tail_sampling policy by its configured name) for an item inside it. |
 | `benefit` | `{metric, count}`: what the run shows the change saves. Metrics: `evaluations_without_effect`, `records_without_effect`, `records_not_processed`, `resource_blocks_merged` (resource blocks the batch sent that a regrouping after it would merge into others). |
-| `change` | The suggested change, when one follows from the evidence: `swap` (`processors`, the pipeline's new processor list), `remove_statement` (`component`, `index`, and `group` for a transform statement; `text`), `set_option` (`component`, `option`, and `value` when the evidence decides it; empty leaves it to the user). |
+| `change` | The suggested change, when one follows from the evidence: `swap` (`processors`, the pipeline's new processor list), `remove_statement` (`component`, `index`, and `group` for a transform statement; `text`; `path`, where it is configured in the component: `log_statements[0].statements[1]`, a flat statement list being group 0, `log_conditions[0].conditions[1]` or the deprecated `logs.log_record[0]`), `set_option` (`component`, `option`, and `value` as YAML, JSON-encoded, when the evidence decides it; empty leaves it to the user). |
 | `blockers` | Why a stronger suggestion was not made. |
 | `coverage` | What the input did not exercise. |
 
@@ -221,10 +222,28 @@ Verification is on demand: each one is one more run, so nothing verifies by
 default. `platform.VerifyRecommendation` takes a finished run and the
 position of one of its recommendations:
 
-1. `engine.CandidateOverrides` expresses the change as provider overrides.
-   Only `swap` is verifiable: one `yaml:service::pipelines::<id>::processors:`
-   URI with the new list as JSON (a list replaces the list). Any other change,
-   or none, is `invalid_request` before anything runs.
+1. `engine.Verifiable` checks the change's shape before anything is read
+   or run; then `engine.CandidateOverrides` expresses it as provider
+   overrides, each one `yaml:` URI with a JSON value (JSON is YAML whatever
+   the strings hold; a list replaces the list):
+   - `swap`: `service::pipelines::<id>::processors` with the new list.
+   - `remove_statement`: confmap cannot address a list item, so the whole
+     outermost list holding the statement or condition is replaced
+     (`processors::<id>::log_statements`, `::log_conditions` or
+     `::logs::log_record`), rebuilt from the run's root configuration
+     text located by `path`, without the item; a group it empties goes too.
+     Rebuilding from the text, not the resolved configuration, keeps
+     `${env:...}` and other references as references: the candidate
+     resolves them from the captured values as the run did, and the
+     overrides, which the result returns, carry no resolved values. The
+     item there must equal the recommendation's `text`; a list that comes
+     from another provider (`${file:...}`), uses anchors, aliases, tags or
+     merge keys, or an item holding a reference, is refused, as is a run
+     whose own overrides already touch the processor.
+   - `set_option` with a value: `processors::<id>::<option>`; without one
+     (the value is the user's choice) it is refused.
+
+   A refusal, or no change, is `invalid_request`; nothing runs.
 2. `engine.CandidateRequest` reads the run's captured bundle and layers the
    overrides on its configuration snapshot (`Snapshot.WithOverrides`,
    snapshot schema 4; `config-resolution.md`). Inputs, setup, limits and
@@ -238,7 +257,9 @@ position of one of its recommendations:
    `verified_on_input`, `different` gives `differs_on_input`, `inconclusive`
    no confidence. A failed candidate returns its error and no comparison.
 
-`samples/logs-cleanup` verifies (`filter.move_earlier`, same output);
+`samples/logs-cleanup` verifies (`filter.move_earlier`, same output), and
+so does removing `samples/broken-routing`'s pager statement, which never
+matched (`TestVerifyRecommendationRemovesAStatement`);
 `samples/filter-order` differs: its filter reads an attribute transform/tag
 sets, so `filter.after_batch`, which moves it before batch and so before
 transform/tag (the blocker says so), drops nothing in the candidate
@@ -269,3 +290,32 @@ the stored report of the run is not changed.
   filtered by `pipeline` (keeping configuration-wide recommendations) and
   `component` (a configuration ID the recommendation names). Item refs are
   `recommendation:<n>`, the position in `report.recommendations`.
+
+## Comparison
+
+The run comparison (`internal/debugger/comparison/recommendations.go`)
+pairs the two runs' recommendations in `recommendations`: each item is
+`resolved` (only the before run has it), `new` (only the after run) or
+`persists` (both), with each side's position in its report, kind,
+confidence, summary and benefit, and the section counts each status.
+
+- A recommendation is identified by rule, pipeline, components and
+  `subject`: the item inside the components a rule can report several of
+  (a filter condition's or OTTL statement's text, an attribute as
+  `resource.attributes["k"]`, a tail_sampling policy's name). Indexes are
+  not part of it, so a statement that moved within its group still pairs;
+  changing its text resolves the old one and makes any new one `new`.
+  Several with one identity pair in report order.
+- Items list the before run's in its order, then the after run's new ones.
+- It is derived analysis: it never changes the outcome. When the inputs are
+  not proven identical, a note says observed recommendations may come or go
+  with the input. A stored report cut for size keeps no recommendations, so
+  none are compared and a note says so; the section is absent too when
+  neither run has any.
+- CLI: `linea diff` prints `recommendations: 1 resolved, 0 new, 2 persist`
+  and one line per resolved or new one; `--format markdown` adds a
+  Recommendations table with every item and each side's benefit. Web: a
+  Recommendations card in the comparison (`web-client.md`).
+
+`samples/broken-routing` with its where clause fixed resolves its
+`ottl.statement_never_matched` (`TestFixedConfigurationResolvesItsRecommendation`).

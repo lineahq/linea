@@ -158,7 +158,7 @@ func policyNeverDecides(in Input) []Recommendation {
 			}
 			out = append(out, Recommendation{
 				Kind: KindRedundancy, Confidence: ConfidenceObserved, Pipeline: s.Pipeline,
-				Components: []string{processorRef(s.Processor)},
+				Components: []string{processorRef(s.Processor)}, Subject: p.Name,
 				Summary: fmt.Sprintf("Policy %s of %s sampled or dropped nothing in the %s it was evaluated on in pipeline %s, each trace on its own. If this input holds traces the policy should sample, its rule may be wrong rather than unneeded.",
 					policyLabel(p), s.Processor, plural(len(verified), "trace"), s.Pipeline),
 				Evidence: withPolicies(traceEvidence(s.Processor, verified), s.Processor, p.Name),
@@ -240,7 +240,7 @@ func policyShadowed(in Input) []Recommendation {
 			coverage = append(coverage, "The decision does not change, but which policy is named as having sampled a trace (record_policy) and the sampling threshold written to the trace state (tracestate) can.")
 			out = append(out, Recommendation{
 				Kind: KindRedundancy, Confidence: ConfidenceObserved, Pipeline: s.Pipeline,
-				Components: []string{processorRef(s.Processor)},
+				Components: []string{processorRef(s.Processor)}, Subject: p.Name,
 				Summary: fmt.Sprintf("Policy %s of %s sampled %d of the %s it was evaluated on in pipeline %s, but policy %s sampled every one of them on its own, so it changed no decision on this input.%s %s",
 					policyLabel(p), s.Processor, len(sampled), plural(len(verified), "trace"), s.Pipeline, policyLabel(by), both, effect),
 				Evidence: withPolicies(traceEvidence(s.Processor, sampled), s.Processor, p.Name, by.Name),

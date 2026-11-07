@@ -1,6 +1,7 @@
 package recommend
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strconv"
@@ -81,7 +82,7 @@ func batchDropsClientContext(in Input) []Recommendation {
 		switch {
 		case onlyMetadata && len(l.Batches) == 1:
 			keys := append(slices.Clone(l.MetadataKeys), newKeys...)
-			rec.Change = &ConfigChange{Op: OpSetOption, Component: l.Batch, Option: "metadata_keys", Value: "[" + strings.Join(keys, ", ") + "]"}
+			rec.Change = &ConfigChange{Op: OpSetOption, Component: l.Batch, Option: "metadata_keys", Value: jsonList(keys)}
 			rec.Coverage = append(rec.Coverage, fmt.Sprintf("%s then keeps a batcher for each distinct combination of these values (up to metadata_cardinality_limit), so batches may get smaller.", l.Batch))
 		case isProcessor && !slices.ContainsFunc(ids[first:at], func(id string) bool { return componentType(id) != "batch" }):
 			order := slices.Delete(slices.Clone(ids), at, at+1)
@@ -126,4 +127,10 @@ func clientReadName(r ClientRead) string {
 		return "the client metadata"
 	}
 	return "metadata " + strconv.Quote(r.Key)
+}
+
+// jsonList is a list of strings as a JSON (and so YAML flow) value.
+func jsonList(items []string) string {
+	b, _ := json.Marshal(items)
+	return string(b)
 }

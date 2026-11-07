@@ -120,3 +120,43 @@ func TestVerifyRecommendationReportsAChangedOutput(t *testing.T) {
 		t.Fatalf("verification = %+v", got)
 	}
 }
+
+// TestVerifyRecommendationRemovesAStatement: broken-routing's pager
+// statement never matches; the candidate runs without it, the whole
+// statement list replaced from the run's configuration text, and its output
+// is the run's.
+func TestVerifyRecommendationRemovesAStatement(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	samples := filepath.Join("..", "..", "..", "samples", "broken-routing")
+	config, err := os.ReadFile(filepath.Join(samples, "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(Options{Paths: PathPolicy{Unrestricted: true}})
+	t.Cleanup(s.Close)
+	run, err := s.SubmitRun(ctx, testCaller, RunRequest{Mode: ModeScenario, Config: Source{Text: string(config)},
+		Scenario: &ScenarioInput{Scenario: Source{Path: filepath.Join(samples, "scenario.yaml")}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep, err := s.GetRunReport(ctx, testCaller, run.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := slices.IndexFunc(rep.Recommendations, func(r recommend.Recommendation) bool { return r.Rule == "ottl.statement_never_matched" })
+	if at < 0 {
+		t.Fatalf("no ottl.statement_never_matched in %+v", rep.Recommendations)
+	}
+	got, err := s.VerifyRecommendation(ctx, testCaller, VerifyRecommendationRequest{Run: run.ID, Recommendation: at})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `yaml:processors::transform/route::log_statements: [{"context":"log","statements":["set(log.attributes[\"route\"], \"archive\") where log.attributes[\"route\"] == nil"]}]`
+	if !slices.Equal(got.Overrides, []string{want}) || got.Error != "" {
+		t.Fatalf("verification = %+v", got)
+	}
+	if got.Confidence != recommend.ConfidenceVerifiedOnInput || got.Comparison == nil || !got.Comparison.InputsIdentical {
+		t.Fatalf("confidence %q, comparison %+v", got.Confidence, got.Comparison)
+	}
+}

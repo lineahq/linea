@@ -127,12 +127,12 @@ func conditionNeverMatched(in Input) []Recommendation {
 			ref := fmt.Sprintf("%s#condition[%d]", processorRef(r.processor), t.c.Index)
 			out = append(out, Recommendation{
 				Kind: KindRedundancy, Confidence: ConfidenceObserved, Pipeline: r.pipeline,
-				Components: []string{processorRef(r.processor)},
+				Components: []string{processorRef(r.processor)}, Subject: t.c.Condition,
 				Summary: fmt.Sprintf("Condition %s of %s never matched: evaluated %s, it removed nothing; the other conditions removed all %d dropped %s. If this input holds items it should drop, the condition is wrong rather than unneeded.",
 					t.c.Source, r.processor, plural(t.evaluated, "time"), r.dropped, nounFor(r.dropped, itemNoun(r.signal))),
 				Evidence: []Evidence{{SectionFiltering, ref}},
 				Benefit:  &Benefit{MetricEvaluationsWithoutEffect, t.evaluated},
-				Change:   &ConfigChange{Op: OpRemoveStatement, Component: r.processor, Index: ptr(t.c.Index), Text: t.c.Condition},
+				Change:   &ConfigChange{Op: OpRemoveStatement, Component: r.processor, Index: ptr(t.c.Index), Text: t.c.Condition, Path: t.c.Source},
 				Coverage: slices.Clone(coverage),
 			})
 		}

@@ -64,8 +64,7 @@ func (s *Service) VerifyRecommendation(ctx context.Context, caller Caller, req V
 		return nil, &Error{Code: CodeNotFound, Message: fmt.Sprintf("run %s has no recommendation %d", req.Run, req.Recommendation)}
 	}
 	rec := v.Report.Recommendations[req.Recommendation]
-	overrides, err := engine.CandidateOverrides(rec)
-	if err != nil {
+	if err := engine.Verifiable(rec); err != nil {
 		return nil, newError(CodeInvalidRequest, err)
 	}
 	if err := s.begin(ctx, caller, authz.RunSubmit); err != nil {
@@ -84,6 +83,12 @@ func (s *Service) VerifyRecommendation(ctx context.Context, caller Caller, req V
 	}
 	original, err := engine.BundleRuntime(raw)
 	if err != nil {
+		return nil, classify(err, CodeStorageError)
+	}
+	overrides, err := engine.CandidateOverrides(rec, raw)
+	if errors.Is(err, engine.ErrNotVerifiable) {
+		return nil, newError(CodeInvalidRequest, err)
+	} else if err != nil {
 		return nil, classify(err, CodeStorageError)
 	}
 	candidate, err := engine.CandidateRequest(ctx, raw, overrides)

@@ -598,6 +598,12 @@ items, tone by why the batch left) and the outcome rows, with changed rows
 marked. It reads each run's own report `batching`, not the platform comparison,
 so it shows even when the comparison is inconclusive (`runs/batchingCompare.ts`,
 tested).
+A "Recommendations" card lists the platform comparison's `recommendations`:
+each one resolved, new or persisting, with its rule title, the summary of
+the run that has it (the after run's for one that persists, with the change
+of its benefit count), its pipeline, components and subject, and links to
+open it in either run. It renders 25 rows a page (`runs/recommendationsCompare.ts`,
+tested; [recommendations.md](recommendations.md#comparison)).
 "Compare with…" (`CompareMenu`) also runs a finished run's input with another
 configuration, the open one or one of the five newest saved ones, beside the
 run's own recorded configuration: one `POST /comparisons` on the run's runtime

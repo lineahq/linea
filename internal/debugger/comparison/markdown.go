@@ -110,6 +110,13 @@ func (c *Comparison) Markdown() string {
 			fmt.Fprintf(&b, "| %s | %s | %s |\n", code(a.Name), code(string(a.Before)), code(string(a.After)))
 		}
 	}
+	if r := c.Recommendations; r != nil {
+		fmt.Fprintf(&b, "\n## Recommendations\n\n%s.\n\n| Status | Rule | Pipeline | Components | Subject | Benefit before | Benefit after |\n|---|---|---|---|---|---|---|\n", r.Counts())
+		for _, d := range r.Items {
+			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %s |\n", d.Status, code(d.Rule), code(d.Pipeline), code(strings.Join(d.Components, ", ")),
+				code(d.Subject), benefitCell(d.Before), benefitCell(d.After))
+		}
+	}
 	if len(c.Ignored) > 0 {
 		b.WriteString("\n## Ignored\n\n| Rule | Differences |\n|---|---|\n")
 		for _, i := range c.Ignored {
@@ -123,6 +130,14 @@ func (c *Comparison) Markdown() string {
 		}
 	}
 	return b.String()
+}
+
+// benefitCell is one side's benefit count and metric, or a dash.
+func benefitCell(s *RecommendationSide) string {
+	if s == nil || s.Benefit == nil {
+		return "—"
+	}
+	return fmt.Sprintf("%d %s", s.Benefit.Count, code(s.Benefit.Metric))
 }
 
 func exporterResult(e Exporter) string {

@@ -83,7 +83,7 @@ service:
 	if r := got["processor/k8sattributes"]; !strings.Contains(r.Summary, "pod_association is empty") {
 		t.Fatalf("k8sattributes = %+v", r)
 	}
-	if r := got["exporter/otlp/out"]; r.Change == nil || r.Change.Op != recommend.OpSetOption || r.Change.Value != "[region, tenant_id]" ||
+	if r := got["exporter/otlp/out"]; r.Change == nil || r.Change.Op != recommend.OpSetOption || r.Change.Value != `["region","tenant_id"]` ||
 		!strings.Contains(r.Summary, "headers_setter headers[0] (X-Tenant) from_context") {
 		t.Fatalf("otlp/out = %+v", r)
 	}

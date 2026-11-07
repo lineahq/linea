@@ -485,7 +485,7 @@ func paths() map[string]any {
 				"409": failure("A run has not finished or has no report."),
 			})},
 		"/api/v1/runs/{id}/recommendations/{n}/verify": map[string]any{"post": op("verifyRecommendation",
-			"Run one recommendation's change as a candidate: the run's captured bundle with the change layered as provider overrides after its unchanged configuration, on the same inputs and runtime, without reading the host. Waits for the candidate, which is an ordinary run, and compares it with the run: confidence verified_on_input when the output is the same, differs_on_input when it differs. Ending the request cancels the candidate. Only swap changes are verifiable. Send an empty JSON body.",
+			"Run one recommendation's change as a candidate: the run's captured bundle with the change layered as provider overrides after its unchanged configuration, on the same inputs and runtime, without reading the host. Waits for the candidate, which is an ordinary run, and compares it with the run: confidence verified_on_input when the output is the same, differs_on_input when it differs. Ending the request cancels the candidate. Verifiable changes: a processor swap, a removed transform statement or filter condition (its list replaced, rebuilt from the run's configuration text) and an option with a value; others are invalid_request. Send an empty JSON body.",
 			[]any{idParam,
 				map[string]any{"name": "n", "in": "path", "required": true, "schema": map[string]any{"type": "integer", "minimum": 0}, "description": "The recommendation's position in the report's recommendations."},
 			}, "", map[string]any{

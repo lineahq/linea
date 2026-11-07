@@ -34,7 +34,11 @@ func (t statementTotal) name() string {
 }
 
 func (t statementTotal) change() *ConfigChange {
-	return &ConfigChange{Op: OpRemoveStatement, Component: t.processor, Group: ptr(t.group), Index: ptr(t.index), Text: t.text}
+	c := &ConfigChange{Op: OpRemoveStatement, Component: t.processor, Group: ptr(t.group), Index: ptr(t.index), Text: t.text}
+	if list := map[string]string{"traces": "trace_statements", "logs": "log_statements", "metrics": "metric_statements"}[t.signal]; list != "" {
+		c.Path = fmt.Sprintf("%s[%d].statements[%d]", list, t.group, t.index)
+	}
+	return c
 }
 
 func (t statementTotal) coverage() []string {
@@ -112,7 +116,7 @@ func statementNeverMatched(in Input) []Recommendation {
 		}
 		out = append(out, Recommendation{
 			Kind: KindRedundancy, Confidence: ConfidenceObserved, Pipeline: t.pipeline,
-			Components: []string{processorRef(t.processor)},
+			Components: []string{processorRef(t.processor)}, Subject: t.text,
 			Summary: fmt.Sprintf("%s never matched: its where clause was false on all %s it was evaluated on in %s, so it changed nothing. If this input holds items it should change, the where clause is wrong rather than unneeded.",
 				t.name(), plural(t.notMatched, contextNoun(t.context)), pipelinesPhrase(t.pipelines)),
 			Evidence: []Evidence{{SectionOTTL, t.ref()}},
@@ -135,7 +139,7 @@ func statementNoChange(in Input) []Recommendation {
 		}
 		out = append(out, Recommendation{
 			Kind: KindRedundancy, Confidence: ConfidenceObserved, Pipeline: t.pipeline,
-			Components: []string{processorRef(t.processor)},
+			Components: []string{processorRef(t.processor)}, Subject: t.text,
 			Summary: fmt.Sprintf("%s ran on %s and changed none of them: each already held what it sets.",
 				t.name(), plural(t.matched, contextNoun(t.context))),
 			Evidence: []Evidence{{SectionOTTL, t.ref()}},
@@ -157,7 +161,7 @@ func duplicateStatement(in Input) []Recommendation {
 		}
 		out = append(out, Recommendation{
 			Kind: KindRedundancy, Confidence: ConfidenceObserved, Pipeline: t.pipeline,
-			Components: []string{processorRef(t.processor)},
+			Components: []string{processorRef(t.processor)}, Subject: t.text,
 			Summary: fmt.Sprintf("%s repeats the statement before it and changed none of the %s it ran on.",
 				t.name(), plural(t.matched, contextNoun(t.context))),
 			Evidence: []Evidence{{SectionOTTL, t.ref()}},

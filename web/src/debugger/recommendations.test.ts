@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RecommendationVerification, Report } from '../api/types';
-import { benefitText, changeText, componentNode, provenance, recommendationHint, recommendationViews, verificationView } from './recommendations';
+import { benefitChangeText, benefitText, changeText, componentNode, provenance, recommendationHint, recommendationViews, ruleTitle, verifiable, verificationView } from './recommendations';
 
 const comp = (kind: string, id: string) => ({ kind, id, type: id.split('/')[0], ref: `${kind}/${id}`, mode: 'real' });
 
@@ -74,6 +74,20 @@ describe('benefitText and provenance', () => {
   });
 });
 
+describe('ruleTitle and benefitChangeText', () => {
+  it('titles a known rule and shows an unknown one by its ID', () => {
+    expect(ruleTitle('ottl.statement_never_matched')).toBe('Statement never matched');
+    expect(ruleTitle('future.rule')).toBe('future.rule');
+  });
+  it('words a benefit that moved between two runs, and nothing when it did not or the metrics differ', () => {
+    const m = (metric: string, count: number) => ({ metric, count });
+    expect(benefitChangeText(m('evaluations_without_effect', 12), m('evaluations_without_effect', 3))).toBe('12 → 3 evaluations had no effect');
+    expect(benefitChangeText(m('new_metric', 2), m('new_metric', 5))).toBe('2 → 5 new metric');
+    expect(benefitChangeText(m('evaluations_without_effect', 3), m('evaluations_without_effect', 3))).toBeUndefined();
+    expect(benefitChangeText(m('evaluations_without_effect', 3), m('records_without_effect', 1))).toBeUndefined();
+  });
+});
+
 describe('componentNode', () => {
   it('uses the pipeline that holds the component, and no node for an unused one', () => {
     const r = report([]);
@@ -84,13 +98,18 @@ describe('componentNode', () => {
 });
 
 describe('verification', () => {
-  it('marks only processor-order changes verifiable, by their report position', () => {
+  it('marks swaps, located removals and options with a value verifiable, by their report position', () => {
     const views = recommendationViews(report([
       { rule: 'config.unused_component', kind: 'redundancy', confidence: 'static', summary: 'Unused.' },
       { rule: 'filter.after_batch', kind: 'ordering', confidence: 'observed', pipeline: 'logs/archive', summary: 'Late.', change: { op: 'swap', processors: ['transform/route', 'batch'] } },
       { rule: 'sampling.late_spans', kind: 'risk', confidence: 'observed', summary: 'Late.', change: { op: 'set_option', component: 'tail_sampling', option: 'decision_wait' } },
     ]), 'abc');
     expect(views.map((v) => [v.index, v.verifiable])).toEqual([[0, false], [1, true], [2, false]]);
+    expect(verifiable({ op: 'remove_statement', component: 'transform/route', group: 0, index: 1, text: 'set(x, 1)', path: 'log_statements[0].statements[1]' })).toBe(true);
+    expect(verifiable({ op: 'remove_statement', component: 'filter/drop', index: 0, text: 'x' })).toBe(false);
+    expect(verifiable({ op: 'set_option', component: 'batch', option: 'metadata_keys', value: '["tenant"]' })).toBe(true);
+    expect(verifiable({ op: 'swap', processors: [] })).toBe(false);
+    expect(verifiable(undefined)).toBe(false);
   });
 
   const verification = (v: Partial<RecommendationVerification>) =>

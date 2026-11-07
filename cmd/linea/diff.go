@@ -275,6 +275,22 @@ func writeComparison(w io.Writer, c *platform.Comparison) error {
 			printf("assertion %q: %s -> %s\n", a.Name, outcomeText(string(a.Before)), outcomeText(string(a.After)))
 		}
 	}
+	if r := c.Recommendations; r != nil {
+		printf("recommendations: %s\n", r.Counts())
+		for _, d := range r.Items {
+			if d.Status == platform.ComparisonRecommendationPersists {
+				continue
+			}
+			where := strings.Join(d.Components, ", ")
+			if d.Pipeline != "" {
+				where += " (" + d.Pipeline + ")"
+			}
+			if d.Subject != "" {
+				where += ": " + d.Subject
+			}
+			printf("  %s %s at %s\n", d.Status, d.Rule, where)
+		}
+	}
 	for _, i := range c.Ignored {
 		printf("ignored %s: %d difference(s)\n", i.Rule, i.Count)
 	}

@@ -169,7 +169,7 @@ func addComparisonTools(server *sdk.Server, service *platform.Service, web webLi
 			}
 			return comparisonResult{Comparison: c, Markdown: c.Markdown()}, nil
 		})
-	addTool(server, "linea_verify_recommendation", "Run a recommendation's suggested change on its run's captured inputs and runtime, without changing the user's configuration (the change is layered as provider overrides), and compare the candidate with the run: verified_on_input when the output is the same, differs_on_input when it changes. One more run; waits for it. Only processor-order (swap) changes are verifiable; others are refused as invalid_request.",
+	addTool(server, "linea_verify_recommendation", "Run a recommendation's suggested change on its run's captured inputs and runtime, without changing the user's configuration (the change is layered as provider overrides), and compare the candidate with the run: verified_on_input when the output is the same, differs_on_input when it changes. One more run; waits for it. Verifiable changes: a processor swap, a removed transform statement or filter condition (the list holding it is replaced, rebuilt from the run's configuration text), and an option with a value; others, or one the configuration does not hold as recorded, are refused as invalid_request.",
 		func(ctx context.Context, in verifyRecommendationInput) (summarized, error) {
 			if in.RunID == "" {
 				return nil, invalidRequest("run_id must not be empty")
