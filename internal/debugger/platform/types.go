@@ -44,6 +44,7 @@ type (
 	RecommendationChange = recommend.ConfigChange
 	// Confidence is what a recommendation rests on.
 	Confidence       = recommend.Confidence
+	Measure          = recommend.Measure
 	ArtifactKind     = artifact.Kind
 	ArtifactMetadata = artifact.Metadata
 	ArtifactRevision = artifact.RevisionData

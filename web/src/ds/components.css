@@ -116,6 +116,11 @@
 .od-effect { font-weight: 500; color: var(--fg-muted); }
 .od-effect--pass { color: var(--pass); }
 .od-effect--warn { color: var(--warn); }
+.od-measured { border-collapse: collapse; margin-top: 6px; font-size: 12px; }
+.od-measured th { text-align: left; font-weight: 500; color: var(--fg-muted); padding: 0 12px 2px 0; }
+.od-measured td { padding: 1px 12px 1px 0; font-variant-numeric: tabular-nums; }
+.od-measured td:nth-child(n+2), .od-measured th:nth-child(n+2) { text-align: right; }
+.od-measured td:last-child { font-weight: 500; }
 
 .od-signal { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 6px 0 4px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--fg-muted); font: 500 11.5px/1 var(--font-sans); background: var(--bg-surface); }
 

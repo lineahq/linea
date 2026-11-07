@@ -28,7 +28,7 @@ A recommendation has:
 | `summary` | One self-contained sentence or two, with the counts. |
 | `evidence` | `{section, ref}` pointers into the report: `section` names a report field (`topology`, `stages`, `filtering`, `ottl`, `batching`, `grouping`, `sampling`); `ref` is a component ref (or `pipeline/<id>` in `topology`), with `#condition[i]`, `#group[g].statement[s]`, `#trace[<id>]` or `#policy[<name>]` (a tail_sampling policy by its configured name) for an item inside it. |
 | `output` | What applying the change does to the exported data, declared per rule (`TestEveryRuleStatesItsOutput`): `unchanged` (the same records with the same content: removing work without effect, a safe reorder), `regrouped` (the same records, sent in other batches or resource groups: the `batch.*` sizing rules and `grouping.after_batch`) or `changed` (what the exporters receive changes: `batch.drops_client_context`, `sampling.late_spans`). It is the rule's claim; a verification confirms or refutes it on the run's input. Reports from before the field omit it. |
-| `benefit` | `{metric, count, of}`: what the run shows the change saves. Metrics: `evaluations_without_effect`, `records_without_effect`, `records_not_processed`, `resource_blocks_merged` (resource blocks the batch sent that a regrouping after it would merge into others). `of` is the total `count` is part of in this run (`impact.go`): for record metrics, the record passes through the pipeline's processors (the sum of each processor stage's input count, so a record counts once per processor); for evaluations, every evaluation of the component's replayed statements (`Matched` + `NotMatched`) or verified filter conditions (`Evaluated`); for resource blocks, every block the batch processor sent. It is omitted when the run cannot give a total. |
+| `benefit` | `{metric, count, of}`: what the run shows the change saves. Metrics: `evaluations_without_effect`, `records_without_effect`, `records_not_processed`, `resource_blocks_merged` (resource blocks the batch sent that a regrouping after it would merge into others). `of` is the total `count` is part of in this run (`impact.go`): for record metrics, the record passes through the pipeline's processors (the sum of each processor stage's input count, a batch processor's from its batching arrivals since its inputs have no diff, so a record counts once per processor); for evaluations, every evaluation of the component's replayed statements (`Matched` + `NotMatched`) or verified filter conditions (`Evaluated`); for resource blocks, every block the batch processor sent. It is omitted when the run cannot give a total. |
 | `change` | The suggested change, when one follows from the evidence: `swap` (`processors`, the pipeline's new processor list), `remove_statement` (`component`, `index`, and `group` for a transform statement; `text`; `path`, where it is configured in the component: `log_statements[0].statements[1]`, a flat statement list being group 0, `log_conditions[0].conditions[1]` or the deprecated `logs.log_record[0]`), `set_option` (`component`, `option`, and `value` as YAML, JSON-encoded, when the evidence decides it; empty leaves it to the user). |
 | `blockers` | Why a stronger suggestion was not made. |
 | `coverage` | What the input did not exercise. |
@@ -267,7 +267,19 @@ transform/tag (the blocker says so), drops nothing in the candidate
 (`TestVerifyRecommendationReportsAChangedOutput`).
 
 The result (`RecommendationVerification`) names the run, the recommendation,
-its rule, the overrides, the candidate run and the comparison. Nothing links
+its rule, the overrides, the candidate run and the comparison, and `measured`:
+the work the recommendation is about counted in the run (`before`) and the
+candidate (`after`) from their reports (`recommend.Measured`, `measure.go`):
+
+| Metric | Subject | Counted |
+| --- | --- | --- |
+| `record_passes` | the pipeline | Records the pipeline's processors received, once per processor (the total of a record benefit). |
+| `evaluations` | the component | Evaluations of its OTTL statements (verified replays) or filter conditions (verified requests), for `ottl.*` and `filter.*` rules. |
+| `batch_sends` | the pipeline | Sends of the pipeline's batch processors, for `batch.*` and `grouping.*` rules, or for any rule when the count moved. |
+
+A count neither run shows is left out, so a missing measure is unknown, not
+zero; a failed candidate has none. Records the exporters received are in the
+comparison's `exporters`. Nothing links
 the two runs in storage: the candidate's snapshot records its overrides, and
 the stored report of the run is not changed.
 
@@ -283,8 +295,9 @@ the stored report of the run is not changed.
 - Verification: the web card's "Verify on this input" (`web-client.md`);
   `linea run --verify-recommendations` (local or `--server`)
   verifies every recommendation with a change one after another, prints the
-  raised confidences in the report and a `verifications:` section (on stderr
-  beside `--format json`); `POST /runs/{id}/recommendations/{n}/verify`; MCP
+  raised confidences in the report and a `verifications:` section with each
+  measure as `metric of subject: before -> after` (on stderr beside
+  `--format json`); `POST /runs/{id}/recommendations/{n}/verify`; MCP
   `linea_verify_recommendation`.
 - MCP and HTTP: the `recommendations` evidence family of
   `linea_get_execution_trace` and `GET /runs/{id}/evidence`, optionally

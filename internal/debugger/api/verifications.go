@@ -23,7 +23,10 @@ type RecommendationVerification struct {
 	// comparison is inconclusive or the candidate failed.
 	Confidence platform.Confidence  `json:"confidence,omitempty"`
 	Comparison *platform.Comparison `json:"comparison,omitempty"`
-	Error      string               `json:"error,omitempty"`
+	// Measured counts the work the recommendation is about in the run and
+	// the candidate; absent when the candidate failed.
+	Measured []platform.Measure `json:"measured,omitempty"`
+	Error    string             `json:"error,omitempty"`
 }
 
 // verifyRecommendation runs one recommendation's change as a candidate on the
@@ -42,5 +45,5 @@ func (s *Server) verifyRecommendation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, RecommendationVerification{Run: v.Run, Recommendation: v.Recommendation, Rule: v.Rule, Overrides: v.Overrides,
-		Candidate: runOf(v.Candidate), Confidence: v.Confidence, Comparison: v.Comparison, Error: v.Error})
+		Candidate: runOf(v.Candidate), Confidence: v.Confidence, Comparison: v.Comparison, Measured: v.Measured, Error: v.Error})
 }

@@ -159,4 +159,10 @@ func TestVerifyRecommendationRemovesAStatement(t *testing.T) {
 	if got.Confidence != recommend.ConfidenceVerifiedOnInput || got.Comparison == nil || !got.Comparison.InputsIdentical {
 		t.Fatalf("confidence %q, comparison %+v", got.Confidence, got.Comparison)
 	}
+	// The removed statement is no longer evaluated: the candidate measures
+	// fewer evaluations of the transform than the run.
+	m := slices.IndexFunc(got.Measured, func(m recommend.Measure) bool { return m.Metric == recommend.MeasureEvaluations })
+	if m < 0 || got.Measured[m].Subject != "processor/transform/route" || got.Measured[m].After >= got.Measured[m].Before {
+		t.Fatalf("measured = %+v", got.Measured)
+	}
 }

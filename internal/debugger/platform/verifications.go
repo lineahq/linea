@@ -40,6 +40,12 @@ type RecommendationVerification struct {
 	// Comparison compares the run (before) with the candidate (after);
 	// absent when the candidate failed.
 	Comparison *Comparison `json:"comparison,omitempty"`
+	// Measured counts the work the recommendation is about in the run
+	// (before) and the candidate (after): record passes through the
+	// pipeline's processors, the component's evaluations, batch sends.
+	// Absent when the candidate failed; a count neither run shows is left
+	// out.
+	Measured []recommend.Measure `json:"measured,omitempty"`
 	// Error is why the candidate run failed.
 	Error string `json:"error,omitempty"`
 }
@@ -111,7 +117,7 @@ func (s *Service) VerifyRecommendation(ctx context.Context, caller Caller, req V
 		_, _ = s.CancelRun(context.WithoutCancel(ctx), caller, h.id)
 		return nil, err
 	}
-	_, err = s.GetRunReport(ctx, caller, h.id, true)
+	after, err := s.GetRunReport(ctx, caller, h.id, true)
 	if err != nil && ctx.Err() != nil {
 		_, _ = s.CancelRun(context.WithoutCancel(ctx), caller, h.id)
 		return nil, ctx.Err()
@@ -130,6 +136,7 @@ func (s *Service) VerifyRecommendation(ctx context.Context, caller Caller, req V
 		return nil, err
 	}
 	out.Comparison = cmp
+	out.Measured = recommend.Measured(rec, measurable(v.Report), measurable(after))
 	switch cmp.Outcome {
 	case comparison.Same:
 		out.Confidence = recommend.ConfidenceVerifiedOnInput
@@ -137,6 +144,11 @@ func (s *Service) VerifyRecommendation(ctx context.Context, caller Caller, req V
 		out.Confidence = recommend.ConfidenceDiffersOnInput
 	}
 	return out, nil
+}
+
+// measurable is what of a report recommend.Measured counts.
+func measurable(r *Report) recommend.Input {
+	return recommend.Input{Stages: r.Stages, Filtering: r.Filtering, OTTL: r.OTTL, Batching: r.Batching}
 }
 
 // sameRuntime refuses a candidate bound to another runtime build than the

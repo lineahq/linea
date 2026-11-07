@@ -900,7 +900,12 @@ the button shows the elapsed time against the original run's duration, with a
 bar capped at 95% (`verifyProgress` in `recommendations.ts`, tested); the server
 reports no progress, so it is an estimate. The card then shows the
 server's outcome (same output, different output, inconclusive with the
-comparison's reasons, or the candidate's failure), each scenario assertion
+comparison's reasons, or the candidate's failure), a table of what it
+measured on this input, now and with the change (`measuredViews` in
+`recommendations.ts`, tested: the server's `measured` counts with their
+relative change, less work in the pass colour, then the records the
+exporters received from the comparison, a change there in the warning
+colour), each scenario assertion
 whose outcome the change changed, saying so in the outcome when one that
 passed no longer passes, the provenance the
 verification earns, and a link comparing the candidate with the run

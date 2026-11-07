@@ -22,7 +22,10 @@ type verification struct {
 	// cannot be verified.
 	confidence string
 	reasons    []string
-	failed     string
+	// measured are the counts of the work the recommendation is about,
+	// in the run and the candidate.
+	measured []platform.Measure
+	failed   string
 	// refused is why the change cannot be verified; no candidate ran.
 	refused string
 }
@@ -60,7 +63,7 @@ func verifyLocal(ctx context.Context, s *platform.Service, run string) func(int)
 		if err != nil {
 			return verification{}, err
 		}
-		return verification{candidate: v.Candidate.ID, confidence: string(v.Confidence), reasons: reasonsOf(v.Comparison), failed: v.Error}, nil
+		return verification{candidate: v.Candidate.ID, confidence: string(v.Confidence), reasons: reasonsOf(v.Comparison), measured: v.Measured, failed: v.Error}, nil
 	}
 }
 
@@ -80,7 +83,7 @@ func verifyConnected(ctx context.Context, c *client.Client, run string) func(int
 }
 
 func verificationOf(v *api.RecommendationVerification) verification {
-	return verification{candidate: v.Candidate.ID, confidence: string(v.Confidence), reasons: reasonsOf(v.Comparison), failed: v.Error}
+	return verification{candidate: v.Candidate.ID, confidence: string(v.Confidence), reasons: reasonsOf(v.Comparison), measured: v.Measured, failed: v.Error}
 }
 
 func reasonsOf(c *platform.Comparison) []string {
@@ -132,6 +135,9 @@ func writeVerifications(w io.Writer, vs []verification) error {
 		printf(" (candidate run %s)\n", v.candidate)
 		for _, r := range v.reasons {
 			printf("      reason: %s\n", r)
+		}
+		for _, m := range v.measured {
+			printf("      %s of %s: %d -> %d\n", m.Metric, m.Subject, m.Before, m.After)
 		}
 	}
 	return errors.Join(errs...)

@@ -46,6 +46,19 @@ export function VerifyRecommendation({ runId, index, provenance, expectedMs }: {
             <div className="od-callout__body">{v.text}</div>
             {v.assertions.map((a, i) => <div key={`a${i}`} className="od-callout__body">{a}</div>)}
             {v.reasons.map((r, i) => <div key={i} className="od-callout__body od-muted">{r}</div>)}
+            {v.measured.length > 0 && (
+              <table className="od-measured" aria-label="Measured on this input">
+                <thead><tr><th>Measured on this input</th><th>Now</th><th>With the change</th><th /></tr></thead>
+                <tbody>
+                  {v.measured.map((m) => (
+                    <tr key={m.label}>
+                      <td>{m.label}</td><td>{m.before}</td><td>{m.after}</td>
+                      <td className={`od-effect--${m.tone}`}>{m.change}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
             <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
               <button type="button" className="od-btn od-btn--link od-btn--sm"
                 onClick={() => void navigate({ to: '/', search: { run: v.candidate, compare: runId } })}>

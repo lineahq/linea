@@ -221,7 +221,7 @@ values. The report also contains:
   (Verify on a recommendation in the web client,
   `linea run --verify-recommendations`, or over HTTP or MCP; try
   `samples/filter-order`), a suggested processor order runs on the same input and the output is
-  compared with the run's;
+  compared with the run's, with the work it saved measured before and after;
 - mocked dependencies and stand-ins: components outside the distribution, and
   references with no value supplied.
 

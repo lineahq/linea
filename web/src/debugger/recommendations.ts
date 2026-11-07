@@ -262,6 +262,66 @@ export interface VerificationView {
   assertions: string[];
   /** candidate is the candidate run's ID, to compare with the run. */
   candidate: string;
+  /** measured are the counts the candidate run moved, before and after the change. */
+  measured: MeasuredView[];
+}
+
+export interface MeasuredView {
+  label: string;
+  before: string;
+  after: string;
+  /** change is the relative change ("−20%"); empty when nothing moved. */
+  change: string;
+  tone: 'pass' | 'warn' | 'neutral';
+}
+
+const short = (ref: string) => ref.slice(ref.indexOf('/') + 1);
+
+/** measureLabel names what a measure counts. */
+function measureLabel(metric: string, subject: string): string {
+  switch (metric) {
+    case 'record_passes':
+      return `Record passes through the processors of ${subject}`;
+    case 'evaluations':
+      return `Evaluations of ${short(subject)}`;
+    case 'batch_sends':
+      return `Sends by the batch processors of ${subject}`;
+  }
+  return `${metric.replaceAll('_', ' ')} of ${subject}`;
+}
+
+/** relative words a count's change as a percentage of its value before. */
+export function relative(before: number, after: number): string {
+  if (before === after) return '';
+  if (before === 0) return 'new';
+  const p = ((after - before) / before) * 100;
+  const abs = Math.abs(p);
+  const n = abs < 0.1 ? '<0.1' : abs < 10 ? String(Number(abs.toFixed(1))) : String(Math.round(abs));
+  return `${p < 0 ? '−' : '+'}${n}%`;
+}
+
+/**
+ * measuredViews words what a verification measured: the server's counts of
+ * the work the recommendation is about, then the records the exporters
+ * received (from the comparison). Less work is the change's aim; fewer
+ * exported records is a warning.
+ */
+export function measuredViews(v: RecommendationVerification): MeasuredView[] {
+  const out: MeasuredView[] = (v.measured ?? []).map((m) => ({
+    label: measureLabel(m.metric, m.subject),
+    before: count(m.before),
+    after: count(m.after),
+    change: relative(m.before, m.after),
+    tone: m.after < m.before ? 'pass' : 'neutral',
+  }));
+  const exporters = v.comparison?.exporters ?? [];
+  if (exporters.length) {
+    const before = exporters.reduce((n, e) => n + e.before, 0);
+    const after = exporters.reduce((n, e) => n + e.after, 0);
+    out.push({ label: 'Records the exporters received', before: count(before), after: count(after), change: relative(before, after),
+      tone: after === before ? 'neutral' : 'warn' });
+  }
+  return out;
 }
 
 /**
@@ -273,7 +333,7 @@ export function verificationView(v: RecommendationVerification, runName: string)
   const reasons = (v.comparison?.reasons ?? []).map((r) => r.message);
   const assertions = (v.comparison?.assertions ?? []).filter((a) => a.changed)
     .map((a) => `${a.name}: ${a.before ?? 'not evaluated'} in this run, ${a.after ?? 'not evaluated'} with the change`);
-  const base = { reasons, assertions, candidate };
+  const base = { reasons, assertions, candidate, measured: v.error ? [] : measuredViews(v) };
   if (v.error) return { ...base, text: `The candidate run failed: ${v.error}`, tone: 'fail' };
   switch (v.confidence) {
     case 'verified_on_input':

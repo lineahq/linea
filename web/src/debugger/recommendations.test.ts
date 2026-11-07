@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RecommendationVerification, Report } from '../api/types';
-import { benefitChangeText, benefitText, changeText, componentNode, effect, percent, provenance, recommendationHint, recommendationKinds, recommendationViews, ruleTitle, share, verifiable, verificationView, verifyProgress } from './recommendations';
+import { benefitChangeText, benefitText, changeText, componentNode, effect, measuredViews, percent, provenance, recommendationHint, recommendationKinds, recommendationViews, relative, ruleTitle, share, verifiable, verificationView, verifyProgress } from './recommendations';
 
 const comp = (kind: string, id: string) => ({ kind, id, type: id.split('/')[0], ref: `${kind}/${id}`, mode: 'real' });
 
@@ -226,5 +226,36 @@ describe('effect and share', () => {
     expect(v.saves).toBe('20,000 records passed through unchanged in this run');
     expect(v.share?.text).toBe("13% of the 160,000 record passes through the pipeline's processors");
     expect(v.effect?.tone).toBe('neutral');
+  });
+});
+
+describe('measured impact of a verification', () => {
+  const verification = (v: Partial<RecommendationVerification>) =>
+    ({ run: 'r1', recommendation: 0, rule: 'ottl.statement_never_matched', candidate: { id: 'c1' }, confidence: 'verified_on_input', ...v }) as RecommendationVerification;
+
+  it('words the counts the change moved, and the records the exporters received', () => {
+    const v = verification({
+      measured: [
+        { metric: 'evaluations', subject: 'processor/transform/enrich', before: 25000, after: 20000 },
+        { metric: 'record_passes', subject: 'logs', before: 29423, after: 29423 },
+        { metric: 'batch_sends', subject: 'logs', before: 10, after: 5 },
+      ],
+      comparison: { exporters: [{ exporter: 'otlp/a', before: 4000, after: 4000 }, { exporter: 'otlp/b', before: 423, after: 400 }] } as unknown as RecommendationVerification['comparison'],
+    });
+    expect(measuredViews(v)).toEqual([
+      { label: 'Evaluations of transform/enrich', before: '25,000', after: '20,000', change: '−20%', tone: 'pass' },
+      { label: 'Record passes through the processors of logs', before: '29,423', after: '29,423', change: '', tone: 'neutral' },
+      { label: 'Sends by the batch processors of logs', before: '10', after: '5', change: '−50%', tone: 'pass' },
+      { label: 'Records the exporters received', before: '4,423', after: '4,400', change: '−0.5%', tone: 'warn' },
+    ]);
+    expect(verificationView(v, 'abc').measured).toHaveLength(4);
+    expect(verificationView(verification({ error: 'boom', measured: v.measured }), 'abc').measured).toEqual([]);
+  });
+
+  it('words a relative change', () => {
+    expect(relative(10, 10)).toBe('');
+    expect(relative(0, 3)).toBe('new');
+    expect(relative(200, 300)).toBe('+50%');
+    expect(relative(100000, 99999)).toBe('−<0.1%');
   });
 });

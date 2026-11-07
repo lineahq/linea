@@ -3245,6 +3245,12 @@ export interface components {
             unmatched_after: number;
             unmatched_before: number;
         };
+        Measure: {
+            after: number;
+            before: number;
+            metric: string;
+            subject: string;
+        };
         Metadata: {
             /** Format: date-time */
             created: string;
@@ -3432,6 +3438,7 @@ export interface components {
             comparison?: components["schemas"]["RunComparison"];
             confidence?: string;
             error?: string;
+            measured?: components["schemas"]["Measure"][];
             overrides?: string[];
             recommendation: number;
             rule: string;

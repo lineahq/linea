@@ -5349,6 +5349,29 @@
         ],
         "type": "object"
       },
+      "Measure": {
+        "properties": {
+          "after": {
+            "type": "integer"
+          },
+          "before": {
+            "type": "integer"
+          },
+          "metric": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "after",
+          "before",
+          "metric",
+          "subject"
+        ],
+        "type": "object"
+      },
       "Metadata": {
         "properties": {
           "created": {
@@ -6033,6 +6056,12 @@
           },
           "error": {
             "type": "string"
+          },
+          "measured": {
+            "items": {
+              "$ref": "#/components/schemas/Measure"
+            },
+            "type": "array"
           },
           "overrides": {
             "items": {
