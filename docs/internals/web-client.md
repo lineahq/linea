@@ -858,7 +858,7 @@ Assertions tab. **Key findings** lists each finding as an icon, its title and
 its actions as inline link buttons, with one muted footer line "Observed in run
 <name>" instead of per-finding provenance and detail text; it is omitted
 without findings and while the run is live. **Recommendations** shows the count
-and `recommendationHint` (how many concern data at risk), then one row per kind
+and `recommendationHint` (how many concern data at risk and how many this input left untested), then one row per kind
 of recommendation (`recommendationKinds` in `recommendations.ts`, tested): its
 kind chip, the rule's title and "×N" when the rule fired more than once, data
 at risk first; "Open
@@ -883,18 +883,32 @@ each opening to its results; the web's own checks are not recorded, and nothing
 shows when there are none. A live run says assertions are available when it
 finishes. The
 Recommendations tab (`debugger/RecommendationsTab.tsx`, its count on the tab;
-`debugger/recommendations.ts`, tested) lists them: per recommendation its kind, a title from its rule, the server's summary, the
-what the change does to the exported data (`effect`, from the report's
-`output`: stays the same, regrouped, or changes what the exporters receive;
-a verification's confidence settles it), the suggested change as text, what
-it would save with its share of the run's total and a small bar (`share`;
-`totalText` names whose total: the condition or statement evaluations of
-the component, the record passes through the processors of the pipeline),
-its limits and coverage, a
+`debugger/recommendations.ts`, tested) lists them as compact cards that keep
+all the information, in three sections by the report's `holds`
+(`recommendationGroups`, tested; `holdsOf` reads a report without the field
+as `any_input` only when `static`): "Holds for any input", "Depends on this
+input", and "Not tested by this input" for `untested` recommendations, which
+show their condition, statement or policy and no change; report order within
+each, empty sections left out. Per recommendation: its kind, a title from its rule and a
+chip of what the change does to the exported data (`effect`, from the report's
+`output`: same output, regroups only, or changes output; a verification's
+confidence settles it, and the chip's tooltip says it in full), the server's
+summary, the change in brief (`changeText`: a processor order as the moves
+from the pipeline's current order, `moves`, with the whole order listed when
+there are more than two; a removal as the statement or condition itself,
+which the summary locates; `changeTitle` says it in full as a tooltip), one
+short line of what it would save (`savesText`) with its share of the run's
+total and a small bar (`share`; its tooltip names whose total through
+`totalText`: the condition or statement evaluations of the component, the
+record passes through the processors of the pipeline), its limits and
+coverage, and on one row a
 link to each component it names and what it rests on. It words them only:
 it adds, ranks or hides none, and a change is never applied to the draft.
-A recommendation whose change is a processor order has "Verify on this
-input" (`VerifyRecommendation.tsx`; `verificationView` in
+A recommendation with a change the server can run (`verifiable`) has "Verify on this
+input"; a removal of something that changed nothing here (`checksOnly`) has
+"Check it runs on this input" instead, since its output cannot differ on this
+input and the run only shows the edited configuration loads and runs
+(`VerifyRecommendation.tsx`; `verificationView` in
 `recommendations.ts`, tested), disabled without `run.submit`. It is on
 demand, one more run: `POST /runs/{id}/recommendations/{n}/verify` runs the
 change as a candidate on the run's inputs and waits. Meanwhile a status below

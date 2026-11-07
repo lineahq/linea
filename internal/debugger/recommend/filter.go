@@ -64,6 +64,7 @@ func requestsCoverage(n int, records int, signal string) string {
 }
 
 // filterNoEffect: a filter processor that removed nothing in the whole run.
+// The input held nothing its conditions match, so they are untested.
 func filterNoEffect(in Input) []Recommendation {
 	var out []Recommendation
 	for _, r := range filterRuns(in.Filtering, false) {
@@ -71,12 +72,11 @@ func filterNoEffect(in Input) []Recommendation {
 			continue
 		}
 		out = append(out, Recommendation{
-			Kind: KindRedundancy, Confidence: ConfidenceObserved, Pipeline: r.pipeline,
+			Kind: KindUntested, Confidence: ConfidenceObserved, Pipeline: r.pipeline,
 			Components: []string{processorRef(r.processor)},
-			Summary: fmt.Sprintf("%s dropped none of the %s it received in %s: none of its conditions matched. If this input holds items it should drop, a condition is wrong rather than unneeded.",
-				r.processor, plural(r.records, itemNoun(r.signal)), pipelinesPhrase(r.pipelines)),
+			Summary: fmt.Sprintf("None of the %s %s received in %s matched any of its conditions, so this input does not test them. To test them, add %ss it should drop to the scenario.",
+				plural(r.records, itemNoun(r.signal)), r.processor, pipelinesPhrase(r.pipelines), itemNoun(r.signal)),
 			Evidence: []Evidence{{SectionFiltering, processorRef(r.processor)}},
-			Benefit:  &Benefit{Metric: MetricRecordsWithoutEffect, Count: r.records},
 			Coverage: []string{requestsCoverage(len(r.requests), r.records, r.signal)},
 		})
 	}
@@ -84,7 +84,7 @@ func filterNoEffect(in Input) []Recommendation {
 }
 
 // conditionNeverMatched: in a filter that removed something, a condition
-// that was evaluated and never matched. Counts come from the requests whose
+// that was evaluated and never matched: this input does not test it. Counts come from the requests whose
 // evaluation reproduces the processor's output.
 func conditionNeverMatched(in Input) []Recommendation {
 	var out []Recommendation
@@ -126,13 +126,11 @@ func conditionNeverMatched(in Input) []Recommendation {
 			}
 			ref := fmt.Sprintf("%s#condition[%d]", processorRef(r.processor), t.c.Index)
 			out = append(out, Recommendation{
-				Kind: KindRedundancy, Confidence: ConfidenceObserved, Pipeline: r.pipeline,
+				Kind: KindUntested, Confidence: ConfidenceObserved, Pipeline: r.pipeline,
 				Components: []string{processorRef(r.processor)}, Subject: t.c.Condition,
-				Summary: fmt.Sprintf("Condition %s of %s never matched: evaluated %s, it removed nothing; the other conditions removed all %d dropped %s. If this input holds items it should drop, the condition is wrong rather than unneeded.",
-					t.c.Source, r.processor, plural(t.evaluated, "time"), r.dropped, nounFor(r.dropped, itemNoun(r.signal))),
+				Summary: fmt.Sprintf("Condition %s of %s matched none of the %s it was evaluated on; the other conditions dropped all %d dropped %s. To test it, add a %s it should drop to the scenario.",
+					t.c.Source, r.processor, plural(t.evaluated, itemNoun(r.signal)), r.dropped, nounFor(r.dropped, itemNoun(r.signal)), itemNoun(r.signal)),
 				Evidence: []Evidence{{SectionFiltering, ref}},
-				Benefit:  &Benefit{Metric: MetricEvaluationsWithoutEffect, Count: t.evaluated},
-				Change:   &ConfigChange{Op: OpRemoveStatement, Component: r.processor, Index: ptr(t.c.Index), Text: t.c.Condition, Path: t.c.Source},
 				Coverage: slices.Clone(coverage),
 			})
 		}

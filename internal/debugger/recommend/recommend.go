@@ -31,6 +31,21 @@ const (
 	KindLossy Kind = "lossy"
 	// KindRisk: configuration that can lose or misplace data.
 	KindRisk Kind = "risk"
+	// KindUntested: configuration this input never exercised, such as a
+	// condition no record matched. It suggests no change: the run shows
+	// only that the input lacks what it targets.
+	KindUntested Kind = "untested"
+)
+
+// Holds says on which inputs a recommendation's claim holds.
+type Holds string
+
+const (
+	// HoldsAnyInput: the configuration, or the statement's own text, proves
+	// it, whatever the input.
+	HoldsAnyInput Holds = "any_input"
+	// HoldsThisInput: this run's input shows it; another input may not.
+	HoldsThisInput Holds = "this_input"
 )
 
 // Confidence says what a recommendation rests on.
@@ -110,6 +125,9 @@ type Recommendation struct {
 	Rule       string     `json:"rule"`
 	Kind       Kind       `json:"kind"`
 	Confidence Confidence `json:"confidence"`
+	// Holds is any_input when the configuration or the statement's text
+	// proves the claim, this_input when only this run's input shows it.
+	Holds Holds `json:"holds"`
 	// Pipeline is empty for a recommendation about the whole configuration.
 	Pipeline string `json:"pipeline,omitempty"`
 	// Components are topology refs ("processor/filter/health").
@@ -202,7 +220,8 @@ type Input struct {
 type rule struct {
 	id string
 	// output is what applying the rule's change does to the exporters'
-	// records (Recommendation.Output).
+	// records (Recommendation.Output); empty for a rule that suggests no
+	// change.
 	output Output
 	run    func(Input) []Recommendation
 }
@@ -213,11 +232,11 @@ var rules = []rule{
 	{"config.memory_limiter_not_first", OutputUnchanged, memoryLimiterNotFirst},
 	{"config.unused_component", OutputUnchanged, unusedComponent},
 	{"batch.chained", OutputRegrouped, batchChained},
-	{"filter.no_effect", OutputUnchanged, filterNoEffect},
-	{"filter.condition_never_matched", OutputUnchanged, conditionNeverMatched},
+	{"filter.no_effect", "", filterNoEffect},
+	{"filter.condition_never_matched", "", conditionNeverMatched},
 	{"filter.after_batch", OutputUnchanged, filterAfterBatch},
 	{"filter.move_earlier", OutputUnchanged, filterMoveEarlier},
-	{"ottl.statement_never_matched", OutputUnchanged, statementNeverMatched},
+	{"ottl.statement_never_matched", "", statementNeverMatched},
 	{"ottl.statement_no_change", OutputUnchanged, statementNoChange},
 	{"ottl.duplicate_statement", OutputUnchanged, duplicateStatement},
 	{"attribute.dead_write", OutputUnchanged, attributeDeadWrite},
@@ -228,7 +247,7 @@ var rules = []rule{
 	{"batch.drops_client_context", OutputChanged, batchDropsClientContext},
 	{"grouping.after_batch", OutputRegrouped, groupingAfterBatch},
 	{"sampling.late_spans", OutputChanged, lateSpans},
-	{"sampling.policy_never_decides", OutputUnchanged, policyNeverDecides},
+	{"sampling.policy_never_decides", "", policyNeverDecides},
 	{"sampling.policy_shadowed", OutputUnchanged, policyShadowed},
 	{"sampling.late_in_pipeline", OutputUnchanged, samplingLateInPipeline},
 }
@@ -245,6 +264,12 @@ func Recommend(in Input) []Recommendation {
 		for i := range found {
 			found[i].Rule = r.id
 			found[i].Output = r.output
+			if found[i].Holds == "" {
+				found[i].Holds = HoldsThisInput
+				if found[i].Confidence == ConfidenceStatic {
+					found[i].Holds = HoldsAnyInput
+				}
+			}
 			if b := found[i].Benefit; b != nil && b.Of == 0 {
 				b.Of = benefitTotal(in, r.id, found[i])
 			}

@@ -11,15 +11,18 @@ const TONE_ICON = { pass: 'circle-check', warn: 'triangle-alert', fail: 'circle-
 const TONE_CALLOUT = { pass: 'info', warn: 'warn', fail: 'fail', neutral: 'info' } as const;
 
 /**
- * VerifyRecommendation runs one recommendation's processor order on the run's
+ * VerifyRecommendation runs one recommendation's change on the run's
  * inputs (on demand: one more run) and shows what the server's comparison
  * found, with the provenance it earns and a link to compare the two runs.
+ * A removal of something that changed nothing here (`checksOnly`) is offered
+ * as a check that the edited configuration runs, since its output cannot
+ * differ on this input.
  * The result is not stored; reopening the run shows the rule's own
  * confidence again. The user's configuration and draft are never changed.
  * While it runs, it shows the elapsed time against the original run's
  * duration (`expectedMs`), since the server answers only at the end.
  */
-export function VerifyRecommendation({ runId, index, provenance, expectedMs }: { runId: string; index: number; provenance: Provenance; expectedMs?: number }) {
+export function VerifyRecommendation({ runId, index, provenance, expectedMs, checksOnly }: { runId: string; index: number; provenance: Provenance; expectedMs?: number; checksOnly?: boolean }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const denied = useDenial('run.submit');
@@ -73,9 +76,11 @@ export function VerifyRecommendation({ runId, index, provenance, expectedMs }: {
         <span className={`od-prov od-prov--${shown.tone}`}><Icon name="eye" size={12} />{shown.text}</span>
         {!v && (
           <button type="button" className="od-btn od-btn--sm" disabled={verify.isPending || !!denied}
-            title={denied ?? "Run this change on this run's input, without changing your configuration, and compare the output (one more run)"}
+            title={denied ?? (checksOnly
+              ? "Run the configuration without it on this run's input (one more run). It changed nothing here, so this checks that the edited configuration loads and runs; it cannot show a different output"
+              : "Run this change on this run's input, without changing your configuration, and compare the output (one more run)")}
             onClick={() => { const t = Date.now(); setStartedAt(t); setNow(t); verify.mutate(); }}>
-            <Icon name="play" size={14} /><span>{verify.isPending ? 'Verifying…' : 'Verify on this input'}</span>
+            <Icon name="play" size={14} /><span>{verify.isPending ? 'Verifying…' : checksOnly ? 'Check it runs on this input' : 'Verify on this input'}</span>
           </button>
         )}
       </div>

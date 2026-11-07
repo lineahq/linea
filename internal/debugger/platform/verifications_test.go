@@ -121,17 +121,23 @@ func TestVerifyRecommendationReportsAChangedOutput(t *testing.T) {
 	}
 }
 
-// TestVerifyRecommendationRemovesAStatement: broken-routing's pager
-// statement never matches; the candidate runs without it, the whole
+// TestVerifyRecommendationRemovesAStatement: broken-routing with a statement
+// repeated after itself; the candidate runs without the repeat, the whole
 // statement list replaced from the run's configuration text, and its output
-// is the run's.
+// is the run's. Its never-matching pager statement is untested, not removed.
 func TestVerifyRecommendationRemovesAStatement(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	samples := filepath.Join("..", "..", "..", "samples", "broken-routing")
-	config, err := os.ReadFile(filepath.Join(samples, "config.yaml"))
+	raw, err := os.ReadFile(filepath.Join(samples, "config.yaml"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	archive := `          - set(log.attributes["route"], "archive") where log.attributes["route"] == nil`
+	team := "\n" + `          - set(log.attributes["team"], "core")`
+	config := strings.Replace(strings.ReplaceAll(string(raw), "\r\n", "\n"), archive, archive+team+team, 1)
+	if config == string(raw) {
+		t.Fatal("broken-routing's archive statement moved")
 	}
 	s := New(Options{Paths: PathPolicy{Unrestricted: true}})
 	t.Cleanup(s.Close)
@@ -144,15 +150,19 @@ func TestVerifyRecommendationRemovesAStatement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	at := slices.IndexFunc(rep.Recommendations, func(r recommend.Recommendation) bool { return r.Rule == "ottl.statement_never_matched" })
-	if at < 0 {
-		t.Fatalf("no ottl.statement_never_matched in %+v", rep.Recommendations)
+	never := slices.IndexFunc(rep.Recommendations, func(r recommend.Recommendation) bool { return r.Rule == "ottl.statement_never_matched" })
+	if never < 0 || rep.Recommendations[never].Change != nil {
+		t.Fatalf("untested pager statement in %+v", rep.Recommendations)
+	}
+	at := slices.IndexFunc(rep.Recommendations, func(r recommend.Recommendation) bool { return r.Rule == "ottl.duplicate_statement" })
+	if at < 0 || rep.Recommendations[at].Holds != recommend.HoldsAnyInput {
+		t.Fatalf("no ottl.duplicate_statement holding for any input in %+v", rep.Recommendations)
 	}
 	got, err := s.VerifyRecommendation(ctx, testCaller, VerifyRecommendationRequest{Run: run.ID, Recommendation: at})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `yaml:processors::transform/route::log_statements: [{"context":"log","statements":["set(log.attributes[\"route\"], \"archive\") where log.attributes[\"route\"] == nil"]}]`
+	want := `yaml:processors::transform/route::log_statements: [{"context":"log","statements":["set(log.attributes[\"route\"], \"pager\") where log.severity_text == \"error\"","set(log.attributes[\"route\"], \"archive\") where log.attributes[\"route\"] == nil","set(log.attributes[\"team\"], \"core\")"]}]`
 	if !slices.Equal(got.Overrides, []string{want}) || got.Error != "" {
 		t.Fatalf("verification = %+v", got)
 	}

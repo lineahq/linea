@@ -99,14 +99,15 @@ func TestPolicyNeverDecidesCountsVerifiedTracesOnly(t *testing.T) {
 				t.Fatalf("recs = %+v, want one", recs)
 			}
 			r := recs[0]
-			if r.Rule != "" || r.Kind != KindRedundancy || r.Confidence != ConfidenceObserved || r.Change != nil || r.Pipeline != "traces" ||
+			if r.Rule != "" || r.Kind != KindUntested || r.Confidence != ConfidenceObserved || r.Change != nil || r.Benefit != nil || r.Pipeline != "traces" ||
 				!slices.Equal(r.Components, []string{"processor/tail_sampling"}) {
 				t.Fatalf("recommendation = %+v", r)
 			}
-			if r.Benefit == nil || r.Benefit.Metric != MetricEvaluationsWithoutEffect || r.Benefit.Count != c.want {
-				t.Fatalf("benefit = %+v, want %d", r.Benefit, c.want)
+			verb := "sample"
+			if c.policies[0].Type == "drop" {
+				verb = "drop"
 			}
-			if !strings.Contains(r.Summary, "its rule may be wrong rather than unneeded") || !strings.Contains(r.Summary, "nothing in the "+plural(c.want, "trace")) {
+			if !strings.Contains(r.Summary, "add a trace it should "+verb+" to the scenario") || !strings.Contains(r.Summary, "none of the "+plural(c.want, "trace")) {
 				t.Fatalf("summary = %q", r.Summary)
 			}
 			if len(r.Coverage) != c.coverage {
@@ -130,8 +131,8 @@ func TestPolicyNeverDecidesCitesTenTracesAndNamesRateLimits(t *testing.T) {
 		recs[0].Evidence[2] != (Evidence{SectionSampling, "processor/tail_sampling#trace[t0]"}) {
 		t.Fatalf("recs = %+v", recs)
 	}
-	if recs[0].Benefit.Count != 12 || len(recs[0].Coverage) != 2 || !strings.Contains(recs[0].Coverage[1], "rate_limiting") {
-		t.Fatalf("benefit = %+v, coverage = %q", recs[0].Benefit, recs[0].Coverage)
+	if len(recs[0].Coverage) != 2 || !strings.Contains(recs[0].Coverage[1], "rate_limiting") {
+		t.Fatalf("coverage = %q", recs[0].Coverage)
 	}
 }
 

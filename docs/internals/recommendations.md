@@ -20,8 +20,9 @@ A recommendation has:
 | Field | Meaning |
 | --- | --- |
 | `rule` | Stable rule ID, such as `filter.condition_never_matched`. |
-| `kind` | `ordering`, `redundancy`, `inefficiency`, `lossy` or `risk`. |
+| `kind` | `ordering`, `redundancy`, `inefficiency`, `lossy`, `risk`, or `untested`: something this input never reached, so the run cannot tell whether it is needed or wrong (Untested, below). |
 | `confidence` | `static` (the configuration alone), `observed` (this run's events). A verification (below) gives `verified_on_input` (the changed configuration gave the same output on this run's input) or `differs_on_input` (it changed the output); the stored report keeps the rule's own confidence. |
+| `holds` | On which inputs the claim holds: `any_input` when the configuration or the statement text proves it (every `static` recommendation; a self-assignment; a repeat of a statement whose second run cannot change anything), `this_input` when only this run's evidence shows it. |
 | `pipeline` | The pipeline it is about; empty when it concerns the whole configuration or a processor shared by several pipelines. |
 | `components` | Topology refs (`processor/filter/health`). |
 | `subject` | The item inside the components, where a rule can report several: a filter condition's or OTTL statement's text, an attribute (`resource.attributes["k"]`), a tail_sampling policy's name. With rule, pipeline and components it identifies the recommendation across runs (Comparison, below). |
@@ -54,13 +55,13 @@ in `coverage`.
 | `config.memory_limiter_not_first` | risk | a memory_limiter is not the first processor of a pipeline | `swap` moving it first |
 | `config.unused_component` | redundancy | a component is in `topology.unused` | none |
 | `batch.chained` | redundancy | a pipeline has two or more batch processors | none |
-| `filter.no_effect` | redundancy | a filter processor received records, dropped none and no request failed | none |
-| `filter.condition_never_matched` | redundancy | in verified requests of a filter that dropped something, a condition was evaluated and never matched, without errors | `remove_statement` of that condition |
+| `filter.no_effect` | untested | a filter processor received records, dropped none and no request failed | none |
+| `filter.condition_never_matched` | untested | in verified requests of a filter that dropped something, a condition was evaluated and never matched, without errors | none |
 | `filter.after_batch` | ordering | a filter that dropped records runs after a batch processor in the same pipeline | `swap` moving the filter before the batch; a blocker names the first processor between them the filter's placement checks (below) do not clear |
 | `filter.move_earlier` | ordering | a filter that dropped records in a logs or traces pipeline gives every compared record the same verdict at the input of the processors before it (placement checks, below) | `swap` moving the filter before the nearest processors that cleared; the first processor that did not is a blocker |
-| `ottl.statement_never_matched` | redundancy | a transform statement's where clause was false on every item it was evaluated on | `remove_statement` |
-| `ottl.statement_no_change` | redundancy | a statement matched items and changed none (`matched_without_change` equals `matched`) | `remove_statement` |
-| `ottl.duplicate_statement` | redundancy | as above, for a statement with the same text as the one before it in its group | `remove_statement` |
+| `ottl.statement_never_matched` | untested | a transform statement's where clause was false on every item it was evaluated on | none |
+| `ottl.statement_no_change` | redundancy | a statement matched items and changed none (`matched_without_change` equals `matched`), and either it is a self-assignment `set(P, P)` (`holds: any_input`) or its where clause excluded no item it was evaluated on | `remove_statement` |
+| `ottl.duplicate_statement` | redundancy | as above, for a statement with the same text as the one before it in its group; `holds: any_input` when a second run cannot change anything (`ottltext.go`: `set` of a literal or the path's own value, `delete_key`/`delete_matching_keys` of a literal, `keep_keys` of a string list) | `remove_statement` |
 | `attribute.dead_write` | redundancy | a processor set an attribute on records that a later processor in the same pipeline removed or set again on every one of them, with nothing between reading it (dead writes, below) | none |
 | `processor.no_effect` | redundancy | a synchronous processor that ran for real emitted every input with an empty diff | none |
 | `grouping.no_effect` | redundancy | groupbyattrs moved no attribute and merged no resource | none |
@@ -69,7 +70,7 @@ in `coverage`.
 | `batch.drops_client_context` | risk | (static) a component after a batch processor is configured to read from the request's client context (the client address, auth data, gRPC metadata, or a metadata key the batch's `metadata_keys` does not list), which the batch does not pass on; one per reader | `set_option metadata_keys` (the existing keys plus the read ones) when only metadata keys are lost and one batch precedes the reader; else a `swap` moving a processor reader before the first batch when only batch processors sit between them; otherwise a blocker |
 | `grouping.after_batch` | ordering | groupbyattrs runs before a batch processor. Observed when the two are adjacent and the batch's sends repeat resources (`Resources` > `DistinctResources`), with benefit `resource_blocks_merged` (their difference); static otherwise, with what the run could not show in `coverage` | `swap` moving groupbyattrs right after the batch |
 | `sampling.late_spans` | risk | spans reached tail_sampling after their trace's decision | `set_option decision_wait`, value left to the user |
-| `sampling.policy_never_decides` | redundancy | a tail_sampling policy, evaluated alone, was `not_sampled` on every trace whose replay is verified | none |
+| `sampling.policy_never_decides` | untested | a tail_sampling policy, evaluated alone, was `not_sampled` on every trace whose replay is verified | none |
 | `sampling.policy_shadowed` | redundancy | a policy sampled verified traces that another policy, whose result depends on the trace alone, sampled on its own on every verified trace | none |
 | `sampling.late_in_pipeline` | inefficiency | processors before tail_sampling handled spans of traces it did not keep; one per processor (not memory_limiter, stand-ins or mocks) | none: moving tail_sampling changes what its policies see |
 
@@ -77,9 +78,16 @@ Details the rules hold to:
 
 - A transform or filter shared by several pipelines is one recommendation
   with an empty `pipeline`, its counts summed over the pipelines.
-- Never-matched summaries say that if the input holds items the statement or
-  condition should act on, it is wrong rather than unneeded: a broken where
-  clause looks the same as an unneeded one.
+- Untested: a condition, statement or policy that matched nothing on this
+  input is not shown to be unneeded, since a broken where clause looks the
+  same as one whose records the input lacks. The `untested` rules carry no
+  change and no benefit, and their summaries end by asking for a scenario
+  record it should act on. Their `output` is empty
+  (`TestEveryRuleStatesItsOutput`).
+- `ottl.statement_no_change` skips a statement whose where clause was false
+  on some items: those items did not test it, so a no-op on the matched ones
+  says little. Text-proven no-ops (`ottltext.go`, a top-level OTTL call
+  splitter) hold for any input and carry no coverage.
 - `ottl.statement_no_change` and `ottl.duplicate_statement` skip statements
   that write `cache[...]`, which change no item by design.
 - `processor.no_effect` leaves out types that pass data on unchanged by

@@ -3410,6 +3410,7 @@ export interface components {
             confidence: string;
             coverage?: string[];
             evidence?: components["schemas"]["Evidence"][];
+            holds: string;
             kind: string;
             output?: string;
             pipeline?: string;

@@ -5957,6 +5957,9 @@
             },
             "type": "array"
           },
+          "holds": {
+            "type": "string"
+          },
           "kind": {
             "type": "string"
           },
@@ -5978,6 +5981,7 @@
         },
         "required": [
           "confidence",
+          "holds",
           "kind",
           "rule",
           "summary"

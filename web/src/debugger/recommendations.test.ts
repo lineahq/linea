@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RecommendationVerification, Report } from '../api/types';
-import { benefitChangeText, benefitText, changeText, componentNode, effect, measuredViews, percent, provenance, recommendationHint, recommendationKinds, recommendationViews, relative, ruleTitle, share, totalText, verifiable, verificationView, verifyProgress } from './recommendations';
+import { benefitChangeText, benefitText, changeText, changeTitle, componentNode, effect, holdsOf, measuredViews, moves, percent, provenance, recommendationGroups, recommendationHint, recommendationKinds, recommendationViews, relative, ruleTitle, savesText, share, totalText, verifiable, verificationView, verifyProgress } from './recommendations';
 
 const comp = (kind: string, id: string) => ({ kind, id, type: id.split('/')[0], ref: `${kind}/${id}`, mode: 'real' });
 
@@ -22,22 +22,24 @@ function report(recommendations: Report['recommendations']): Report {
 describe('recommendationViews', () => {
   it('words each recommendation in report order and links the components it names', () => {
     const views = recommendationViews(report([
-      { rule: 'config.unused_component', kind: 'redundancy', confidence: 'static', components: ['processor/attributes'], summary: 'attributes is configured but no pipeline uses it.' },
+      { rule: 'config.unused_component', kind: 'redundancy', confidence: 'static', holds: 'any_input', components: ['processor/attributes'], summary: 'attributes is configured but no pipeline uses it.' },
       {
-        rule: 'ottl.statement_never_matched', kind: 'redundancy', confidence: 'observed', components: ['processor/transform/route'],
+        rule: 'ottl.statement_never_matched', kind: 'redundancy', confidence: 'observed', holds: 'this_input', components: ['processor/transform/route'],
         summary: 'Statement 1 of group 0 of transform/route never matched.',
         change: { op: 'remove_statement', component: 'transform/route', group: 0, index: 0, text: 'set(attributes["route"], "pager") where severity_text == "FATAL"' },
         benefit: { metric: 'evaluations_without_effect', count: 6 },
         coverage: ['Observed on 2 requests; another input may differ.'],
       },
-      { rule: 'sampling.late_spans', kind: 'risk', confidence: 'observed', pipeline: 'logs/pager', components: ['processor/transform/route'], summary: 'Late.', change: { op: 'set_option', component: 'tail_sampling', option: 'decision_wait' } },
+      { rule: 'sampling.late_spans', kind: 'risk', confidence: 'observed', holds: 'this_input', pipeline: 'logs/pager', components: ['processor/transform/route'], summary: 'Late.', change: { op: 'set_option', component: 'tail_sampling', option: 'decision_wait' } },
     ]), 'abc');
-    expect(views.map((v) => v.title)).toEqual(['Unused component', 'Statement never matched', 'Late spans skipped evaluation']);
+    expect(views.map((v) => v.title)).toEqual(['Unused component', 'Statement not tested', 'Late spans skipped evaluation']);
     expect(views[0]).toMatchObject({ provenance: { text: 'From the configuration' }, actions: [], change: undefined, saves: undefined });
     expect(views[1]).toMatchObject({
       kind: { label: 'Redundant', tone: 'plain' },
       provenance: { text: 'Observed in run abc', tone: 'observed' },
-      saves: '6 evaluations had no effect in this run',
+      saves: 'Saves 6 statement evaluations',
+      change: ['Remove ', { code: 'set(attributes["route"], "pager") where severity_text == "FATAL"' }],
+      changeTitle: 'Remove statement 0 of group 0 of transform/route',
       coverage: ['Observed on 2 requests; another input may differ.'],
       actions: [{ label: 'Open transform/route', node: 'logs/archive|processor/transform/route' }],
     });
@@ -48,7 +50,7 @@ describe('recommendationViews', () => {
   it('is empty without recommendations and shows an unknown rule by its ID', () => {
     expect(recommendationViews(undefined, 'abc')).toEqual([]);
     expect(recommendationViews(report(undefined), 'abc')).toEqual([]);
-    const [v] = recommendationViews(report([{ rule: 'future.rule', kind: 'novel', confidence: 'observed', components: [], summary: 's' }]), 'abc');
+    const [v] = recommendationViews(report([{ rule: 'future.rule', kind: 'novel', confidence: 'observed', holds: 'this_input', components: [], summary: 's' }]), 'abc');
     expect(v).toMatchObject({ title: 'future.rule', kind: { label: 'novel', tone: 'plain' } });
   });
 });
@@ -58,10 +60,25 @@ describe('changeText', () => {
 
   it('words each operation', () => {
     expect(text({ op: 'swap', processors: ['memory_limiter', 'batch'] }, 'logs')).toBe('Processors of `logs`: `[memory_limiter, batch]`');
-    expect(text({ op: 'remove_statement', component: 'filter/health', index: 1, text: 'x' })).toBe('Remove condition 1 of `filter/health`: `x`');
-    expect(text({ op: 'remove_statement', component: 't', group: 0, index: 2, text: 'y' })).toBe('Remove statement 2 of group 0 of `t`: `y`');
+    expect(text({ op: 'remove_statement', component: 'filter/health', index: 1, text: 'x' })).toBe('Remove `x`');
+    expect(changeTitle({ op: 'remove_statement', component: 'filter/health', index: 1, text: 'x' })).toBe('Remove condition 1 of filter/health');
+    expect(changeTitle({ op: 'remove_statement', component: 't', group: 0, index: 2, text: 'y' })).toBe('Remove statement 2 of group 0 of t');
     expect(text({ op: 'set_option', component: 'tail_sampling', option: 'decision_wait' })).toBe('Set `decision_wait` of `tail_sampling`; the value is yours to choose');
     expect(text({ op: 'set_option', component: 'batch', option: 'timeout', value: '5s' })).toBe('Set `timeout` of `batch` to `5s`');
+  });
+
+  it('words a processor order as the moves from the current one', () => {
+    const now = ['enrich', 'batch', 'tenant', 'filter', 'memory_limiter'];
+    const swap = (processors: string[]) => ({ op: 'swap' as const, processors });
+    expect(text(swap(['memory_limiter', 'enrich', 'batch', 'tenant', 'filter']), 'logs', now)).toBe('Move `memory_limiter` first');
+    expect(text(swap(['enrich', 'filter', 'batch', 'tenant', 'memory_limiter']), 'logs', now)).toBe('Move `filter` before `batch`');
+    expect(text(swap(['memory_limiter', 'enrich', 'filter', 'batch', 'tenant']), 'logs', now)).toBe('Move `memory_limiter` first; move `filter` before `batch`');
+    expect(text(swap(['batch', 'enrich', 'tenant', 'filter', 'memory_limiter']), 'logs', now)).toBe('Move `enrich` before `tenant`');
+    expect(text(swap(['enrich', 'batch', 'tenant', 'filter', 'memory_limiter', 'x']), 'logs', now)).toBe('Processors of `logs`: `[enrich, batch, tenant, filter, memory_limiter, x]`');
+    expect(text(swap(['memory_limiter', 'filter', 'tenant', 'batch', 'enrich']), 'logs', now)).toMatch(/^Processors of/);
+    expect(changeTitle(swap(['a', 'b']))).toBe('New order: a, b');
+    expect(moves(['a', 'b'], ['a', 'c'])).toBeUndefined();
+    expect(moves(['a', 'b'], ['a', 'b'])).toEqual([]);
   });
 });
 
@@ -76,7 +93,7 @@ describe('benefitText and provenance', () => {
 
 describe('ruleTitle and benefitChangeText', () => {
   it('titles a known rule and shows an unknown one by its ID', () => {
-    expect(ruleTitle('ottl.statement_never_matched')).toBe('Statement never matched');
+    expect(ruleTitle('ottl.statement_never_matched')).toBe('Statement not tested');
     expect(ruleTitle('future.rule')).toBe('future.rule');
   });
   it('words a benefit that moved between two runs, and nothing when it did not or the metrics differ', () => {
@@ -100,9 +117,9 @@ describe('componentNode', () => {
 describe('verification', () => {
   it('marks swaps, located removals and options with a value verifiable, by their report position', () => {
     const views = recommendationViews(report([
-      { rule: 'config.unused_component', kind: 'redundancy', confidence: 'static', summary: 'Unused.' },
-      { rule: 'filter.after_batch', kind: 'ordering', confidence: 'observed', pipeline: 'logs/archive', summary: 'Late.', change: { op: 'swap', processors: ['transform/route', 'batch'] } },
-      { rule: 'sampling.late_spans', kind: 'risk', confidence: 'observed', summary: 'Late.', change: { op: 'set_option', component: 'tail_sampling', option: 'decision_wait' } },
+      { rule: 'config.unused_component', kind: 'redundancy', confidence: 'static', holds: 'any_input', summary: 'Unused.' },
+      { rule: 'filter.after_batch', kind: 'ordering', confidence: 'observed', holds: 'this_input', pipeline: 'logs/archive', summary: 'Late.', change: { op: 'swap', processors: ['transform/route', 'batch'] } },
+      { rule: 'sampling.late_spans', kind: 'risk', confidence: 'observed', holds: 'this_input', summary: 'Late.', change: { op: 'set_option', component: 'tail_sampling', option: 'decision_wait' } },
     ]), 'abc');
     expect(views.map((v) => [v.index, v.verifiable])).toEqual([[0, false], [1, true], [2, false]]);
     expect(verifiable({ op: 'remove_statement', component: 'transform/route', group: 0, index: 1, text: 'set(x, 1)', path: 'log_statements[0].statements[1]' })).toBe(true);
@@ -131,7 +148,7 @@ describe('verification', () => {
 
 describe('verification assertions', () => {
   const verification = (v: Partial<RecommendationVerification>) =>
-    ({ run: 'r1', recommendation: 0, rule: 'filter.after_batch', candidate: { id: 'c1' }, confidence: 'differs_on_input', ...v }) as RecommendationVerification;
+    ({ run: 'r1', recommendation: 0, rule: 'filter.after_batch', candidate: { id: 'c1' }, confidence: 'differs_on_input', holds: 'this_input', ...v }) as RecommendationVerification;
 
   it('names the assertions a different output broke', () => {
     const v = verificationView(verification({ comparison: { assertions: [
@@ -153,8 +170,8 @@ describe('verification assertions', () => {
 describe('recommendationHint', () => {
   it('counts the recommendations and those about data at risk', () => {
     const views = recommendationViews(report([
-      { rule: 'config.unused_component', kind: 'redundancy', confidence: 'static', summary: 'Unused.' },
-      { rule: 'sampling.late_spans', kind: 'risk', confidence: 'observed', summary: 'Late.' },
+      { rule: 'config.unused_component', kind: 'redundancy', confidence: 'static', holds: 'any_input', summary: 'Unused.' },
+      { rule: 'sampling.late_spans', kind: 'risk', confidence: 'observed', holds: 'this_input', summary: 'Late.' },
     ]), 'abc');
     expect(recommendationHint(views)).toBe('2 recommendations, 1 about data at risk');
     expect(recommendationHint(views.slice(0, 1))).toBe('1 recommendation');
@@ -165,15 +182,15 @@ describe('recommendationHint', () => {
 describe('recommendationKinds', () => {
   it('groups by rule, data at risk first, then in report order', () => {
     const views = recommendationViews(report([
-      { rule: 'config.unused_component', kind: 'redundancy', confidence: 'static', summary: 'Unused.' },
-      { rule: 'ottl.statement_never_matched', kind: 'redundancy', confidence: 'observed', summary: 'A.' },
-      { rule: 'sampling.late_spans', kind: 'risk', confidence: 'observed', summary: 'Late.' },
-      { rule: 'ottl.statement_never_matched', kind: 'redundancy', confidence: 'observed', summary: 'B.' },
+      { rule: 'config.unused_component', kind: 'redundancy', confidence: 'static', holds: 'any_input', summary: 'Unused.' },
+      { rule: 'ottl.statement_never_matched', kind: 'redundancy', confidence: 'observed', holds: 'this_input', summary: 'A.' },
+      { rule: 'sampling.late_spans', kind: 'risk', confidence: 'observed', holds: 'this_input', summary: 'Late.' },
+      { rule: 'ottl.statement_never_matched', kind: 'redundancy', confidence: 'observed', holds: 'this_input', summary: 'B.' },
     ]), 'abc');
     expect(recommendationKinds(views).map((k) => [k.title, k.kind.label, k.count])).toEqual([
       ['Late spans skipped evaluation', 'Risk', 1],
       ['Unused component', 'Redundant', 1],
-      ['Statement never matched', 'Redundant', 2],
+      ['Statement not tested', 'Redundant', 2],
     ]);
     expect(recommendationKinds([])).toEqual([]);
   });
@@ -193,18 +210,18 @@ describe('verifyProgress', () => {
 
 describe('effect and share', () => {
   it('words what a change does to the exported data, settled by a verification', () => {
-    expect(effect('unchanged', 'observed')).toEqual({ text: "Exported data stays the same on this run's input.", tone: 'neutral' });
+    expect(effect('unchanged', 'observed')).toEqual({ label: 'Same output', text: "Exported data stays the same on this run's input.", tone: 'neutral' });
     expect(effect('unchanged', 'static')?.text).toBe('Exported data stays the same.');
-    expect(effect('unchanged', 'verified_on_input')?.tone).toBe('pass');
+    expect(effect('unchanged', 'verified_on_input')).toMatchObject({ label: 'Same output, verified', tone: 'pass' });
     expect(effect('unchanged', 'differs_on_input')?.tone).toBe('warn');
-    expect(effect('regrouped', 'observed')).toEqual({ text: 'Same records, sent in other batches or groups.', tone: 'neutral' });
+    expect(effect('regrouped', 'observed')).toEqual({ label: 'Regroups only', text: 'Same records, sent in other batches or groups.', tone: 'neutral' });
     expect(effect('regrouped', 'differs_on_input')?.tone).toBe('warn');
-    expect(effect('changed', 'verified_on_input')).toEqual({ text: 'Changes what the exporters receive.', tone: 'warn' });
+    expect(effect('changed', 'verified_on_input')).toEqual({ label: 'Changes output', text: 'Changes what the exporters receive.', tone: 'warn' });
     expect(effect(undefined, 'observed')).toBeUndefined();
   });
 
   it('puts a saving against its total, and gives none without a total', () => {
-    expect(share(2217, 160000, 'x')).toEqual({ text: '1.4% of the 160,000 x', fraction: 2217 / 160000 });
+    expect(share(2217, 160000, 'x')).toEqual({ text: '1.4% of 160,000', title: '1.4% of the 160,000 x', fraction: 2217 / 160000 });
     expect(share(3, undefined, 'x')).toBeUndefined();
     expect(share(3, 0, 'x')).toBeUndefined();
     expect(share(9, 4, 'x')?.fraction).toBe(1);
@@ -219,6 +236,15 @@ describe('effect and share', () => {
     expect(totalText({ rule: 'x' }, 'new_metric')).toBe('new metric');
   });
 
+  it('words what a card saves, short', () => {
+    const filter = { rule: 'filter.condition_never_matched' };
+    expect(savesText(filter, 'evaluations_without_effect', 4423)).toBe('Saves 4,423 condition evaluations');
+    expect(savesText({ rule: 'processor.no_effect' }, 'evaluations_without_effect', 1)).toBe('Saves 1 evaluation');
+    expect(savesText(filter, 'records_not_processed', 577)).toBe('577 dropped records skip earlier processors');
+    expect(savesText(filter, 'resource_blocks_merged', 2)).toBe('Merges 2 resource blocks');
+    expect(savesText(filter, 'new_metric', 3)).toBe('3 new metric');
+  });
+
   it('words a percentage without a false zero', () => {
     expect(percent(0)).toBe('0%');
     expect(percent(0.0004)).toBe('<0.1%');
@@ -228,17 +254,17 @@ describe('effect and share', () => {
   });
 
   it('adds both to the card view, and formats large counts', () => {
-    const report = { recommendations: [{ rule: 'processor.no_effect', kind: 'redundancy', confidence: 'observed', summary: 's', output: 'unchanged', benefit: { metric: 'records_without_effect', count: 20000, of: 160000 } }] } as unknown as Report;
+    const report = { recommendations: [{ rule: 'processor.no_effect', kind: 'redundancy', confidence: 'observed', holds: 'this_input', summary: 's', output: 'unchanged', benefit: { metric: 'records_without_effect', count: 20000, of: 160000 } }] } as unknown as Report;
     const [v] = recommendationViews(report, 'r1');
-    expect(v.saves).toBe('20,000 records passed through unchanged in this run');
-    expect(v.share?.text).toBe('13% of the 160,000 record passes through the processors');
+    expect(v.saves).toBe('Saves 20,000 record passes');
+    expect(v.share).toMatchObject({ text: '13% of 160,000', title: '13% of the 160,000 record passes through the processors' });
     expect(v.effect?.tone).toBe('neutral');
   });
 });
 
 describe('measured impact of a verification', () => {
   const verification = (v: Partial<RecommendationVerification>) =>
-    ({ run: 'r1', recommendation: 0, rule: 'ottl.statement_never_matched', candidate: { id: 'c1' }, confidence: 'verified_on_input', ...v }) as RecommendationVerification;
+    ({ run: 'r1', recommendation: 0, rule: 'ottl.statement_never_matched', candidate: { id: 'c1' }, confidence: 'verified_on_input', holds: 'this_input', ...v }) as RecommendationVerification;
 
   it('words the counts the change moved, and always the records the exporters received', () => {
     const v = verification({
@@ -263,5 +289,35 @@ describe('measured impact of a verification', () => {
     expect(relative(0, 3)).toBe('new');
     expect(relative(200, 300)).toBe('+50%');
     expect(relative(100000, 99999)).toBe('−<0.1%');
+  });
+});
+
+describe('holds and untested', () => {
+  it('reads holds, and falls back to the confidence for a report without it', () => {
+    expect(holdsOf({ confidence: 'observed', holds: 'any_input' })).toBe('any_input');
+    expect(holdsOf({ confidence: 'static' })).toBe('any_input');
+    expect(holdsOf({ confidence: 'observed' })).toBe('this_input');
+  });
+
+  it('groups by how far a recommendation holds, untested last, in report order', () => {
+    const views = recommendationViews(report([
+      { rule: 'ottl.statement_no_change', kind: 'redundancy', confidence: 'observed', holds: 'this_input', components: [], summary: 'a',
+        change: { op: 'remove_statement', component: 'transform/route', group: 0, index: 1, path: 'processors::transform/route::log_statements', text: 'set(x, "y")' } },
+      { rule: 'ottl.statement_never_matched', kind: 'untested', confidence: 'observed', holds: 'this_input', components: ['processor/transform/route'],
+        subject: 'set(x, "y") where z', summary: 'b' },
+      { rule: 'ottl.duplicate_statement', kind: 'redundancy', confidence: 'observed', holds: 'any_input', components: [], summary: 'c',
+        change: { op: 'remove_statement', component: 'transform/route', group: 0, index: 2, text: 'set(x, "y")' } },
+      { rule: 'config.unused_component', kind: 'redundancy', confidence: 'static', holds: 'any_input', components: [], summary: 'd' },
+    ] as Report['recommendations']), 'abc');
+    expect(views[1]).toMatchObject({ kind: { label: 'Untested' }, untested: { label: 'Statement', text: 'set(x, "y") where z' }, change: undefined, verifiable: false });
+    expect(views[0]).toMatchObject({ checksOnly: true, verifiable: true, holds: 'this_input' });
+    const groups = recommendationGroups(views);
+    expect(groups.map((g) => [g.id, g.views.map((v) => v.summary)])).toEqual([
+      ['any_input', ['c', 'd']],
+      ['this_input', ['a']],
+      ['untested', ['b']],
+    ]);
+    expect(recommendationGroups(views.slice(0, 1)).map((g) => g.id)).toEqual(['this_input']);
+    expect(recommendationHint(views)).toBe('4 recommendations, 1 not tested by this input');
   });
 });

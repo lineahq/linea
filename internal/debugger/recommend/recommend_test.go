@@ -58,8 +58,8 @@ func TestStaticRulesReadTheTopologyOnly(t *testing.T) {
 		t.Fatalf("memory_limiter change = %+v", recs[0].Change)
 	}
 	for _, r := range recs {
-		if r.Confidence != ConfidenceStatic {
-			t.Fatalf("%s confidence = %s", r.Rule, r.Confidence)
+		if r.Confidence != ConfidenceStatic || r.Holds != HoldsAnyInput {
+			t.Fatalf("%s confidence = %s, holds %s", r.Rule, r.Confidence, r.Holds)
 		}
 	}
 }
@@ -102,14 +102,19 @@ func TestFilterRulesUseVerifiedCounts(t *testing.T) {
 		t.Fatalf("after batch = %+v, blockers %q", c, recs[0].Blockers)
 	}
 	recs = Recommend(Input{Topology: graph(map[string][]string{"logs": {"filter/health"}}), Filtering: []*analysis.Filtering{filtering(4, 1, analysis.FilterVerified, health, debug)}})
-	if c := recs[0].Change; c.Op != OpRemoveStatement || *c.Index != 1 || c.Text != "severity_number < 5" || recs[0].Benefit.Count != 3 || recs[0].Benefit.Of != 7 {
-		t.Fatalf("condition change = %+v, benefit %+v", c, recs[0].Benefit)
+	// A condition no record matched is untested: no change, no saving.
+	if r := recs[0]; r.Kind != KindUntested || r.Holds != HoldsThisInput || r.Change != nil || r.Benefit != nil || r.Output != "" ||
+		r.Subject != "severity_number < 5" || !strings.Contains(r.Summary, "matched none of the 3 log records") {
+		t.Fatalf("untested condition = %+v", r)
 	}
 }
 
 // TestStatementRulesSeparateNeverMatchedUnchangedAndDuplicates: counts are
-// summed over verified replays; a repeated statement is a duplicate, not
-// also an unchanged one; cache writes are left out.
+// summed over verified replays; a statement that never ran is untested; a
+// repeated statement is a duplicate, not also an unchanged one; cache writes
+// are left out. An unchanged statement whose where clause excluded items is
+// left out unless its text proves it changes nothing, as an idempotent
+// repeat does; those hold for any input.
 func TestStatementRulesSeparateNeverMatchedUnchangedAndDuplicates(t *testing.T) {
 	stmt := func(i int, text string, matched, notMatched, unchanged int) ottldebug.Statement {
 		return ottldebug.Statement{Index: i, Text: text, Matched: matched, NotMatched: notMatched, Unchanged: unchanged}
@@ -125,6 +130,8 @@ func TestStatementRulesSeparateNeverMatchedUnchangedAndDuplicates(t *testing.T) 
 			stmt(2, `set(severity_text, "INFO")`, 2, 0, 0),
 			stmt(3, `set(severity_text, "INFO")`, 2, 0, 2),
 			stmt(4, `set(cache["x"], body)`, 2, 0, 2),
+			stmt(5, `set(attributes["b"], "y") where body == "x"`, 1, 1, 1),
+			stmt(6, `set(body, body) where body == "x"`, 1, 1, 1),
 		)
 	}
 	in := Input{
@@ -137,25 +144,28 @@ func TestStatementRulesSeparateNeverMatchedUnchangedAndDuplicates(t *testing.T) 
 	want := []string{
 		"ottl.statement_never_matched processor/transform",
 		"ottl.statement_no_change processor/transform",
+		"ottl.statement_no_change processor/transform",
 		"ottl.duplicate_statement processor/transform",
 	}
 	if got := rulesOf(recs); !slices.Equal(got, want) {
 		t.Fatalf("rules = %q, want %q", got, want)
 	}
-	for i, idx := range []int{0, 1, 3} {
-		r := recs[i]
-		if *r.Change.Index != idx || r.Pipeline != "logs" || len(r.Coverage) != 2 {
-			t.Fatalf("%s: change %+v, pipeline %q, coverage %q", r.Rule, r.Change, r.Pipeline, r.Coverage)
+	if r := recs[0]; r.Kind != KindUntested || r.Change != nil || r.Benefit != nil || r.Output != "" || r.Holds != HoldsThisInput || len(r.Coverage) != 2 {
+		t.Fatalf("never matched = %+v", r)
+	}
+	for i, c := range []struct {
+		index    int
+		holds    Holds
+		coverage int
+	}{{1, HoldsThisInput, 2}, {6, HoldsAnyInput, 0}, {3, HoldsAnyInput, 0}} {
+		r := recs[i+1]
+		if *r.Change.Index != c.index || r.Pipeline != "logs" || r.Holds != c.holds || len(r.Coverage) != c.coverage || r.Output != OutputUnchanged {
+			t.Fatalf("%s: change %+v, pipeline %q, holds %s, coverage %q", r.Rule, r.Change, r.Pipeline, r.Holds, r.Coverage)
 		}
 	}
 	// Of counts every statement's evaluations in the two verified replays.
-	if recs[0].Benefit.Count != 4 || recs[1].Benefit.Count != 4 || recs[0].Benefit.Of != 20 || recs[1].Benefit.Of != 20 {
-		t.Fatalf("benefits = %+v, %+v", recs[0].Benefit, recs[1].Benefit)
-	}
-	for _, r := range recs {
-		if r.Output != OutputUnchanged {
-			t.Fatalf("%s output = %q", r.Rule, r.Output)
-		}
+	if recs[1].Benefit.Count != 4 || recs[1].Benefit.Of != 28 {
+		t.Fatalf("benefit = %+v", recs[1].Benefit)
 	}
 }
 
@@ -179,11 +189,11 @@ func TestSharedTransformIsOneRecommendation(t *testing.T) {
 		OTTL: []*ottldebug.Report{replay(3, 0, 2), replay(4, 1, 1)},
 	}
 	recs := Recommend(in)
-	if len(recs) != 1 || recs[0].Rule != "ottl.statement_never_matched" || recs[0].Pipeline != "" || *recs[0].Change.Index != 0 {
+	if len(recs) != 1 || recs[0].Rule != "ottl.statement_never_matched" || recs[0].Pipeline != "" || recs[0].Subject != "a" {
 		t.Fatalf("recs = %+v", recs)
 	}
-	if !strings.Contains(recs[0].Summary, "in pipelines logs/a, logs/b") || recs[0].Benefit.Count != 4 {
-		t.Fatalf("summary = %q, benefit %+v", recs[0].Summary, recs[0].Benefit)
+	if !strings.Contains(recs[0].Summary, "on all 4 log records it was evaluated on in pipelines logs/a, logs/b") {
+		t.Fatalf("summary = %q", recs[0].Summary)
 	}
 }
 
@@ -345,10 +355,16 @@ func TestFilterMoveEarlierFollowsThePlacementChecks(t *testing.T) {
 }
 
 // TestEveryRuleStatesItsOutput: each rule says what its change does to the
-// exporters' records, and only the batching and grouping rules regroup.
+// exporters' records, and only the batching and grouping rules regroup. The
+// rules about what the input left untested suggest no change.
 func TestEveryRuleStatesItsOutput(t *testing.T) {
+	untested := map[string]bool{"filter.no_effect": true, "filter.condition_never_matched": true, "ottl.statement_never_matched": true, "sampling.policy_never_decides": true}
 	for _, r := range rules {
 		switch r.output {
+		case "":
+			if !untested[r.id] {
+				t.Errorf("%s has no output", r.id)
+			}
 		case OutputUnchanged, OutputChanged:
 			if strings.HasPrefix(r.id, "batch.size") || r.id == "batch.tiny_batchers" {
 				t.Errorf("%s output = %s, want regrouped", r.id, r.output)

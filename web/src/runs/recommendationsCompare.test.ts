@@ -22,7 +22,7 @@ describe('recommendationChanges', () => {
   it('words one row per item in the platform order, with its status and tone', () => {
     expect(view.summary).toBe('1 resolved, 1 new, 1 persist');
     expect(view.rows.map((r) => [r.title, r.statusLabel, r.tone, r.runs])).toEqual([
-      ['Statement never matched', 'Resolved', 'pass', ['before']],
+      ['Statement not tested', 'Resolved', 'pass', ['before']],
       ['Statement changed nothing', 'Persists', 'neutral', ['before', 'after']],
       ['Sampling policy shadowed', 'New', 'warn', ['after']],
     ]);

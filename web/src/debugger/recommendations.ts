@@ -14,11 +14,11 @@ const TITLES: Record<string, string> = {
   'config.memory_limiter_not_first': 'memory_limiter is not first',
   'config.unused_component': 'Unused component',
   'batch.chained': 'Several batch processors in one pipeline',
-  'filter.no_effect': 'Filter dropped nothing',
-  'filter.condition_never_matched': 'Filter condition never matched',
+  'filter.no_effect': 'Filter conditions not tested',
+  'filter.condition_never_matched': 'Filter condition not tested',
   'filter.after_batch': 'Filter runs after batch',
   'filter.move_earlier': 'Filter can run earlier',
-  'ottl.statement_never_matched': 'Statement never matched',
+  'ottl.statement_never_matched': 'Statement not tested',
   'ottl.statement_no_change': 'Statement changed nothing',
   'ottl.duplicate_statement': 'Repeated statement',
   'attribute.dead_write': 'Attribute overwritten before use',
@@ -29,7 +29,7 @@ const TITLES: Record<string, string> = {
   'batch.drops_client_context': 'Batch drops the client context',
   'grouping.after_batch': 'Group after batching',
   'sampling.late_spans': 'Late spans skipped evaluation',
-  'sampling.policy_never_decides': 'Sampling policy never decided',
+  'sampling.policy_never_decides': 'Sampling policy not tested',
   'sampling.policy_shadowed': 'Sampling policy shadowed',
   'sampling.late_in_pipeline': 'Work spent on unsampled traces',
 };
@@ -45,7 +45,28 @@ const KINDS: Record<string, { label: string; tone: 'warn' | 'plain' }> = {
   inefficiency: { label: 'Inefficient', tone: 'plain' },
   lossy: { label: 'Drops data', tone: 'warn' },
   risk: { label: 'Risk', tone: 'warn' },
+  untested: { label: 'Untested', tone: 'plain' },
 };
+
+/** Holds is on which inputs a recommendation's claim holds. */
+export type Holds = 'any_input' | 'this_input';
+
+/**
+ * holdsOf reads a recommendation's `holds`; a report from before the field
+ * holds for any input only when the configuration alone gave it.
+ */
+export function holdsOf(r: Pick<Recommendation, 'confidence'> & { holds?: string }): Holds {
+  if (r.holds === 'any_input' || r.holds === 'this_input') return r.holds;
+  return r.confidence === 'static' ? 'any_input' : 'this_input';
+}
+
+/** untestedLabel names what an untested recommendation's subject is. */
+function untestedLabel(rule: string): string {
+  if (rule.startsWith('filter.')) return 'Condition';
+  if (rule.startsWith('ottl.')) return 'Statement';
+  if (rule.startsWith('sampling.')) return 'Policy';
+  return 'Subject';
+}
 
 const BENEFITS: Record<string, [string, string]> = {
   evaluations_without_effect: ['evaluation had no effect', 'evaluations had no effect'],
@@ -86,8 +107,17 @@ export interface RecommendationView {
   id: string;
   /** index is the recommendation's position in the report, as the server names it. */
   index: number;
-  /** verifiable: the server can run the change as a candidate (a processor order). */
+  /** verifiable: the server can run the change as a candidate. */
   verifiable: boolean;
+  /**
+   * checksOnly: the change removes something that changed nothing on this
+   * input, so running it on the same input can only show that it loads and
+   * runs, never another output.
+   */
+  checksOnly: boolean;
+  holds: Holds;
+  /** untested names what this input left untested: a condition, statement or policy. */
+  untested?: { label: string; text: string };
   rule: string;
   title: string;
   kind: { label: string; tone: 'warn' | 'plain' };
@@ -95,6 +125,8 @@ export interface RecommendationView {
   pipeline?: string;
   summary: string;
   change?: Segment[];
+  /** changeTitle says the change in full where `change` is brief. */
+  changeTitle?: string;
   saves?: string;
   /** effect says what the change does to the exported data; old reports give none. */
   effect?: Effect;
@@ -106,12 +138,16 @@ export interface RecommendationView {
 }
 
 export interface Effect {
+  /** label is the card's short chip; text says it in full (its tooltip). */
+  label: string;
   text: string;
   tone: 'pass' | 'warn' | 'neutral';
 }
 
 export interface Share {
+  /** text is the short share ("47% of 9,423"); title names the total in full. */
   text: string;
+  title: string;
   /** fraction is the saving over its total, from 0 to 1. */
   fraction: number;
 }
@@ -125,15 +161,15 @@ const count = (n: number) => n.toLocaleString('en-US');
 export function effect(output: string | undefined, confidence: string): Effect | undefined {
   switch (output) {
     case 'unchanged':
-      if (confidence === 'verified_on_input') return { text: 'Exported data stays the same: verified on this input.', tone: 'pass' };
-      if (confidence === 'differs_on_input') return { text: 'Meant to keep the exported data the same, but it changed on this input.', tone: 'warn' };
-      if (confidence === 'static') return { text: 'Exported data stays the same.', tone: 'neutral' };
-      return { text: "Exported data stays the same on this run's input.", tone: 'neutral' };
+      if (confidence === 'verified_on_input') return { label: 'Same output, verified', text: 'Exported data stays the same: verified on this input.', tone: 'pass' };
+      if (confidence === 'differs_on_input') return { label: 'Output changed', text: 'Meant to keep the exported data the same, but it changed on this input.', tone: 'warn' };
+      if (confidence === 'static') return { label: 'Same output', text: 'Exported data stays the same.', tone: 'neutral' };
+      return { label: 'Same output', text: "Exported data stays the same on this run's input.", tone: 'neutral' };
     case 'regrouped':
-      if (confidence === 'differs_on_input') return { text: 'Meant to only regroup records, but the output changed on this input.', tone: 'warn' };
-      return { text: 'Same records, sent in other batches or groups.', tone: 'neutral' };
+      if (confidence === 'differs_on_input') return { label: 'Output changed', text: 'Meant to only regroup records, but the output changed on this input.', tone: 'warn' };
+      return { label: 'Regroups only', text: 'Same records, sent in other batches or groups.', tone: 'neutral' };
     case 'changed':
-      return { text: 'Changes what the exporters receive.', tone: 'warn' };
+      return { label: 'Changes output', text: 'Changes what the exporters receive.', tone: 'warn' };
   }
   return undefined;
 }
@@ -153,7 +189,7 @@ export function percent(fraction: number): string {
 export function share(n: number, of: number | undefined, total: string): Share | undefined {
   if (!of || of <= 0) return undefined;
   const fraction = Math.min(1, Math.max(0, n / of));
-  return { text: `${percent(fraction)} of the ${count(of)} ${total}`, fraction };
+  return { text: `${percent(fraction)} of ${count(of)}`, title: `${percent(fraction)} of the ${count(of)} ${total}`, fraction };
 }
 
 /** provenance says what a recommendation rests on. */
@@ -186,22 +222,91 @@ export function verifiable(c: RecommendationChange | undefined): boolean {
   return false;
 }
 
-/** changeText words a suggested change, as the CLI does. */
-export function changeText(c: RecommendationChange, pipeline?: string): Segment[] {
-  const at = c.index !== undefined ? ` ${c.index}` : '';
+/**
+ * changeText words a suggested change briefly: a processor order as the
+ * moves that make it from the pipeline's current order (`current`, its
+ * processor IDs), a removal as the statement or condition itself (the
+ * summary names where it is). Where the moves are not clear (no current
+ * order, more than two moves) it lists the whole order.
+ */
+export function changeText(c: RecommendationChange, pipeline?: string, current?: string[]): Segment[] {
   switch (c.op) {
-    case 'swap':
-      return [pipeline ? 'Processors of ' : 'Processors: ', ...(pipeline ? [code(pipeline), ': '] : []), code(`[${(c.processors ?? []).join(', ')}]`)];
+    case 'swap': {
+      const next = c.processors ?? [];
+      const moved = current ? moves(current, next) : undefined;
+      if (moved && moved.length > 0 && moved.length <= 2) {
+        return moved.flatMap((m, i) => {
+          const at = next.indexOf(m);
+          const where = at === 0 ? [' first'] : at === next.length - 1 ? [' last'] : [' before ', code(next[at + 1])];
+          return [...(i ? ['; '] : []), i ? 'move ' : 'Move ', code(m), ...where];
+        });
+      }
+      return [pipeline ? 'Processors of ' : 'Processors: ', ...(pipeline ? [code(pipeline), ': '] : []), code(`[${next.join(', ')}]`)];
+    }
     case 'remove_statement':
-      return c.group !== undefined
-        ? [`Remove statement${at} of group ${c.group} of `, code(c.component ?? ''), ': ', code(c.text ?? '')]
-        : [`Remove condition${at} of `, code(c.component ?? ''), ': ', code(c.text ?? '')];
+      return ['Remove ', code(c.text ?? '')];
     case 'set_option':
       return c.value
         ? ['Set ', code(c.option ?? ''), ' of ', code(c.component ?? ''), ' to ', code(c.value)]
         : ['Set ', code(c.option ?? ''), ' of ', code(c.component ?? ''), '; the value is yours to choose'];
   }
   return [c.op];
+}
+
+/** changeTitle says a change in full, for the brief text's tooltip. */
+export function changeTitle(c: RecommendationChange): string | undefined {
+  switch (c.op) {
+    case 'swap':
+      return `New order: ${(c.processors ?? []).join(', ')}`;
+    case 'remove_statement':
+      return c.group !== undefined
+        ? `Remove statement ${c.index ?? ''} of group ${c.group} of ${c.component ?? ''}`
+        : `Remove condition ${c.index ?? ''} of ${c.component ?? ''}`;
+  }
+  return undefined;
+}
+
+/**
+ * moves names the processors a new order moves: those outside the longest
+ * run kept in the same relative order. Undefined when the two orders hold
+ * different processors.
+ */
+export function moves(current: string[], next: string[]): string[] | undefined {
+  if (current.length !== next.length || [...current].sort().join() !== [...next].sort().join()) return undefined;
+  const n = current.length;
+  const lcs = Array.from({ length: n + 1 }, () => new Array<number>(n + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      lcs[i][j] = current[i] === next[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+    }
+  }
+  const kept = new Set<string>();
+  for (let i = 0, j = 0; i < n && j < n; ) {
+    if (current[i] === next[j]) { kept.add(current[i]); i++; j++; }
+    else if (lcs[i + 1][j] >= lcs[i][j + 1]) i++;
+    else j++;
+  }
+  return next.filter((x) => !kept.has(x));
+}
+
+/**
+ * savesText is a card's short line of what the change saves; the share
+ * beside it says of how much.
+ */
+export function savesText(r: Pick<Recommendation, 'rule'>, metric: string, n: number): string {
+  switch (metric) {
+    case 'evaluations_without_effect': {
+      const kind = r.rule.startsWith('filter.') ? 'condition ' : r.rule.startsWith('ottl.') ? 'statement ' : '';
+      return `Saves ${count(n)} ${kind}${n === 1 ? 'evaluation' : 'evaluations'}`;
+    }
+    case 'records_without_effect':
+      return `Saves ${count(n)} record ${n === 1 ? 'pass' : 'passes'}`;
+    case 'records_not_processed':
+      return `${count(n)} dropped ${n === 1 ? 'record skips' : 'records skip'} earlier processors`;
+    case 'resource_blocks_merged':
+      return `Merges ${count(n)} resource ${n === 1 ? 'block' : 'blocks'}`;
+  }
+  return `${count(n)} ${metric.replaceAll('_', ' ')}`;
 }
 
 /** benefitText: what the run shows the change would save. */
@@ -245,18 +350,24 @@ export function recommendationViews(report: Report | undefined, runName: string)
       const node = componentNode(report!, ref, r.pipeline);
       if (node) actions.push({ label: `Open ${ref.slice(ref.indexOf('/') + 1)}`, node });
     }
+    const processors = (report?.topology?.pipelines ?? []).find((p) => p.id === r.pipeline)?.processors;
+    const current = processors?.map((ref) => ref.slice(ref.indexOf('/') + 1));
     return {
       id: `${i}:${r.rule}`,
       index: i,
       verifiable: verifiable(r.change),
+      checksOnly: r.change?.op === 'remove_statement',
+      holds: holdsOf(r),
+      untested: r.kind === 'untested' && r.subject ? { label: untestedLabel(r.rule), text: r.subject } : undefined,
       rule: r.rule,
       title: ruleTitle(r.rule),
       kind: KINDS[r.kind] ?? { label: r.kind, tone: 'plain' },
       provenance: provenance(r.confidence, runName),
       pipeline: r.pipeline,
       summary: r.summary,
-      change: r.change ? changeText(r.change, r.pipeline) : undefined,
-      saves: r.benefit ? benefitText(r.benefit.metric, r.benefit.count) : undefined,
+      change: r.change ? changeText(r.change, r.pipeline, current) : undefined,
+      changeTitle: r.change ? changeTitle(r.change) : undefined,
+      saves: r.benefit ? savesText(r, r.benefit.metric, r.benefit.count) : undefined,
       effect: effect(r.output, r.confidence),
       share: r.benefit ? share(r.benefit.count, r.benefit.of, totalText(r, r.benefit.metric)) : undefined,
       blockers: r.blockers ?? [],
@@ -372,8 +483,37 @@ export function verificationView(v: RecommendationVerification, runName: string)
 export function recommendationHint(views: RecommendationView[]): string | undefined {
   if (!views.length) return undefined;
   const risky = views.filter((v) => v.kind.tone === 'warn').length;
-  const count = `${views.length} ${views.length === 1 ? 'recommendation' : 'recommendations'}`;
-  return risky ? `${count}, ${risky} about data at risk` : count;
+  const untested = views.filter((v) => v.kind.label === 'Untested').length;
+  const parts = [`${views.length} ${views.length === 1 ? 'recommendation' : 'recommendations'}`];
+  if (risky) parts.push(`${risky} about data at risk`);
+  if (untested) parts.push(`${untested} not tested by this input`);
+  return parts.join(', ');
+}
+
+/** RecommendationGroup is one section of the Recommendations tab. */
+export interface RecommendationGroup {
+  id: 'any_input' | 'this_input' | 'untested';
+  title: string;
+  hint: string;
+  views: RecommendationView[];
+}
+
+/**
+ * recommendationGroups sorts a run's recommendations by how far they can be
+ * trusted: those that hold for any input, those this input shows, and what
+ * this input left untested; report order within each. Empty groups are left
+ * out.
+ */
+export function recommendationGroups(views: RecommendationView[]): RecommendationGroup[] {
+  const groups: RecommendationGroup[] = [
+    { id: 'any_input', title: 'Holds for any input', hint: 'The configuration or the statement itself proves these.', views: [] },
+    { id: 'this_input', title: 'Depends on this input', hint: "This run's input shows these; check them against your own traffic.", views: [] },
+    { id: 'untested', title: 'Not tested by this input', hint: 'No record in this input reached these. Add records they should act on to the scenario to test them.', views: [] },
+  ];
+  for (const v of views) {
+    groups[v.untested || v.kind.label === 'Untested' ? 2 : v.holds === 'any_input' ? 0 : 1].views.push(v);
+  }
+  return groups.filter((g) => g.views.length > 0);
 }
 
 /** RecommendationKind is one rule's line in the Overview card: its title, kind and how often the run reports it. */

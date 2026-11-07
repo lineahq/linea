@@ -17,14 +17,16 @@ import (
 
 // TestReportRecommendsFromItsEvidence runs samples whose evidence supports a
 // recommendation: broken-routing's where clause never matches in the shared
-// transform (one recommendation for both pipelines), and trace-sampling has
-// spans that arrive after their trace's decision.
+// transform (one recommendation for both pipelines, untested and so without a
+// change), and trace-sampling has spans that arrive after their trace's
+// decision.
 func TestReportRecommendsFromItsEvidence(t *testing.T) {
 	cases := []struct {
 		sample, rule, pipeline string
+		change                 bool
 	}{
-		{"broken-routing", "ottl.statement_never_matched", ""},
-		{"trace-sampling", "sampling.late_spans", "traces"},
+		{"broken-routing", "ottl.statement_never_matched", "", false},
+		{"trace-sampling", "sampling.late_spans", "traces", true},
 	}
 	for _, c := range cases {
 		t.Run(c.sample, func(t *testing.T) {
@@ -39,7 +41,7 @@ func TestReportRecommendsFromItsEvidence(t *testing.T) {
 				t.Fatalf("recommendations = %+v", rep.Recommendations)
 			}
 			r := rep.Recommendations[0]
-			if r.Rule != c.rule || r.Pipeline != c.pipeline || len(r.Evidence) == 0 || r.Change == nil {
+			if r.Rule != c.rule || r.Pipeline != c.pipeline || len(r.Evidence) == 0 || (r.Change != nil) != c.change || r.Holds != recommend.HoldsThisInput {
 				t.Fatalf("recommendation = %+v", r)
 			}
 		})

@@ -113,7 +113,6 @@
 .od-prov--verified { color: var(--pass); }
 
 /* What a suggested change does to the exported data */
-.od-effect { font-weight: 500; color: var(--fg-muted); }
 .od-effect--pass { color: var(--pass); }
 .od-effect--warn { color: var(--warn); }
 .od-measured { border-collapse: collapse; margin-top: 6px; font-size: 12px; }

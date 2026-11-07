@@ -107,7 +107,7 @@ func statementTotals(in Input) []*statementTotal {
 }
 
 // statementNeverMatched: a statement whose where clause was false on every
-// item it was evaluated on.
+// item it was evaluated on: this input does not test it.
 func statementNeverMatched(in Input) []Recommendation {
 	var out []Recommendation
 	for _, t := range statementTotals(in) {
@@ -115,13 +115,11 @@ func statementNeverMatched(in Input) []Recommendation {
 			continue
 		}
 		out = append(out, Recommendation{
-			Kind: KindRedundancy, Confidence: ConfidenceObserved, Pipeline: t.pipeline,
+			Kind: KindUntested, Confidence: ConfidenceObserved, Pipeline: t.pipeline,
 			Components: []string{processorRef(t.processor)}, Subject: t.text,
-			Summary: fmt.Sprintf("%s never matched: its where clause was false on all %s it was evaluated on in %s, so it changed nothing. If this input holds items it should change, the where clause is wrong rather than unneeded.",
-				t.name(), plural(t.notMatched, contextNoun(t.context)), pipelinesPhrase(t.pipelines)),
+			Summary: fmt.Sprintf("%s never ran: its where clause was false on all %s it was evaluated on in %s. To test it, add a %s it should change to the scenario.",
+				t.name(), plural(t.notMatched, contextNoun(t.context)), pipelinesPhrase(t.pipelines), contextNoun(t.context)),
 			Evidence: []Evidence{{SectionOTTL, t.ref()}},
-			Benefit:  &Benefit{Metric: MetricEvaluationsWithoutEffect, Count: t.notMatched},
-			Change:   t.change(),
 			Coverage: t.coverage(),
 		})
 	}
@@ -130,14 +128,17 @@ func statementNeverMatched(in Input) []Recommendation {
 
 // statementNoChange: a statement that ran and changed nothing, because every
 // item already held what it sets. Statements that write the cache change no
-// item by design and are left out.
+// item by design and are left out. A statement that writes a path's own value
+// back changes nothing on any input; any other is reported only when it ran
+// on every item it was evaluated on, since a where clause that excluded some
+// says the statement targets items this input may lack.
 func statementNoChange(in Input) []Recommendation {
 	var out []Recommendation
 	for _, t := range statementTotals(in) {
 		if !noChange(t) || t.duplicate {
 			continue
 		}
-		out = append(out, Recommendation{
+		rec := Recommendation{
 			Kind: KindRedundancy, Confidence: ConfidenceObserved, Pipeline: t.pipeline,
 			Components: []string{processorRef(t.processor)}, Subject: t.text,
 			Summary: fmt.Sprintf("%s ran on %s and changed none of them: each already held what it sets.",
@@ -146,20 +147,30 @@ func statementNoChange(in Input) []Recommendation {
 			Benefit:  &Benefit{Metric: MetricEvaluationsWithoutEffect, Count: t.matched},
 			Change:   t.change(),
 			Coverage: t.coverage(),
-		})
+		}
+		switch {
+		case selfAssignment(t.text):
+			rec.Holds, rec.Coverage = HoldsAnyInput, nil
+			rec.Summary = fmt.Sprintf("%s writes each item's value back to the same path, so it changes nothing on any input; here it ran on %s.",
+				t.name(), plural(t.matched, contextNoun(t.context)))
+		case t.notMatched > 0:
+			continue
+		}
+		out = append(out, rec)
 	}
 	return out
 }
 
 // duplicateStatement: a statement that repeats the one before it and
-// changed nothing after it.
+// changed nothing after it. When the statement is idempotent, the repeat
+// changes nothing on any input.
 func duplicateStatement(in Input) []Recommendation {
 	var out []Recommendation
 	for _, t := range statementTotals(in) {
 		if !t.duplicate || !noChange(t) {
 			continue
 		}
-		out = append(out, Recommendation{
+		rec := Recommendation{
 			Kind: KindRedundancy, Confidence: ConfidenceObserved, Pipeline: t.pipeline,
 			Components: []string{processorRef(t.processor)}, Subject: t.text,
 			Summary: fmt.Sprintf("%s repeats the statement before it and changed none of the %s it ran on.",
@@ -168,7 +179,13 @@ func duplicateStatement(in Input) []Recommendation {
 			Benefit:  &Benefit{Metric: MetricEvaluationsWithoutEffect, Count: t.matched},
 			Change:   t.change(),
 			Coverage: t.coverage(),
-		})
+		}
+		if idempotent(t.text) {
+			rec.Holds, rec.Coverage = HoldsAnyInput, nil
+			rec.Summary = fmt.Sprintf("%s repeats the statement before it, which leaves nothing for it to change on any input; here it ran on %s.",
+				t.name(), plural(t.matched, contextNoun(t.context)))
+		}
+		out = append(out, rec)
 	}
 	return out
 }

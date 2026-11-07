@@ -157,17 +157,24 @@ func policyNeverDecides(in Input) []Recommendation {
 				coverage = append(coverage, fmt.Sprintf("A %s policy depends on all the traffic the processor sees; here each trace was evaluated alone.", p.Type))
 			}
 			out = append(out, Recommendation{
-				Kind: KindRedundancy, Confidence: ConfidenceObserved, Pipeline: s.Pipeline,
+				Kind: KindUntested, Confidence: ConfidenceObserved, Pipeline: s.Pipeline,
 				Components: []string{processorRef(s.Processor)}, Subject: p.Name,
-				Summary: fmt.Sprintf("Policy %s of %s sampled or dropped nothing in the %s it was evaluated on in pipeline %s, each trace on its own. If this input holds traces the policy should sample, its rule may be wrong rather than unneeded.",
-					policyLabel(p), s.Processor, plural(len(verified), "trace"), s.Pipeline),
+				Summary: fmt.Sprintf("Policy %s of %s sampled or dropped none of the %s it was evaluated on in pipeline %s, each trace on its own. To test it, add a trace it should %s to the scenario.",
+					policyLabel(p), s.Processor, plural(len(verified), "trace"), s.Pipeline, policyVerb(p)),
 				Evidence: withPolicies(traceEvidence(s.Processor, verified), s.Processor, p.Name),
-				Benefit:  &Benefit{Metric: MetricEvaluationsWithoutEffect, Count: len(verified)},
 				Coverage: coverage,
 			})
 		}
 	}
 	return out
+}
+
+// policyVerb is what a trace that tests the policy would have it do.
+func policyVerb(p analysis.SamplingPolicy) string {
+	if p.Type == "drop" {
+		return "drop"
+	}
+	return "sample"
 }
 
 // policyShadowed: on every verified trace another policy sampled the trace on
