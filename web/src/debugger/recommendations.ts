@@ -5,6 +5,7 @@
 import type { Recommendation, RecommendationChange, RecommendationVerification, Report } from '../api/types';
 import { nodeKey } from '../graph/layout';
 import type { Segment } from './findings';
+import { elapsedText } from './runFacts';
 
 const code = (s: string): Segment => ({ code: s });
 
@@ -257,4 +258,22 @@ export function recommendationKinds(views: RecommendationView[]): Recommendation
   }
   const all = [...byRule.values()];
   return [...all.filter((k) => k.kind.tone === 'warn'), ...all.filter((k) => k.kind.tone !== 'warn')];
+}
+
+/** VerifyProgress is what a pending verification shows: a sentence and, with an estimate, how far along it probably is. */
+export interface VerifyProgress { text: string; fraction?: number }
+
+
+/**
+ * verifyProgress words a verification that is still running. The server
+ * answers only at the end, so the estimate is the original run's own time:
+ * the candidate runs the same input. The bar never claims to be done.
+ */
+export function verifyProgress(elapsedMs: number, expectedMs?: number): VerifyProgress {
+  const lead = "Running the change on this run's input";
+  if (!expectedMs || expectedMs < 1000) return { text: `${lead}: ${elapsedText(elapsedMs)}` };
+  if (elapsedMs <= expectedMs) {
+    return { text: `${lead}: ${elapsedText(elapsedMs)} of about ${elapsedText(expectedMs)}, the original run's time`, fraction: Math.min(elapsedMs / expectedMs, 0.95) };
+  }
+  return { text: `${lead}: ${elapsedText(elapsedMs)}, longer than the original run's ${elapsedText(expectedMs)}`, fraction: 0.95 };
 }

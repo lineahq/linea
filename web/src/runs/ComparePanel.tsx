@@ -6,6 +6,7 @@ import { RecordList } from '../inspect/RecordList';
 import { Pill, RecordRow } from '../inspect/RecordRow';
 import { COMPARE_FILTERS, compareCandidates, compareItems, comparePair, exporterText, fateText, finished, headline } from './compare';
 import { useComparedRuns } from './comparedRuns';
+import { Working } from '../debugger/Working';
 
 interface Props {
   runId: string;
@@ -49,7 +50,7 @@ export function ComparePanel({ runId, other, onOther }: Props) {
       </label>
       {!picked && <p className="note">Pick another run from this server's history. The older run is the before run; both are compared from their recorded evidence.</p>}
       {comparison.error && <p className="error" role="alert">Could not compare the runs: {comparison.error.message}</p>}
-      {pair && !comparison.data && !comparison.error && <p className="note">Comparing…</p>}
+      {pair && !comparison.data && !comparison.error && <Working text="Comparing the two runs on the server" detail="Large runs take a while." />}
       {comparison.data && <ComparisonView c={comparison.data} />}
     </div>
   );

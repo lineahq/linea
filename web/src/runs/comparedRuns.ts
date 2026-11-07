@@ -1,6 +1,8 @@
 import { useMemo } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
+import type { Run } from '../api/types';
+import { isFinished } from '../debugger/runFacts';
 import { runListQuery } from './runList';
 import { firstPageRuns, withRuns } from './runPages';
 
@@ -15,10 +17,12 @@ export function useComparedRuns(ids: readonly (string | undefined)[]) {
   const first = useMemo(() => firstPageRuns(runs.data), [runs.data]);
   const older = useQueries({
     queries: ids.map((id) => ({
-      // Under ['runs'], so invalidating the run list refreshes these too.
-      queryKey: ['runs', 'one', id],
+      // The debugger's own run query: a run already open is not read again,
+      // and the comparison's side cards (useRunDetails) reuse this read.
+      queryKey: ['run', id],
       queryFn: () => api.run(id!),
       enabled: !!runs.data && !!id && !first.some((r) => r.id === id),
+      staleTime: (q: { state: { data?: Run } }) => (q.state.data && isFinished(q.state.data) ? Infinity : 0),
       retry: false,
     })),
   });

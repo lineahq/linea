@@ -20,6 +20,8 @@ function Text({ parts }: { parts: Segment[] }) {
 export function RecommendationsTab({ view, setSearch }: { view: RunView; setSearch(patch: Partial<WorkspaceSearch>): void }) {
   const r = view.run;
   const recs = useMemo(() => (view.live || !r ? [] : recommendationViews(r.report, runLabel(r.id))), [r, view.live]);
+  // The candidate runs the same input, so the original run's time is the estimate.
+  const expectedMs = r?.started && r.finished ? Date.parse(r.finished) - Date.parse(r.started) : undefined;
   const open = (node: string) => setSearch({ node, input: undefined, record: undefined, tab: undefined, view: undefined });
   if (!r || view.live) {
     return <div className="od-muted" style={{ padding: 14 }} role="status">Recommendations appear when the run has finished.</div>;
@@ -52,7 +54,7 @@ export function RecommendationsTab({ view, setSearch }: { view: RunView; setSear
             </div>
           )}
           {x.verifiable
-            ? <VerifyRecommendation key={`${r.id}:${x.id}`} runId={r.id} index={x.index} provenance={x.provenance} />
+            ? <VerifyRecommendation key={`${r.id}:${x.id}`} runId={r.id} index={x.index} provenance={x.provenance} expectedMs={expectedMs} />
             : <span className={`od-prov od-prov--${x.provenance.tone}`} title={x.rule}><Icon name="eye" size={12} />{x.provenance.text}</span>}
         </div>
       ))}

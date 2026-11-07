@@ -583,8 +583,11 @@ whole-page "Compare runs" state (`/?run=<a>&compare=<b>`). It is reached from
 the runs drawer, the run list or "Compare with…". The earlier admitted run is
 the baseline (list order, since a pair shares its creation time). It reads the
 newest page of the run list and reads a compared run older than that page on its
-own (`runs/comparedRuns.ts`, merged newest first by `withRuns`), so only a
-deleted or unreadable run is reported as not in the list. It shows the platform
+own (`runs/comparedRuns.ts`, merged newest first by `withRuns`; it shares the
+`['run', id]` query with `useRun` and `useRunDetails`, so each run is read
+once), so only a deleted or unreadable run is reported as not in the list.
+While the server compares, `debugger/Working.tsx` shows a status with the
+elapsed time (`elapsedText` in `runFacts.ts`, tested). It shows the platform
 comparison: eligibility and every inconclusive reason in the open, exporter
 outputs, and one row per changed injected record that opens to where the record
 ended, "Follow in both" and its fields per exporter. Follow in both lines up the
@@ -885,7 +888,10 @@ A recommendation whose change is a processor order has "Verify on this
 input" (`VerifyRecommendation.tsx`; `verificationView` in
 `recommendations.ts`, tested), disabled without `run.submit`. It is on
 demand, one more run: `POST /runs/{id}/recommendations/{n}/verify` runs the
-change as a candidate on the run's inputs and waits. The card then shows the
+change as a candidate on the run's inputs and waits. Meanwhile a status below
+the button shows the elapsed time against the original run's duration, with a
+bar capped at 95% (`verifyProgress` in `recommendations.ts`, tested); the server
+reports no progress, so it is an estimate. The card then shows the
 server's outcome (same output, different output, inconclusive with the
 comparison's reasons, or the candidate's failure), each scenario assertion
 whose outcome the change changed, saying so in the outcome when one that

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RecommendationVerification, Report } from '../api/types';
-import { benefitChangeText, benefitText, changeText, componentNode, provenance, recommendationHint, recommendationKinds, recommendationViews, ruleTitle, verifiable, verificationView } from './recommendations';
+import { benefitChangeText, benefitText, changeText, componentNode, provenance, recommendationHint, recommendationKinds, recommendationViews, ruleTitle, verifiable, verificationView, verifyProgress } from './recommendations';
 
 const comp = (kind: string, id: string) => ({ kind, id, type: id.split('/')[0], ref: `${kind}/${id}`, mode: 'real' });
 
@@ -176,5 +176,17 @@ describe('recommendationKinds', () => {
       ['Statement never matched', 'Redundant', 2],
     ]);
     expect(recommendationKinds([])).toEqual([]);
+  });
+});
+
+describe('verifyProgress', () => {
+  it('estimates from the original run and never claims to be done', () => {
+    expect(verifyProgress(4_000, 10_000)).toEqual({ text: "Running the change on this run's input: 4 s of about 10 s, the original run's time", fraction: 0.4 });
+    expect(verifyProgress(9_900, 10_000).fraction).toBe(0.95);
+    expect(verifyProgress(75_000, 10_000)).toEqual({ text: "Running the change on this run's input: 1 min 15 s, longer than the original run's 10 s", fraction: 0.95 });
+  });
+  it('shows only the elapsed time without an estimate', () => {
+    expect(verifyProgress(3_000)).toEqual({ text: "Running the change on this run's input: 3 s" });
+    expect(verifyProgress(3_000, 400)).toEqual({ text: "Running the change on this run's input: 3 s" });
   });
 });

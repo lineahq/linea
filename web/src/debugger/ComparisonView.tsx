@@ -25,6 +25,7 @@ import {
   type ComparedRun,
 } from './runFacts';
 import { useRunDetails } from './useRunDetails';
+import { Working } from './Working';
 
 interface Props {
   /** The selected run (`?run=`). */
@@ -82,7 +83,7 @@ export function ComparisonView({ runId, compareId, onChangeRuns }: Props) {
   } else if (!finished(first) || !finished(second)) {
     body = callout('info', 'A compared run has not finished', 'Compare it once it ends; both runs are compared from their recorded evidence.');
   } else if (comparison.error) body = callout('fail', 'Could not compare the runs', comparison.error.message);
-  else if (!comparison.data) body = <div className="od-empty" role="status"><div className="od-empty__body">Comparing…</div></div>;
+  else if (!comparison.data) body = <Working text="Comparing the two runs on the server" detail="Each injected record is followed through both runs and what the exporters received is compared, so large runs take a while." />;
   else body = <Comparison c={comparison.data} runs={list} />;
 
   return (
