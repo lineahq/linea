@@ -2,6 +2,7 @@ package ottlreplay
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor"
@@ -264,9 +265,15 @@ func TestReplayReportsLogDisagreement(t *testing.T) {
 
 func TestReplayMarksFlattenedLogsUnsupported(t *testing.T) {
 	cfg := transformConfig(t, "    log_statements: ['set(log.attributes[\"x\"], 1)']\n")
-	// flatten_data needs a feature gate to pass config validation; the
-	// replay must refuse it regardless.
-	cfg.(*transformprocessor.Config).FlattenData = true
+	// Flattening needs a feature gate to pass config validation; the replay
+	// must refuse it regardless. flatten.log exists from 0.164 and
+	// flatten_data until 0.164, so set whichever the root module has.
+	v := reflect.ValueOf(cfg.(*transformprocessor.Config)).Elem()
+	if f := v.FieldByName("Flatten"); f.IsValid() {
+		f.FieldByName("Log").SetBool(true)
+	} else {
+		v.FieldByName("FlattenData").SetBool(true)
+	}
 	rep, err := Replay(context.Background(), "transform", cfg, 2, logsFixture(), 0, nil)
 	if err != nil {
 		t.Fatal(err)

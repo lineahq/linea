@@ -380,6 +380,34 @@ transform processor and internal/filter sources at v0.164.1:
 built the built-in components at 0.164.0 and ran every sample and the
 componentsDir reference comparisons.
 
+### 0.165 (2026-11-08)
+
+Verified against upstream's v0.165.0 releases manifest and the transform
+processor and queuebatch processor sources at v0.165.0:
+
+- Core 0.165.0 (stable modules v1.71.0) pairs with contrib 0.165.0;
+  `pkg/ottl` is v1.4.0. The OTTL constructors and function sets match 0.162,
+  so `since0162` serves 0.165.
+- The transform processor drops `flatten_data` (`Config.FlattenData`) for
+  `flatten.log` (`Config.Flatten.Log`, from 0.164). The replay reads both
+  fields by name (`ottlreplay/flatten.go`, `ottl-replay.md`), so one replay
+  compiles against every release.
+- The catalog adds `queue_batch` (`batching.md`) and drops
+  `asapauthextension`, which upstream's manifest comments out (contrib
+  #51868); `unsupported.yaml` no longer lists it.
+- No release module raises the umbrella `go.opentelemetry.io/collector`
+  module any more, so `collector/livecapture`'s requirement left it at the
+  root's release, which still holds `internal/statusutil` (its own module
+  since 0.163) and made the import ambiguous. The dependency-set scripts pin
+  the umbrella to the release.
+
+`TestEveryReleaseRunsTheSamples` with `LINEA_RELEASES=0.165.0` built the
+built-in components at 0.165.0 and ran every sample and the componentsDir
+reference comparisons. Its lean runtime (without the transform processor)
+also lacks the filter processor, so it reports `filter_explanation` missing
+too; the test's expected list predated that feature.
+`TestQueueBatchIsExplained` built a 0.165 runtime with `queue_batch`.
+
 ## Upgrade checks
 
 Verified against the catalogs of 0.160.0 and 0.162.0 (2026-10-15).

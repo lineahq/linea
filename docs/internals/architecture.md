@@ -748,8 +748,8 @@ The root Go module is declared in `go.mod`.
   otelcol-contrib `manifest.yaml` unchanged, the dependency set
   `dependencies.mod`/`.sum`, `unsupported.yaml` and the catalog `catalog.json`,
   which records each component's `deprecated_type` alias), embedded: 0.160.0,
-  0.161.0, 0.162.0, 0.163.0 and 0.164.0 (core 0.164.0 with contrib 0.164.1,
-  upstream's release pairing).
+  0.161.0, 0.162.0, 0.163.0, 0.164.0 (core 0.164.0 with contrib 0.164.1,
+  upstream's release pairing) and 0.165.0.
   `scripts/dependency-set.sh --version V [--catalog-only]` (Windows:
   `dependency-set.ps1 -Version V [-CatalogOnly]`) generates a release's set and
   catalog in the pinned Go image (the first run downloads about 5 GB), resolving

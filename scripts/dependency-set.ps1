@@ -56,6 +56,12 @@ if [ "$CATALOG_ONLY" != 1 ]; then
   done
   # tools.go's OCB, at the release rather than looked up at its latest.
   go mod edit -require "go.opentelemetry.io/collector/cmd/builder@v$VERSION"
+  # collector/livecapture requires the umbrella go.opentelemetry.io/collector
+  # at the root's release, which still holds internal/statusutil, a module
+  # of its own since 0.163 (docs/internals/collector-components-compatibility.md).
+  # Up to 0.164 the release's modules raised the umbrella; at 0.165 none does,
+  # and the import is ambiguous. Pin the umbrella to the release.
+  go mod edit -require "go.opentelemetry.io/collector@v$VERSION"
   go get $mods
   go mod tidy
   cp go.mod /repo/$dir/dependencies.mod

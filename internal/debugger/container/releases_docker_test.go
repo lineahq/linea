@@ -124,7 +124,7 @@ func TestEveryReleaseRunsTheSamples(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer w.Close()
-		want := []string{string(features.OTTLReplay), string(features.CountAggregation), string(features.RoutingExplanation), string(features.SamplingExplanation)}
+		want := []string{string(features.OTTLReplay), string(features.CountAggregation), string(features.RoutingExplanation), string(features.SamplingExplanation), string(features.FilterExplanation)}
 		if got := w.Hello().MissingFeatures; !slices.Equal(got, want) {
 			t.Fatalf("missing features %v, want %v", got, want)
 		}

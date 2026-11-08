@@ -40,9 +40,14 @@ From `transformprocessor/internal/{common,traces,logs,metrics}`:
   ExponentialHistogram and Summary points. Exemplar context visits the exemplars
   of Sum, Gauge, Histogram and ExponentialHistogram points; Summary points have
   none.
-- `flatten_data` (logs, behind the `transform.flatten.logs` feature gate) gives
+- `flatten.log` (logs, behind the `transform.flatten.logs` feature gate) gives
   every log record its own resource and scope before the statements run and
   regroups them afterwards (`pdatautil.FlattenLogs` / `GroupByResourceLogs`).
+  It was `flatten_data` until 0.164; 0.164 accepts both (`Config.Flatten.Log`
+  and the deprecated `Config.FlattenData`) and 0.165 removes `flatten_data`
+  (verified against the transform processor's `config.go` at v0.160.0,
+  v0.162.0, v0.164.1 and v0.165.0). The replay reads both fields by name
+  (`ottlreplay/flatten.go`), so it compiles against every release.
 - Plain (flat) statement lists are turned into one group without a context
   during `Config.Unmarshal`. Context inference then requires context-prefixed
   paths: `set(attributes["x"], 1)` fails validation, while
@@ -119,7 +124,7 @@ build has exactly one version of each module.
 ## Limitations
 
 - `profile_statements`, the `spanevent` context, group `conditions`,
-  `shared_cache` and logs `flatten_data` are reported as unsupported; later
+  `shared_cache` and flattened logs (`flatten.log`, `flatten_data`) are reported as unsupported; later
   groups are then `not_evaluated`.
 - Statement text is the resolved config, so `${env:...}` values appear
   substituted.
