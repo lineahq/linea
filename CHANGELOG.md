@@ -17,6 +17,8 @@ change APIs, report schemas and persisted formats; the release notes say how.
   value. **Existing stacks:** add `LINEA_AUTH=local` to `.env` to keep the
   previous behavior; without it the stack does not start. Workers and the
   builder now reach the server through HAProxy's own internal frontend.
+  The stack runs one server instance by default; `LINEA_REPLICAS=2` keeps
+  the previous two.
 - `linea login` against a server with no CLI sign-in says so; when the
   server already signs requests in (the Compose stack's `local` mode), it
   says no sign-in is needed and exits 0.

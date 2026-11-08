@@ -15,7 +15,7 @@ without `--server`) need no server.
 | `seaweedfs` | S3-compatible object storage for bundles, reports and evidence, bucket `linea` |
 | `setup` | One-shot: checks `.env` and writes the server config, HAProxy's and each service's secrets ([secrets and configuration](#secrets-and-configuration)) |
 | `bucket` | One-shot: creates the bucket, keeps an existing one |
-| `linea` | `linea-server --config`, two instances (`LINEA_REPLICAS`) |
+| `linea` | `linea-server --config`, one instance by default (`LINEA_REPLICAS`) |
 | `proxy` | HAProxy on `LINEA_BIND:LINEA_PORT` (`127.0.0.1:7070`), the only published port |
 | `pool` | `linea-worker --connect --pool`: runs the built-in runtime and the runtimes the builder makes, capacity `LINEA_POOL_CAPACITY` (4) ([pool worker](#the-pool-worker)) |
 | `builder` | `linea-builder --connect`: compiles the runtimes that server builds ask for ([builder](#the-builder)) |
@@ -208,7 +208,7 @@ a smaller machine lower them. Set these in `.env` or the shell:
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `LINEA_REPLICAS` | `2` | Server instances. One is enough on a single machine; two keep the stack up while one restarts. |
+| `LINEA_REPLICAS` | `1` | Server instances. One is enough on a single machine; two keep the stack up while one restarts ([instances](#instances-stops-and-upgrades)). |
 | `LINEA_SERVER_CPUS` | `2` | CPUs per server instance |
 | `LINEA_SERVER_MEMORY` | `1g` | Memory per server instance |
 | `LINEA_SERVER_GOMEMLIMIT` | `768MiB` | The instance's Go memory limit; keep it about three quarters of `LINEA_SERVER_MEMORY` |
@@ -222,7 +222,6 @@ For example, on a 2-CPU, 8 GB machine:
 
 ```sh
 # .env, beside the five values
-LINEA_REPLICAS=1
 LINEA_SERVER_CPUS=1
 LINEA_POOL_CAPACITY=2
 LINEA_POOL_CPUS=2
@@ -268,14 +267,17 @@ address and the trusted proxy `10.207.70.10` in the `setup` script together.
 
 ## Instances, stops and upgrades
 
-Any instance serves any request: runs, events, suites, sessions, sign-ins and MCP
-go through PostgreSQL, and one instance at a time does the housekeeping.
+The stack runs one instance; set `LINEA_REPLICAS=2` or more to keep it
+serving while one restarts. Any instance serves any request: runs, events,
+suites, sessions, sign-ins and MCP go through PostgreSQL, and one instance at a
+time does the housekeeping. With one instance, a stop or restart makes the API
+unavailable until it is back; queued runs wait and the CLI's waits retry.
 
 | Event | Behavior |
 | --- | --- |
 | `docker compose stop` or `restart` | The instance drains: it stops claiming work, lets what runs on its workers finish for up to `--drain-timeout` (25 s here), then hands the rest back to the queue without spending an attempt. `stop_grace_period` (45 s) leaves room for that. |
 | Instance killed | It loses its runs' leases; another instance requeues them after 30 s, once, as a new attempt. |
-| CLI waits | A wait the load balancer answers with 502, 503 or 504, or a lost connection, is sent again and reaches the other instance. HAProxy's timeouts are 10 minutes for these long polls; a longer wait times out and is sent again too. |
+| CLI waits | A wait the load balancer answers with 502, 503 or 504, or a lost connection, is sent again and reaches another instance, or the same one once it is back. HAProxy's timeouts are 10 minutes for these long polls; a longer wait times out and is sent again too. |
 
 ## Stopping and removing it
 

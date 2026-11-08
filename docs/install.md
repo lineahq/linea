@@ -98,7 +98,7 @@ linea test --server http://127.0.0.1:7070 \
 linea runs --server http://127.0.0.1:7070
 ```
 
-The stack is two server instances behind a load balancer, PostgreSQL,
+The stack is a server instance behind a load balancer, PostgreSQL,
 SeaweedFS, a pool worker and a runtime builder; idle, together they use about
 260 MiB of memory. The CPU and memory figures in `compose.yaml` are limits,
 not reservations: a run or a runtime build may use up to 4 CPUs. Docker

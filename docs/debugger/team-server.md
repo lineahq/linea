@@ -419,8 +419,8 @@ instance. One instance at a time does housekeeping and run retention.
 | CLI waits | The connected CLI retries a report wait that gets a lost connection, or a 502, 503 or 504 without an operation error code, for up to 30 s of such failures, so it reaches another instance. |
 | Builder autoscaling | `--metrics-listen ADDR` serves the build queue's counts at `GET /metrics` on its own listener, without credentials ([scaling builders](deploy-kubernetes.md#scaling-builders)). |
 
-[Docker Compose](deploy-compose.md) runs two instances behind HAProxy on one
-machine; the [Kubernetes chart](deploy-kubernetes.md) runs
+[Docker Compose](deploy-compose.md) runs `LINEA_REPLICAS` instances (1) behind
+HAProxy on one machine; the [Kubernetes chart](deploy-kubernetes.md) runs
 `server.replicas` instances.
 
 ## Limits

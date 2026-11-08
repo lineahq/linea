@@ -274,7 +274,7 @@ linea run --config traces-redact/config.yaml \
 These belong to the team server. `linea-server` always serves one, composed by a
 server config (`--config`); there is no single-process mode. The config, not
 where the server runs, decides how people sign in, where it listens and what it
-keeps. The Docker Compose stack runs it on one machine: two instances behind a
+keeps. The Docker Compose stack runs it on one machine: an instance (or more) behind a
 load balancer, PostgreSQL, object storage, a pool worker that runs the built-in
 runtime, and a runtime builder. Nothing needs registering.
 
@@ -397,7 +397,7 @@ CI](ci.md) and [`examples/ci/github-actions.yml`](../../examples/ci/github-actio
 | --- | --- |
 | [Glossary](glossary.md) | The words the interfaces show |
 | [Running a team server](team-server.md) | The server config, role bindings, projects and the library, sign-in, API tokens and what a team server refuses |
-| [Docker Compose](deploy-compose.md) | A team server with two instances, PostgreSQL, object storage and a worker on one machine, configured by `.env` |
+| [Docker Compose](deploy-compose.md) | A team server with one or more instances, PostgreSQL, object storage and a worker on one machine, configured by `.env` |
 | [Kubernetes](deploy-kubernetes.md) | The server image and the Helm chart |
 | [Collector checks in CI](ci.md) | `test` and `diff` in a pipeline, with their exit codes and the GitHub Actions example in `examples/ci/` |
 | [Building debug Collectors](runtime-builds.md) | Runtimes for another verified release or your own component modules: supported releases, manifests from the catalog, module sources; `upgrade-check` compares one configuration on two runtimes |

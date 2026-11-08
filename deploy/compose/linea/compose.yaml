@@ -1,5 +1,5 @@
-# The debugger's team server on one machine: two linea-server instances
-# behind a load balancer, PostgreSQL, SeaweedFS, a pool worker that runs the
+# The debugger's team server on one machine: linea-server (one instance,
+# LINEA_REPLICAS for more) behind a load balancer, PostgreSQL, SeaweedFS, a pool worker that runs the
 # built-in runtime and every runtime the server builds, and a runtime builder.
 # Nothing is registered by hand. See docs/debugger/deploy-compose.md.
 #
@@ -31,7 +31,7 @@
 #   LINEA_QUEUE_LIMIT, LINEA_BUILD_EXPORT
 #   Resources, which are limits, not reservations; a CPU limit above the
 #   host's CPU count makes Docker refuse the container:
-#   LINEA_REPLICAS (2), LINEA_SERVER_CPUS (2), LINEA_SERVER_MEMORY (1g),
+#   LINEA_REPLICAS (1), LINEA_SERVER_CPUS (2), LINEA_SERVER_MEMORY (1g),
 #   LINEA_SERVER_GOMEMLIMIT (768MiB, below LINEA_SERVER_MEMORY)
 #   LINEA_POOL_CAPACITY (4), LINEA_POOL_CPUS (4), LINEA_POOL_MEMORY (4g)
 #   LINEA_BUILDER_CPUS (4, a whole number), LINEA_BUILDER_MEMORY (5g)
@@ -405,7 +405,7 @@ services:
     user: "65532:65532"
     command: [--config, /run/secrets/config.yaml, --addr, "0.0.0.0:7070", --allow-http, --mcp, --drain-timeout, 25s]
     deploy:
-      replicas: ${LINEA_REPLICAS:-2}
+      replicas: ${LINEA_REPLICAS:-1}
     stop_grace_period: 45s
     # GOMAXPROCS follows the CPU limit by itself (Go 1.25 and later).
     environment:

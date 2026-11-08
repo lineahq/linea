@@ -55,7 +55,6 @@ above the machine's CPU count. With fewer than 4 CPUs, add lower limits to
 `.env`, for example:
 
 ```sh
-LINEA_REPLICAS=1
 LINEA_SERVER_CPUS=1
 LINEA_POOL_CAPACITY=2
 LINEA_POOL_CPUS=2
