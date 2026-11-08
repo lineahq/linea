@@ -1,0 +1,13 @@
+# Two debug logs are marked and dropped; the info and error logs leave.
+# Verify the filter.after_batch recommendation: placed before batch, the
+# filter also runs before transform/tag, so nothing is marked yet and the
+# debug logs leave too.
+version: 1
+name: filter-order
+inputs:
+  - receiver: otlp
+    file: input.json
+assertions:
+  - name: debug logs are dropped
+    target: {exporter: otlp/backend, signal: logs}
+    count: {equals: 2}

@@ -4,9 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strconv"
 
 	"github.com/lineahq/linea/internal/debugger/platform"
 )
+
+// captureCommands are the capture subcommands.
+var captureCommands = []string{"collectors", "collector", "points", "groups", "group", "group-members", "validate", "start", "list", "status", "wait", "stop", "records", "fixture", "scenario", "export", "delete", "update"}
 
 func captureCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
@@ -67,7 +71,6 @@ func captureCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	}
 	req := platform.CollectorPageRequest{Limit: *limit, Cursor: *cursor}
 	var result any
-	next := ""
 	switch command {
 	case "collectors":
 		page, err := c.ListCollectors(ctx, req)
@@ -75,24 +78,9 @@ func captureCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 			return fail(stderr, err)
 		}
 		result = page
-		next = page.NextCursor
 		if *format == "text" {
-			if !page.Enabled {
-				fmt.Fprintln(stdout, "Live capture is off; start linea-server with --fleet-url and --fleet-token-file.")
-			}
-			for _, item := range page.Items {
-				fmt.Fprintf(
-					stdout,
-					"%s\t%s/%s/%s\tgroup=%s\tenabled=%t\t%d points\t%d raw\n",
-					item.ID,
-					item.Cluster,
-					item.Namespace,
-					item.Pod,
-					item.CollectorGroup,
-					item.Enabled,
-					item.PointCount,
-					item.RawPointCount,
-				)
+			if err := writeCollectors(stdout, page); err != nil {
+				return fail(stderr, err)
 			}
 		}
 	case "collector":
@@ -102,22 +90,9 @@ func captureCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		}
 		result = item
 		if *format == "text" {
-			fmt.Fprintf(
-				stdout,
-				"%s\nCollector: %s/%s/%s\nGroup: %s\nFleet agent: %s\nGeneration: %d\nCollector version: %s\nDistribution version: %s\nCapture enabled: %t\nPoints: %d (%d raw)\n",
-				item.ID,
-				item.Cluster,
-				item.Namespace,
-				item.Pod,
-				item.CollectorGroup,
-				item.AgentID,
-				item.Generation,
-				item.CollectorVersion,
-				item.DistributionVersion,
-				item.Enabled,
-				item.PointCount,
-				item.RawPointCount,
-			)
+			if err := writeCollector(stdout, item); err != nil {
+				return fail(stderr, err)
+			}
 		}
 	case "points":
 		page, err := c.ListCapturePoints(ctx, *id, req)
@@ -125,10 +100,9 @@ func captureCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 			return fail(stderr, err)
 		}
 		result = page
-		next = page.NextCursor
 		if *format == "text" {
-			for _, point := range page.Items {
-				fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", point.Pipeline, point.Point, point.Signal, point.Sensitivity)
+			if err := writeCapturePoints(stdout, page); err != nil {
+				return fail(stderr, err)
 			}
 		}
 	}
@@ -136,8 +110,57 @@ func captureCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		if err := platform.Encode(stdout, result); err != nil {
 			return fail(stderr, err)
 		}
-	} else if next != "" {
-		fmt.Fprintf(stdout, "Next page: --cursor %s\n", next)
 	}
 	return exitOK
+}
+
+// writeCollectors prints the page of Collectors; with live capture off it
+// says how to turn it on.
+func writeCollectors(w io.Writer, page *platform.CollectorPage) error {
+	t := newTextOut(w)
+	if !page.Enabled {
+		t.line(0, "live capture is off; start linea-server with --fleet-url and --fleet-token-file")
+	} else if len(page.Items) == 0 {
+		t.none("collectors")
+	}
+	var rows [][]string
+	for _, item := range page.Items {
+		rows = append(rows, []string{item.ID, item.Cluster + "/" + item.Namespace + "/" + item.Pod, item.CollectorGroup,
+			strconv.FormatBool(item.Enabled), strconv.Itoa(item.PointCount), strconv.Itoa(item.RawPointCount)})
+	}
+	t.table(0, []string{"id", "cluster/namespace/pod", "group", "enabled", "points", "raw points"}, rows)
+	t.nextPage(page.NextCursor)
+	return t.err()
+}
+
+// writeCollector prints one Collector and what live capture knows of it.
+func writeCollector(w io.Writer, item *platform.Collector) error {
+	t := newTextOut(w)
+	t.line(0, "collector %s", item.ID)
+	t.field(1, "cluster", item.Cluster)
+	t.field(1, "namespace", item.Namespace)
+	t.field(1, "pod", item.Pod)
+	t.field(1, "group", item.CollectorGroup)
+	t.field(1, "fleet agent", item.AgentID)
+	t.field(1, "generation", strconv.FormatUint(item.Generation, 10))
+	t.field(1, "collector version", item.CollectorVersion)
+	t.field(1, "distribution version", item.DistributionVersion)
+	t.field(1, "capture enabled", strconv.FormatBool(item.Enabled))
+	t.field(1, "points", fmt.Sprintf("%d (%d raw)", item.PointCount, item.RawPointCount))
+	return t.err()
+}
+
+// writeCapturePoints prints a Collector's capture points.
+func writeCapturePoints(w io.Writer, page *platform.CapturePointPage) error {
+	t := newTextOut(w)
+	if len(page.Items) == 0 {
+		t.none("capture points")
+	}
+	var rows [][]string
+	for _, p := range page.Items {
+		rows = append(rows, []string{p.Pipeline, p.Point, p.Signal, p.Sensitivity})
+	}
+	t.table(0, []string{"pipeline", "point", "signal", "sensitivity"}, rows)
+	t.nextPage(page.NextCursor)
+	return t.err()
 }

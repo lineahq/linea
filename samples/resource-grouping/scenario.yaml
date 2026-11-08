@@ -1,0 +1,12 @@
+# One request with three resource blocks: two for checkout, one for cart.
+# Some records carry host.name, some do not. Open the groupbyattrs processor
+# and its Grouping tab to see where each record went.
+version: 1
+name: resource-grouping
+inputs:
+  - receiver: otlp
+    file: input.json
+assertions:
+  - name: every log leaves
+    target: {exporter: otlp/backend, signal: logs}
+    count: {equals: 6}

@@ -19,6 +19,8 @@ describe('inspector information architecture', () => {
     expect(ids('processor', 'attributes')).toEqual(['changes', 'component']);
     expect(ids('processor', 'transform')).toEqual(['changes', 'ottl', 'component']);
     expect(ids('processor', 'tail_sampling')).toEqual(['decisions', 'changes', 'component']);
+    expect(ids('processor', 'groupbyattrs')).toEqual(['grouping', 'changes', 'component']);
+    expect(ids('processor', 'filter')).toEqual(['filter', 'changes', 'component']);
     expect(ids('connector', 'count')).toEqual(['routes', 'telemetry', 'component']);
     expect(ids('connector', 'routing')).toEqual(['routes', 'telemetry', 'component']);
     expect(ids('extension', 'livecapture')).toEqual(['activity', 'telemetry', 'component']);
@@ -33,7 +35,7 @@ describe('inspector information architecture', () => {
     expect(inspectorSelection({ run: 'r', tab: 'nonsense' }, processor).tab.id).toBe('changes');
   });
   it('names the left pane views and the views of a component before any run', () => {
-    expect(INVESTIGATE_TABS.map((t) => t.label)).toEqual(['Overview', 'Records', 'Timeline']);
+    expect(INVESTIGATE_TABS.map((t) => t.label)).toEqual(['Overview', 'Assertions', 'Records', 'Timeline', 'Recommendations']);
     expect(PREPARE_TABS.map((t) => t.label)).toEqual(['How it will run', 'Effective configuration']);
     expect(componentTabs({ kind: 'exporter', type: 'otlp' }).map((t) => t.label)).toEqual(['Data', 'Configuration']);
   });

@@ -32,6 +32,8 @@ const (
 	EvidenceJourney      = evidence.FamilyJourney
 	EvidenceStatements   = evidence.FamilyStatements
 	EvidenceEvents       = evidence.FamilyEvents
+	// EvidenceRecommendations are the run's recommendations.
+	EvidenceRecommendations = evidence.FamilyRecommendations
 )
 
 // EvidencePage bounds one evidence answer. Zero sizes use the service's

@@ -233,7 +233,7 @@ describe('Capture records', () => {
     await settle(() => document.body.textContent!.includes('100 records selected'));
   });
 
-  it('creates a new scenario from the records, asking before it replaces unsaved edits', async () => {
+  it('creates a new configuration and scenario from the records, asking before it replaces unsaved edits', async () => {
     const original = getWorkspace();
     act(() => updateWorkspace({ configYAML: 'receivers: {otlp: {}}\n', scenarioYAML: '# my unsaved scenario\nversion: 1\ninputs: []\n', baselines: { config: 'receivers: {otlp: {}}\n', scenario: '' } }));
     try {
@@ -249,19 +249,62 @@ describe('Capture records', () => {
       await click(button('Select all 2'));
       await settle(() => !!button('Use as inputs'));
       await click(button('Use as inputs'));
-      await settle(() => !!button('Create the scenario and open it') && !button('Create the scenario and open it')!.disabled);
-      expect(document.querySelector('input[name=dest]:checked')!.parentElement!.textContent).toContain('New scenario');
-      await click(button('Create the scenario and open it'));
+      await settle(() => !!button('Create and open it') && !button('Create and open it')!.disabled);
+      expect(document.querySelector('input[name=dest]:checked')!.parentElement!.textContent).toContain('New configuration and scenario');
+      // A new configuration needs no receiver choice and no check of the open one.
+      expect(document.querySelector('select[aria-label^="Receiver for"]')).toBeNull();
+      await click(button('Create and open it'));
       await settle(() => !!document.querySelector('[aria-label="Replace unsaved work"]'));
       expect(getWorkspace().scenarioYAML).toContain('# my unsaved scenario');
-      expect((calls.find((c) => c.url.endsWith('/config/graph'))!.body as { setup_yaml: string }).setup_yaml).toBe('');
+      expect(calls.some((c) => c.url.endsWith('/config/graph'))).toBe(false);
+      const derive = calls.find((c) => c.url.endsWith('/fixtures'))!.body as { config_yaml: string; setup_yaml: string; selection: { receiver: string } };
+      expect(derive).toMatchObject({ setup_yaml: '', selection: { receiver: 'otlp' } });
+      expect(derive.config_yaml).toContain('logs:');
       await click(button('Replace'));
       await settle(() => router.state.location.pathname === '/');
-      const next = getWorkspace().scenarioYAML;
-      expect(next).not.toContain('# my unsaved scenario');
-      expect(next).toContain('receiver: otlp');
-      expect(next).toContain('capture_origins');
-      expect(getWorkspace().scenarioPath).toBe('');
+      const next = getWorkspace();
+      expect(next.scenarioYAML).not.toContain('# my unsaved scenario');
+      expect(next.scenarioYAML).toContain('receiver: otlp');
+      expect(next.scenarioYAML).toContain('capture_origins');
+      expect(next.configYAML).toBe(derive.config_yaml);
+      expect(next.scenarioPath).toBe('');
+      expect(next.configPath).toBe('');
+    } finally {
+      act(() => updateWorkspace({ ...original }));
+    }
+  });
+
+  it('adds a missing signal pipeline to the open configuration on request', async () => {
+    const original = getWorkspace();
+    const config = 'receivers:\n  otlp:\n    protocols: {grpc: {}}\nexporters:\n  debug: {}\nservice:\n  pipelines:\n    traces:\n      receivers: [otlp]\n      exporters: [debug]\n';
+    act(() => updateWorkspace({ configYAML: config, scenarioYAML: 'version: 1\ninputs: []\n', baselines: { config, scenario: 'version: 1\ninputs: []\n' } }));
+    try {
+      routes['GET /api/v1/captures/cap-0412'] = () => json(session({ state: 'completed', terminal: true, data: { ...data, state: 'frozen', received_records: 2 } }));
+      serve([record(1, 'a'), record(2, 'b')]);
+      routes['POST /api/v1/config/graph'] = (c) => {
+        const logs = (c.body as { config_yaml: string }).config_yaml.includes('logs:');
+        const pipelines = [{ id: 'traces', signal: 'traces', receivers: ['receiver/otlp'] }, ...(logs ? [{ id: 'logs', signal: 'logs', receivers: ['receiver/otlp'] }] : [])];
+        return json({ valid: true, topology: { components: [{ ref: 'receiver/otlp', id: 'otlp', kind: 'receiver' }], pipelines } });
+      };
+      routes['POST /api/v1/captures/cap-0412/fixtures'] = (c) => {
+        const sel = (c.body as { selection: { sequences: number[]; receiver: string } }).selection;
+        return json({ fixture_json: '{"resourceLogs":[]}', setup_yaml: '', receiver: sel.receiver, signal: 'logs', derivation: { session_id: 'cap-0412', selection: sel, source_digest: 'a'.repeat(64), digest: 'b'.repeat(64), destination_config_digest: 'c'.repeat(64), records: sel.sequences.length }, limitations: [] });
+      };
+      const router = await render('/captures/cap-0412');
+      await settle(() => !!button('Select all 2'));
+      await click(button('Select all 2'));
+      await settle(() => !!button('Use as inputs'));
+      await click(button('Use as inputs'));
+      await settle(() => !!document.querySelector('input[name=dest]'));
+      await click(document.querySelectorAll<HTMLInputElement>('input[name=dest]')[1]);
+      await settle(() => !!button('Add a logs pipeline'));
+      expect(button('Add as inputs and open the scenario')!.disabled).toBe(true);
+      await click(button('Add a logs pipeline'));
+      expect(getWorkspace().configYAML).toContain('    logs:\n      receivers: [otlp]\n      exporters: [debug]');
+      await settle(() => !button('Add as inputs and open the scenario')!.disabled);
+      await click(button('Add as inputs and open the scenario'));
+      await settle(() => router.state.location.pathname === '/');
+      expect(getWorkspace().scenarioYAML).toContain('receiver: otlp');
     } finally {
       act(() => updateWorkspace({ ...original }));
     }

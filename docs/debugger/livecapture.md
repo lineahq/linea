@@ -97,13 +97,14 @@ linea-server --config config.yaml --mcp --fleet-url https://fleet.example:8080 -
 
 | Topic | Detail |
 | --- | --- |
-| Helm chart | Sets these flags from `fleet.url` and `fleet.existingSecret` (a Secret with the key `token`). |
-| Compose stack | Has no fleet connection. |
+| Helm chart | Sets these flags from `fleet.url` and `fleet.existingSecret` (a Secret with the key `token`); with `fleet.deploy.enabled` it runs fleet and the plugin in the release and connects them on its own ([Fleet and live capture](deploy-kubernetes.md#fleet-and-live-capture)). |
+| Compose stack | Has no fleet connection; the overlay `compose.fleet.yaml` adds fleet and the plugin on the stack's PostgreSQL and sets these flags ([Fleet and live capture](deploy-compose.md#fleet-and-live-capture)). |
 | Token file | One fleet API token, at most 4 KiB, surrounding whitespace trimmed. Read once at startup; never accepted as an argument, logged or returned in errors. |
 | Credential | Needs fleet admin permission to create captures and channels; a reader credential can only discover. |
 | Transport | HTTPS unless the fleet URL is loopback. On a protected network `--fleet-allow-http` permits plaintext HTTP to another host. |
 | Changes | Changing the fleet or token needs a restart. |
 | Without `--fleet-url` | Inventory reports `enabled: false`, capture creation is refused and recorded captures stay readable. |
+| Checking it | **Fleet → Connection** in the web client, `linea fleet connection`, `GET /api/v1/fleet/connection` and `linea_check_fleet_connection` check now, step by step: reaching fleet with the server's credential, the livecapture plugin through fleet, and whether fleet runs config management. A failing step is part of the result, with its error code. Without a fleet the page shows each way to connect one. |
 
 ## Discovering Collectors
 
@@ -148,7 +149,14 @@ credential. Selections cannot raise it, and the debugger's own `capture.raw`
 permission applies on top (see [team server](team-server.md#fleet-and-live-capture)).
 
 - The web client offers raw points with a "needs fleet permission" label and
-  fleet refuses the capture if the credential lacks the grant.
+  fleet refuses the capture if the credential lacks the grant; the refusal
+  says so and names `raw_principals`.
+- The debugger's deployments grant it with a setting, off by default:
+  `LINEA_CAPTURE_RAW=true` in the Compose stack's `.env` or
+  `fleet.deploy.livecapture.rawCapture: true` in the Helm chart. Either puts
+  the server's own fleet credential into `raw_principals`. For a fleet you
+  run yourself, add the server credential's ID to the plugin's
+  `raw_principals`.
 - The default selection permits only points the Collector marks redacted.
 - On the Compose stack, whose one user is an admin, that user sees and controls
   every capture.

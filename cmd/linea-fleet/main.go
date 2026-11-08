@@ -92,6 +92,23 @@ func run(args []string, stdout, stderr io.Writer) error {
 			fmt.Fprintln(stdout, "fleet schema is current")
 			return nil
 		}
+		token, err := secret("LINEA_FLEET_BOOTSTRAP_TOKEN")
+		if err != nil {
+			return err
+		}
+		if token != "" {
+			// The deployment generated the token and keeps it; never print it.
+			created, err := postgres.BootstrapToken(ctx, database, *id, *name, token)
+			if err != nil {
+				return err
+			}
+			if created {
+				fmt.Fprintln(stdout, "fleet admin created")
+			} else {
+				fmt.Fprintln(stdout, "fleet admin is current")
+			}
+			return nil
+		}
 		issued, err := postgres.Bootstrap(ctx, database, *id, *name)
 		if err != nil {
 			return err

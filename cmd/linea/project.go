@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/lineahq/linea/internal/debugger/api"
@@ -204,9 +203,9 @@ func writeProjects(stdout, stderr io.Writer, format string, l *api.Projects) int
 	if format == "json" {
 		return writeEncoded(stdout, stderr, l)
 	}
-	fmt.Fprintf(stdout, "projects at revision %d\n", l.Revision)
-	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tNAME\tSTATE\tDEFAULT RUNTIME\tSTORAGE LIMIT\tRETENTION\tPERMISSIONS")
+	t := newTextOut(stdout)
+	t.line(0, "projects at revision %d", l.Revision)
+	var rows [][]string
 	for _, p := range l.Projects {
 		state := "active"
 		switch {
@@ -215,10 +214,14 @@ func writeProjects(stdout, stderr io.Writer, format string, l *api.Projects) int
 		case p.BuiltIn:
 			state = "built-in"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", p.ID, p.Name, state, orDash(p.DefaultRuntime), projectLimit(p.StorageLimit),
-			projectRetention(p.ProjectSettings), orDash(strings.Join(p.Permissions, ", ")))
+		rows = append(rows, []string{p.ID, p.Name, state, orDash(p.DefaultRuntime), projectLimit(p.StorageLimit),
+			projectRetention(p.ProjectSettings), orDash(strings.Join(p.Permissions, ", "))})
 	}
-	if err := tw.Flush(); err != nil {
+	if len(rows) == 0 {
+		t.line(1, "no projects")
+	}
+	t.table(1, []string{"id", "name", "state", "default runtime", "storage limit", "retention", "permissions"}, rows)
+	if err := t.err(); err != nil {
 		return fail(stderr, err)
 	}
 	return exitOK
@@ -306,8 +309,11 @@ func libraryListCmd(ctx context.Context, args []string, stdout, stderr io.Writer
 	if *format == "json" {
 		return writeEncoded(stdout, stderr, page)
 	}
-	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "ARTIFACT\tKIND\tLABEL\tSHARED WITH\tSHARED")
+	t := newTextOut(stdout)
+	if len(page.Items) == 0 {
+		t.none("library artifacts")
+	}
+	var rows [][]string
 	for _, item := range page.Items {
 		shared := "-"
 		if item.Shared != nil {
@@ -316,9 +322,10 @@ func libraryListCmd(ctx context.Context, args []string, stdout, stderr io.Writer
 				shared += " by " + item.SharedBy
 			}
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", item.Artifact.ID, item.Artifact.Kind, item.Artifact.Label, orDash(strings.Join(item.Audience, ", ")), shared)
+		rows = append(rows, []string{item.Artifact.ID, string(item.Artifact.Kind), item.Artifact.Label, orDash(strings.Join(item.Audience, ", ")), shared})
 	}
-	if err := tw.Flush(); err != nil {
+	t.table(0, []string{"artifact", "kind", "label", "shared with", "shared"}, rows)
+	if err := t.err(); err != nil {
 		return fail(stderr, err)
 	}
 	return exitOK

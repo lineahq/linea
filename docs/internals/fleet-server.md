@@ -54,7 +54,7 @@ server sends are in [fleet-config-layers.md](fleet-config-layers.md).
   unknown versions, missing ledger entries and modified migration content are
   rejected. There is no down-migration.
 - The config management tables exist in every installation (durable schema
-  version 10).
+  version 11; version 11 makes admin and reader credential expiry optional).
 
 ## Restore and failover
 

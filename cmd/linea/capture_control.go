@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 
 	"github.com/lineahq/linea/internal/debugger/platform"
 )
@@ -72,16 +73,14 @@ func captureControlCmd(ctx context.Context, command string, args []string, stdou
 	}
 	switch v := result.(type) {
 	case *platform.CaptureSession:
-		printCaptureSession(stdout, *v)
+		err = writeCaptureSession(stdout, v)
 	case *platform.CaptureSessionPage:
-		for _, session := range v.Items {
-			fmt.Fprintf(stdout, "%s\t%s\tterminal=%t\ttargets=%d\tactive=%d\tuncertain=%d\tfailed=%d\n", session.ID, session.State, session.Terminal, session.TargetCount, session.ActiveCount, session.UncertainCount, session.FailedCount)
-		}
-		if v.NextCursor != "" {
-			fmt.Fprintf(stdout, "Next page: --cursor %s\n", v.NextCursor)
-		}
+		err = writeCaptureSessions(stdout, v)
 	case *platform.CaptureValidation:
-		fmt.Fprintf(stdout, "Preflight accepted: %d Collectors, %ds duration. Fleet admits the capture on start; budgets apply per Collector.\n", len(v.Collectors), v.Selection.DurationSeconds)
+		err = writeCaptureValidation(stdout, v)
+	}
+	if err != nil {
+		return fail(stderr, err)
 	}
 	return exitOK
 }
@@ -112,16 +111,50 @@ func readCaptureSelection(path string) (platform.CaptureSelection, error) {
 	return req, nil
 }
 
-func printCaptureSession(out io.Writer, v platform.CaptureSession) {
-	fmt.Fprintf(out, "%s\t%s\tterminal=%t\texpires=%s\n", v.ID, v.State, v.Terminal, v.ExpiresAt.Format("2006-01-02T15:04:05Z07:00"))
-	if v.StopReason != "" {
-		fmt.Fprintf(out, "  stop reason: %s\n", v.StopReason)
-	}
-	for _, target := range v.Targets {
-		stats := platform.CaptureTargetStats{}
-		if target.Stats != nil {
-			stats = *target.Stats
+// writeCaptureSession prints the capture's state, then each target
+// Collector's counters.
+func writeCaptureSession(w io.Writer, v *platform.CaptureSession) error {
+	t := newTextOut(w)
+	t.line(0, "%s  capture %s", t.status(v.State, 0), v.ID)
+	t.line(1, "terminal: %t", v.Terminal)
+	t.field(1, "expires", v.ExpiresAt.Format("2006-01-02T15:04:05Z07:00"))
+	t.field(1, "stop reason", v.StopReason)
+	if len(v.Targets) > 0 {
+		t.heading("targets")
+		var rows [][]string
+		for _, target := range v.Targets {
+			stats := platform.CaptureTargetStats{}
+			if target.Stats != nil {
+				stats = *target.Stats
+			}
+			rows = append(rows, []string{target.CollectorID, target.State, strconv.FormatInt(stats.Selected, 10), strconv.FormatInt(stats.EnqueuedRecords, 10),
+				strconv.FormatInt(stats.EnqueuedBytes, 10), strconv.FormatInt(stats.FilterErrors, 10)})
 		}
-		fmt.Fprintf(out, "  %s\t%s\tselected=%d\tenqueued_records=%d\tenqueued_bytes=%d\tfilter_errors=%d\n", target.CollectorID, target.State, stats.Selected, stats.EnqueuedRecords, stats.EnqueuedBytes, stats.FilterErrors)
+		t.table(1, []string{"collector", "state", "selected", "enqueued records", "enqueued bytes", "filter errors"}, rows)
 	}
+	return t.err()
+}
+
+// writeCaptureSessions prints a page of capture summaries.
+func writeCaptureSessions(w io.Writer, v *platform.CaptureSessionPage) error {
+	t := newTextOut(w)
+	if len(v.Items) == 0 {
+		t.none("captures")
+	}
+	var rows [][]string
+	for _, s := range v.Items {
+		rows = append(rows, []string{s.ID, s.State, strconv.FormatBool(s.Terminal), strconv.Itoa(s.TargetCount), strconv.Itoa(s.ActiveCount),
+			strconv.Itoa(s.UncertainCount), strconv.Itoa(s.FailedCount)})
+	}
+	t.table(0, []string{"id", "state", "terminal", "targets", "active", "uncertain", "failed"}, rows)
+	t.nextPage(v.NextCursor)
+	return t.err()
+}
+
+// writeCaptureValidation prints the verdict of a preflight check.
+func writeCaptureValidation(w io.Writer, v *platform.CaptureValidation) error {
+	t := newTextOut(w)
+	t.line(0, "%s  preflight accepted: %s, %ds duration", t.status("ok", 0), plural(len(v.Collectors), "Collector"), v.Selection.DurationSeconds)
+	t.line(1, "Fleet admits the capture on start; budgets apply per Collector.")
+	return t.err()
 }

@@ -93,11 +93,13 @@ func TestRunReportsFormats(t *testing.T) {
 			args: []string{"run", "--config", config, "--fixture", fixture, "--format", "text"},
 			check: func(t *testing.T, out string) {
 				for _, want := range []string{
-					"stage.input        transform",
+					"STAGES\n",
+					"EVENTS\n",
+					"stage.input  ",
 					`removed span "SELECT orders"`,
 					"batch in traces (asynchronous)",
 					"transform input seq 8: replay_verified",
-					"exporter otlp (traces): 1 batch(es), 2 item(s)",
+					"exporter otlp  traces  1 batch  2 items",
 				} {
 					if !strings.Contains(out, want) {
 						t.Errorf("output lacks %q:\n%s", want, out)
@@ -127,7 +129,7 @@ func TestRunReportsFormats(t *testing.T) {
 			check: func(t *testing.T, out string) {
 				for _, want := range []string{
 					"at receiver otlp from client 10.42.0.17",
-					"mocked processor/k8sattributes (kubernetes, dependency_mocked): 3 fixture(s) supplied",
+					"MOCKS\n  processor/k8sattributes (kubernetes, dependency_mocked): 3 fixture(s) supplied",
 					"    supplied: Pod shop/checkout-7d9f8b6c4-x2x9q",
 					"    limitation: the API connection",
 				} {
@@ -205,7 +207,7 @@ func TestInspectReportsValidity(t *testing.T) {
 			name: "valid text",
 			args: []string{"inspect", "--config", config},
 			code: exitOK,
-			want: []string{": valid", "pipelines:", "receiver/otlp", "simulated", "captured"},
+			want: []string{"VALID  config ", "PIPELINES\n", "receiver/otlp", "simulated", "captured"},
 		},
 		{
 			name: "valid json",
@@ -217,13 +219,13 @@ func TestInspectReportsValidity(t *testing.T) {
 			name: "invalid",
 			args: []string{"inspect", "--config", invalid},
 			code: exitError,
-			want: []string{": INVALID", "batch"},
+			want: []string{"INVALID  config ", "DIAGNOSTICS\n", "batch"},
 		},
 		{
 			name: "unknown component",
 			args: []string{"inspect", "--config", unknown},
 			code: exitOK,
-			want: []string{": valid", "warning unsupported_component", "[receiver/kafka]", "stand_in"},
+			want: []string{"VALID  config ", "WARNING unsupported_component", "[receiver/kafka]", "stand_in"},
 		},
 	}
 	for _, tt := range tests {
@@ -259,7 +261,7 @@ func TestVersionReportsPinnedVersions(t *testing.T) {
 	if code := run(context.Background(), []string{"version"}, &stdout, &stderr); code != exitOK {
 		t.Fatalf("exit %d: %s", code, stderr.String())
 	}
-	if !strings.HasPrefix(stdout.String(), "linea "+release.ProductVersion+"\ncollector "+release.CollectorVersion) {
+	if !strings.HasPrefix(stdout.String(), "linea "+release.ProductVersion+"\n  collector: "+release.CollectorVersion) {
 		t.Fatalf("text = %s", stdout.String())
 	}
 }
@@ -296,14 +298,14 @@ func TestTestExitCodes(t *testing.T) {
 			name: "pass",
 			args: []string{"--tests", filepath.Join(multisignalDir, "tests")},
 			code: exitOK,
-			want: []string{"PASS         scrubbing", "PASS: 1 passed, 0 failed"},
+			want: []string{"PASS  1 scenario: 1 passed, 0 failed", "  PASS  scrubbing"},
 		},
 		{
 			name: "fail",
 			args: []string{"--scenario", testScenario(t, "{name: one record, target: {exporter: otlp/backend, signal: logs}, count: {equals: 2}}")},
 			code: exitFail,
 			want: []string{
-				"FAIL         one record: exporter otlp/backend (logs)",
+				"    FAIL  one record: exporter otlp/backend (logs)",
 				"fail count: expected == 2, observed 1",
 				"records per stage: logs: in 2 -> resource 2 -> attributes/scrub 2 -> filter/health 1",
 			},
@@ -324,7 +326,7 @@ func TestTestExitCodes(t *testing.T) {
 			name: "error outranks fail",
 			args: []string{"--scenario", testScenario(t, "{target: {exporter: otlp/backend, signal: logs}, count: {equals: 2}}"), "--scenario", filepath.Join(multisignalDir, "scenario.yaml")},
 			code: exitError,
-			want: []string{"scenario declares no assertions", "ERROR: 0 passed, 1 failed, 0 inconclusive, 1 errors"},
+			want: []string{"ERROR  2 scenarios: 0 passed, 1 failed, 0 inconclusive, 1 errors", "scenario declares no assertions"},
 		},
 	}
 	for _, tt := range tests {

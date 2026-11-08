@@ -19,6 +19,7 @@ import (
 	"github.com/lineahq/linea/internal/debugger/analysis"
 	"github.com/lineahq/linea/internal/debugger/engine"
 	"github.com/lineahq/linea/internal/debugger/instrument"
+	"github.com/lineahq/linea/internal/debugger/recommend"
 	"github.com/lineahq/linea/internal/debugger/telemetry"
 )
 
@@ -349,5 +350,32 @@ func TestFamiliesProjectARecordedRun(t *testing.T) {
 	var e instrument.Event
 	if err := json.Unmarshal(batch.Items[0].Data, &e); err != nil || e.Component != "batch" {
 		t.Fatalf("batch event = %+v (%v)", e, err)
+	}
+}
+
+func TestRecommendationsFilterByPipelineAndComponent(t *testing.T) {
+	rep := recordedStage("a")
+	rep.Recommendations = []recommend.Recommendation{
+		{Rule: "config.unused_component", Components: []string{"processor/attributes"}},
+		{Rule: "filter.after_batch", Pipeline: "logs", Components: []string{"processor/batch", "processor/filter/health"}},
+		{Rule: "sampling.late_spans", Pipeline: "traces", Components: []string{"processor/tail_sampling"}},
+	}
+	run := Run{ID: "run", End: EndDone, Report: rep}
+	for _, c := range []struct {
+		q    Query
+		refs []string
+	}{
+		{Query{Family: FamilyRecommendations}, []string{"recommendation:0", "recommendation:1", "recommendation:2"}},
+		{Query{Family: FamilyRecommendations, Pipeline: "logs"}, []string{"recommendation:0", "recommendation:1"}},
+		{Query{Family: FamilyRecommendations, Component: "filter/health"}, []string{"recommendation:1"}},
+		{Query{Family: FamilyRecommendations, Component: "filter"}, nil},
+	} {
+		refs, _ := pageAll(t, run, c.q, 10, 1<<20)
+		if !slices.Equal(refs, c.refs) {
+			t.Errorf("%+v: refs = %v, want %v", c.q, refs, c.refs)
+		}
+	}
+	if _, err := QueryRun(run, Query{Family: FamilyRecommendations, Side: SideBefore}, Page{Items: 10, Bytes: 1 << 20}); !errors.Is(err, ErrInvalidQuery) {
+		t.Fatalf("side on recommendations: %v", err)
 	}
 }

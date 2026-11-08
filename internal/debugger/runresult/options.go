@@ -21,6 +21,10 @@ type Input struct {
 	// sender (client.Info), as for a connection from that address. It is
 	// what connection-based pod association in k8sattributes uses.
 	ClientAddress string
+	// Headers are the request headers the input arrives with (lowercased
+	// names). The receiver reports them as client metadata only with
+	// include_metadata: true.
+	Headers map[string][]string
 	// After is how long to wait, after the previous input (or the
 	// Collector's start), before this input is injected.
 	After time.Duration

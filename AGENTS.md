@@ -39,7 +39,7 @@ Update the doc a change touches in the same commit.
 
 | Path | Contents |
 | --- | --- |
-| `cmd/linea/` | Debugger CLI, one file per command: `inspect`, `run`, `test`, `diff`, `upgrade-check`, `config-bisect`, `runs`, `suite`, `artifacts`, `export`, `ottl`, `statement`, `samples`, `runtime`, `capture`, `fleet`, `audit`, `token`, `access`, `project` (with `library`), `login` (with `logout`), `build`, `version`; runs the in-process Collector, no server |
+| `cmd/linea/` | Debugger CLI, one file per command: `inspect`, `run`, `test`, `diff`, `upgrade-check`, `config-bisect`, `runs`, `suite`, `artifacts`, `export`, `ottl`, `statement`, `samples`, `runtime`, `capture`, `fleet`, `audit`, `token`, `access`, `project` (with `library`), `login` (with `logout`), `build`, `version`, `completion` (shell scripts over a hidden `__complete`); text output goes through `textout.go`; runs the in-process Collector, no server |
 | `cmd/linea-server/` | Team server binary: HTTP API, web client and MCP; links no Collector (flags in `docs/internals/architecture.md`) |
 | `cmd/linea-worker/` | Worker process for runtimes (stdin/stdout, or `--connect` to dial a team server) |
 | `cmd/linea-builder/` | Runtime builder: dials a team server and compiles runtimes natively with the pinned Go toolchain |
@@ -239,7 +239,8 @@ go run ./cmd/linea test --config samples/<id>/config.yaml --scenario samples/<id
 # The web client, HTTP API and MCP need a team server; locally that is the
 # Compose stack (docs/debugger/deploy-compose.md). `linea-server` refuses to
 # start without --config.
-LINEA_VERSION=dev docker compose -f deploy/compose/linea/compose.yaml up -d --build   # after a .env in deploy/compose/linea/ (docs/debugger/deploy-compose.md)
+LINEA_VERSION=dev docker compose -f deploy/compose/linea/compose.yaml up -d --build   # after a .env in deploy/compose/linea/ with LINEA_AUTH (docs/debugger/deploy-compose.md)
+scripts/debugger/compose-fleet.sh             # the same stack plus fleet and live capture on its PostgreSQL (compose.fleet.yaml)
 go generate ./internal/debugger/registry      # after an OCB manifest change
 go generate ./internal/debugger/workersrc     # before building a binary that builds runtimes
 ./scripts/build-web.sh               # web tests and build, embedded by go build

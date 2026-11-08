@@ -8,10 +8,11 @@ import (
 	"io"
 	"net/url"
 	"strconv"
-	"text/tabwriter"
+	"strings"
 	"time"
 
 	"github.com/lineahq/linea/internal/debugger/api"
+	"github.com/lineahq/linea/internal/debugger/assertion"
 	"github.com/lineahq/linea/internal/debugger/client"
 	"github.com/lineahq/linea/internal/debugger/platform"
 )
@@ -32,20 +33,25 @@ func runsSummaryCmd(ctx context.Context, args []string, stdout, stderr io.Writer
 			if status == "" {
 				status = "none"
 			}
-			fmt.Fprintf(w, "execution %s, complete %t", status, s.Complete)
+			t := newTextOut(w)
+			t.line(0, "%s  run summary: %s, %s", t.status(status, 0), plural(len(s.Stages), "stage"), plural(len(s.Outputs), "output"))
+			complete := fmt.Sprint(s.Complete)
 			if s.Incomplete != "" {
-				fmt.Fprintf(w, " (%s)", s.Incomplete)
+				complete += " (" + s.Incomplete + ")"
 			}
-			fmt.Fprintf(w, "; %d stages, %d outputs", len(s.Stages), len(s.Outputs))
-			if s.Assertions != nil {
-				a := s.Assertions
-				fmt.Fprintf(w, "; assertions %s (%d pass, %d fail, %d inconclusive, %d error)", a.Outcome, a.Pass, a.Fail, a.Inconclusive, a.Error)
+			t.field(1, "complete", complete)
+			if a := s.Assertions; a != nil {
+				t.field(1, "assertions", fmt.Sprintf("%s (%d pass, %d fail, %d inconclusive, %d error)", strings.ToUpper(string(a.Outcome)), a.Pass, a.Fail, a.Inconclusive, a.Error))
 			}
-			fmt.Fprintln(w)
-			for _, e := range s.Errors {
-				fmt.Fprintf(w, "  error %s %s: %s\n", e.Source, e.Component, e.Message)
+			if len(s.Errors) > 0 {
+				t.heading("errors")
+				rows := make([][]string, 0, len(s.Errors))
+				for _, e := range s.Errors {
+					rows = append(rows, []string{e.Source, e.Component, e.Message})
+				}
+				t.table(1, []string{"source", "component", "message"}, rows)
 			}
-			return nil
+			return t.err()
 		})
 }
 
@@ -56,9 +62,9 @@ func runsEvidenceCmd(ctx context.Context, args []string, stdout, stderr io.Write
 		args, stdout, stderr,
 		func(fs *flag.FlagSet) {
 			for _, f := range []struct{ name, usage string }{
-				{"family", "stage_changes, records, journey, statements or events"},
-				{"pipeline", "pipeline ID for stage_changes and records; optional filter for statements"},
-				{"component", "the stage, the transform processor for statements, or an events filter"},
+				{"family", "stage_changes, records, journey, statements, events or recommendations"},
+				{"pipeline", "pipeline ID for stage_changes and records; optional filter for statements and recommendations"},
+				{"component", "the stage, the transform processor for statements, or an events and recommendations filter"},
 				{"signal", "signal of a connector stage that has several"},
 				{"side", "for records: before (received) or after (emitted)"},
 				{"entity", "for journey: a record ID"},
@@ -94,24 +100,29 @@ func runsEvidenceCmd(ctx context.Context, args []string, stdout, stderr io.Write
 			if err := json.Unmarshal(raw, &r); err != nil {
 				return err
 			}
-			fmt.Fprintf(w, "%s: %d items of %d", r.Family, len(r.Items), r.Total)
+			t := newTextOut(w)
+			t.line(0, "evidence %s: %d of %d items", r.Family, len(r.Items), r.Total)
 			if r.Complete {
-				fmt.Fprint(w, "; complete")
+				t.field(1, "complete", "true")
 			} else {
-				fmt.Fprintf(w, "; incomplete (%s)", r.TruncatedReason)
+				t.field(1, "complete", fmt.Sprintf("false (%s)", r.TruncatedReason))
 			}
-			fmt.Fprintln(w, "; --format json prints the items")
+			t.field(1, "more", "--format json prints the items")
+			t.heading("items")
+			if len(r.Items) == 0 {
+				t.none("items")
+			}
+			rows := make([][]string, 0, len(r.Items))
 			for _, it := range r.Items {
+				note := ""
 				if it.Oversize != nil {
-					fmt.Fprintf(w, "  %s (oversize, %d bytes)\n", it.Ref, it.Oversize.Bytes)
-				} else {
-					fmt.Fprintf(w, "  %s\n", it.Ref)
+					note = fmt.Sprintf("oversize, %d bytes", it.Oversize.Bytes)
 				}
+				rows = append(rows, []string{it.Ref, note})
 			}
-			if r.NextCursor != "" {
-				fmt.Fprintf(w, "more: --cursor %s\n", r.NextCursor)
-			}
-			return nil
+			t.table(1, []string{"ref", "note"}, rows)
+			t.nextPage(r.NextCursor)
+			return t.err()
 		})
 }
 
@@ -133,23 +144,33 @@ func runsEvaluationsCmd(ctx context.Context, args []string, stdout, stderr io.Wr
 				if err := json.Unmarshal(raw, &e); err != nil {
 					return err
 				}
-				fmt.Fprintf(w, "evaluation %s by %s at %s: %s\n", e.ID, e.Client, e.Created.Local().Format(time.DateTime), e.Outcome)
-				if e.Result != nil {
+				t := newTextOut(w)
+				t.line(0, "%s  evaluation %s", t.status(string(e.Outcome), 0), e.ID)
+				t.field(1, "client", e.Client)
+				t.field(1, "created", e.Created.Local().Format(time.DateTime))
+				if e.Result != nil && len(e.Result.Results) > 0 {
+					t.heading("results")
+					width := statusWidth(e.Result.Results, func(r assertion.Result) string { return string(r.Outcome) })
 					for _, r := range e.Result.Results {
-						fmt.Fprintf(w, "  %s: %s\n", r.Name, r.Outcome)
+						t.line(1, "%s  %s", t.status(string(r.Outcome), width), r.Name)
 					}
 				}
-				return nil
+				return t.err()
 			}
 			var list []api.EvaluationInfo
 			if err := json.Unmarshal(raw, &list); err != nil {
 				return err
 			}
-			tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "EVALUATION\tCLIENT\tCREATED\tOUTCOME")
-			for _, e := range list {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", e.ID, e.Client, e.Created.Local().Format(time.DateTime), e.Outcome)
+			t := newTextOut(w)
+			if len(list) == 0 {
+				t.none("evaluations")
+				return t.err()
 			}
-			return tw.Flush()
+			rows := make([][]string, 0, len(list))
+			for _, e := range list {
+				rows = append(rows, []string{e.ID, e.Client, e.Created.Local().Format(time.DateTime), strings.ToUpper(string(e.Outcome))})
+			}
+			t.table(0, []string{"evaluation", "client", "created", "outcome"}, rows)
+			return t.err()
 		})
 }

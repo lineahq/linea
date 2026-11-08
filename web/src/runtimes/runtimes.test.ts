@@ -24,6 +24,11 @@ describe('runtimeOptions', () => {
     expect(opts.map((o) => o.unverified)).toEqual([false, false, true]);
   });
 
+  it('offers the built-in runtime a team server lists once', () => {
+    const opts = runtimeOptions([runtime(BUILT_IN_NAME, '0.162.0', true), ...all], BUILT_IN, '0.162.0', 'mine');
+    expect(opts.map((o) => o.value)).toEqual([BUILT_IN, BUILT_IN_NAME, 'mine', 'v0163']);
+  });
+
   it('names the default runtime and keeps built-in choosable beside it', () => {
     const opts = runtimeOptions(all, BUILT_IN, '0.162.0', 'mine');
     expect(opts.map((o) => [o.value, o.label])).toEqual([

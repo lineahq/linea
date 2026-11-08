@@ -7,6 +7,74 @@ change APIs, report schemas and persisted formats; the release notes say how.
 
 ## Unreleased
 
+- Using capture records in the web client: "New configuration and scenario"
+  now starts a configuration of its own (OTLP in, one pipeline per captured
+  signal) with no receiver to map, instead of joining the open
+  configuration. Every destination makes one input per signal, however many
+  streams the records came from. Adding to the open scenario when no
+  receiver accepts a signal offers to add a pipeline for it to the
+  configuration draft.
+- The Docker Compose team server is configured by `.env` for any use, not
+  only one person on loopback: `LINEA_AUTH` chooses sign-in (`local`, `oidc`
+  through an identity provider, or `proxy` behind an authenticating proxy),
+  and `LINEA_BIND`, `LINEA_PORT`, `LINEA_TLS_CERT_FILE` / `LINEA_TLS_KEY_FILE`,
+  the role groups, storage and run limits, retention, the queue limit and
+  image export are settings too. The setup service writes the server and
+  HAProxy configs from them and stops with the variable's name on a bad
+  value. **Existing stacks:** add `LINEA_AUTH=local` to `.env` to keep the
+  previous behavior; without it the stack does not start. Workers and the
+  builder now reach the server through HAProxy's own internal frontend.
+  The stack runs one server instance by default; `LINEA_REPLICAS=2` keeps
+  the previous two.
+- `linea login` against a server with no CLI sign-in says so; when the
+  server already signs requests in (the Compose stack's `local` mode), it
+  says no sign-in is needed and exits 0.
+- CLI text output is structured into headed sections and aligned tables,
+  and `linea completion bash|zsh|fish|powershell` completes commands, flags
+  and values.
+- Fleet admin and reader credentials may be issued without `expires_at` and
+  then stay valid until revoked; agent credentials still require an expiry.
+  `bootstrap` issues its admin without expiry, so a team server connected
+  with it no longer loses fleet after 90 days. Fleet schema version 11:
+  **run `migrate` before starting the new release.**
+- Fleet `bootstrap` installs a token the deployment generated, given in
+  `LINEA_FLEET_BOOTSTRAP_TOKEN` (or `_FILE`), and is then safe to repeat. The
+  debugger's Compose overlay (`compose.fleet.yaml`) generates
+  `linea-server`'s fleet token in its setup volume and installs it this way;
+  existing stacks keep their token.
+- The Helm chart runs fleet and the live-capture plugin with
+  `fleet.deploy.enabled` and connects the server to them: databases and
+  roles in the bundled PostgreSQL (or your own, named in a Secret),
+  migrations in init containers, a generated server token installed as
+  fleet's first admin, generated plugin tokens and a self-signed plugin
+  certificate, all kept across upgrades.
+- The debugger checks its fleet connection on request: **Fleet → Connection**
+  in the web client, `linea fleet connection`, `GET /api/v1/fleet/connection`
+  and the MCP tool `linea_check_fleet_connection` report each step (fleet
+  with the server's credential, the livecapture plugin, config management)
+  with its result and error code. Without a fleet the page shows how each
+  deployment connects one.
+- Fleet config management can be turned on in the debugger's deployments:
+  `LINEA_FLEET_CONFIG_MANAGEMENT=true` in the Compose stack's `.env`, or
+  `fleet.deploy.configManagement: true` in the Helm chart. Both default to
+  off, as before.
+- Raw capture can be granted in the debugger's deployments:
+  `LINEA_CAPTURE_RAW=true` in the Compose stack's `.env`, or
+  `fleet.deploy.livecapture.rawCapture: true` in the Helm chart, puts the
+  server's fleet credential into the plugin's `raw_principals`. Both default
+  to off. A capture of raw points that fleet refuses now says the server
+  lacks the grant instead of "fleet: capture access denied".
+
+- Collector 0.165.0 joins the runtime support table. The debugger explains
+  the new `queue_batch` processor like the batch processor (sends, triggers,
+  partitions, client context, verification against its metrics), and the
+  batching recommendations name its options. Reports gain batch settings
+  `sizer`, `cache_size` and `unbatched`, the batcher field `evicted` and the
+  send trigger `evicted`.
+- New recommendation `batch.exporter_batches`: a batch or queue_batch
+  processor in a pipeline whose every exporter already batches in its own
+  `sending_queue::batch`.
+
 ## [0.1.1]
 
 - Releases carry third-party notices, which 0.1.0 lacked: every CLI archive

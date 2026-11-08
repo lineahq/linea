@@ -27,6 +27,11 @@ import (
 // token in the user's config directory, one credential per server. The CLI
 // presents the ID token as a bearer token and refreshes it when it expires.
 
+// ErrNoCLISignIn is Login's error for a server that offers no CLI sign-in:
+// it takes an API token, or signs requests in another way, such as a
+// trusted proxy.
+var ErrNoCLISignIn = errors.New("the server has no CLI sign-in")
+
 const (
 	credentialsSchema = 1
 	maxCredentials    = 1 << 20
@@ -269,8 +274,11 @@ func cliSignIn(ctx context.Context, base string, ca []byte) (*platform.CLISignIn
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, fmt.Errorf("%s has no CLI sign-in; ask for an API token and set %s", base, "LINEA_TOKEN")
+	// A server without OIDC answers 404, or serves the web client's page
+	// for the unknown path.
+	if resp.StatusCode == http.StatusNotFound ||
+		resp.StatusCode == http.StatusOK && strings.HasPrefix(resp.Header.Get("Content-Type"), "text/html") {
+		return nil, fmt.Errorf("%s: %w", base, ErrNoCLISignIn)
 	}
 	var info platform.CLISignIn
 	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&info) != nil || info.Issuer == "" || info.ClientID == "" {

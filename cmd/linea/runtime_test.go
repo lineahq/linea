@@ -98,7 +98,7 @@ func TestStorageAndPruneSayWhatCanGo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "removed runtime v0162 (image 0123456789ab)\nremoved container linea-build-x\nkept cache linea-gomod: volume is in use\nreclaimed 69.4MB\n"
+	want := "reclaimed 69.4MB: removed 2, kept 1\n\nREMOVED\n  runtime v0162 (image 0123456789ab)\n  container linea-build-x\n\nKEPT\n  cache linea-gomod: volume is in use\n"
 	if out.String() != want {
 		t.Fatalf("prune:\n%s\nwant:\n%s", out.String(), want)
 	}
@@ -288,5 +288,34 @@ func TestAFinishedBuildNamesItsExportedImage(t *testing.T) {
 		if code := finishBuild(&tc.build, &stdout, &stderr); code != exitOK || stdout.String() != tc.out || stderr.String() != tc.errOut {
 			t.Errorf("finishBuild = %d, %q, %q", code, stdout.String(), stderr.String())
 		}
+	}
+}
+
+// TestRuntimeTextNamesWhatIsEmpty prints the empty list in words, the
+// reclaimable total before the storage tables and the support table as
+// fields.
+func TestRuntimeTextNamesWhatIsEmpty(t *testing.T) {
+	var out bytes.Buffer
+	if err := writeRuntimes(&out, nil); err != nil || out.String() != "no runtimes\n" {
+		t.Fatalf("empty runtimes = %q, %v", out.String(), err)
+	}
+	out.Reset()
+	if err := writeStorage(&out, &api.RuntimeStorage{Reclaimable: 0}); err != nil {
+		t.Fatal(err)
+	}
+	if want := "reclaimable by runtime prune: 0B (replaced and stale images); caches only with --caches\n\nRUNTIMES\n  no runtimes\n"; out.String() != want {
+		t.Fatalf("empty storage:\n%s\nwant:\n%s", out.String(), want)
+	}
+	out.Reset()
+	if err := writePrune(&out, &api.RuntimePruneResult{}); err != nil || out.String() != "reclaimed 0B: removed 0, kept 0\n" {
+		t.Fatalf("empty prune = %q, %v", out.String(), err)
+	}
+	out.Reset()
+	if err := writeSupport(&out, &api.CollectorSupport{Oldest: "0.160.0", Verified: []string{"0.160.0", "0.162.0"}, BuiltIn: "0.162.0"}); err != nil {
+		t.Fatal(err)
+	}
+	want := "oldest release: 0.160.0\nverified releases: 0.160.0, 0.162.0\nbuilt-in runtime: Collector 0.162.0\nnewer releases build unverified\n"
+	if out.String() != want {
+		t.Fatalf("support:\n%s\nwant:\n%s", out.String(), want)
 	}
 }

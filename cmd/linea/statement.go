@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/lineahq/linea/internal/debugger/api"
 	"github.com/lineahq/linea/internal/debugger/platform"
@@ -215,8 +216,8 @@ func statementTestCmd(ctx context.Context, args []string, stdout, stderr io.Writ
 	}
 	if *format == "json" {
 		_, err = stdout.Write(raw)
-	} else if err = writeCandidate(stdout, &test.Candidate); err == nil && test.Run != nil {
-		_, err = fmt.Fprintf(stdout, "test run %s %s; read it with: runs show --server %s --run %s --report --wait\n", test.Run.ID, test.Run.State, *server, test.Run.ID)
+	} else {
+		err = writeStatementTest(stdout, &test, *server)
 	}
 	if err != nil {
 		return fail(stderr, err)
@@ -228,19 +229,63 @@ func statementTestCmd(ctx context.Context, args []string, stdout, stderr io.Writ
 }
 
 func writeCandidate(w io.Writer, c *api.Candidate) error {
+	t := newTextOut(w)
+	candidateText(t, c)
+	return t.err()
+}
+
+// writeStatementTest prints the candidate and, when the server queued one,
+// the test run with the command that reads it.
+func writeStatementTest(w io.Writer, test *api.StatementTest, server string) error {
+	t := newTextOut(w)
+	candidateText(t, &test.Candidate)
+	if r := test.Run; r != nil {
+		t.heading("test run")
+		t.field(1, "run", r.ID)
+		t.field(1, "state", fmt.Sprint(r.State))
+		t.field(1, "read it with", fmt.Sprintf("runs show --server %s --run %s --report --wait", server, r.ID))
+	}
+	return t.err()
+}
+
+// candidateText writes a candidate: the verdict, the pipelines it affects,
+// its diagnostics, where it was saved and the patch against the base.
+func candidateText(t *textOut, c *api.Candidate) {
 	status := "valid"
 	if !c.Valid {
-		status = "INVALID"
+		status = "invalid"
 	}
-	fmt.Fprintf(w, "candidate %s; %d affected pipelines, %d diagnostics\n", status, len(c.AffectedPipelines), len(c.Diagnostics))
-	for _, d := range c.Diagnostics {
-		fmt.Fprintf(w, "  %s %s: %s\n", d.Severity, d.Code, d.Message)
+	t.line(0, "%s  candidate: %s, %s", t.status(status, 0), plural(len(c.AffectedPipelines), "affected pipeline"), plural(len(c.Diagnostics), "diagnostic"))
+	if len(c.AffectedPipelines) > 0 {
+		t.field(1, "affected pipelines", strings.Join(c.AffectedPipelines, ", "))
 	}
 	if c.Saved != nil {
-		fmt.Fprintf(w, "saved artifact %s revision %s\n", c.Saved.Revision.Ref.ArtifactID, c.Saved.Revision.Ref.RevisionID)
+		t.field(1, "saved", fmt.Sprintf("artifact %s revision %s", c.Saved.Revision.Ref.ArtifactID, c.Saved.Revision.Ref.RevisionID))
 	}
-	_, err := io.WriteString(w, c.Patch)
-	return err
+	writeDiagnostics(t, c.Diagnostics)
+	if c.Patch != "" {
+		t.heading("patch")
+		t.printf("%s", c.Patch)
+		if !strings.HasSuffix(c.Patch, "\n") {
+			t.printf("\n")
+		}
+	}
+}
+
+// writeDiagnostics writes a DIAGNOSTICS section, nothing when there are none.
+func writeDiagnostics(t *textOut, diagnostics []platform.Diagnostic) {
+	if len(diagnostics) == 0 {
+		return
+	}
+	t.heading("diagnostics")
+	for _, d := range diagnostics {
+		where := ""
+		if d.Component != "" {
+			where = " [" + d.Component + "]"
+		}
+		t.line(1, "%s %s%s: %s", t.status(string(d.Severity), 0), d.Code, where, d.Message)
+		t.field(2, "hint", d.Hint)
+	}
 }
 
 // encoded is v as the server encodes it, so local and connected JSON match.

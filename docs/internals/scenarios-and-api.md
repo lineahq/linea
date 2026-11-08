@@ -38,7 +38,7 @@ error that says to use `data` or an absolute path.
 Decoding is strict (`KnownFields`). Sections the debugger does not implement are
 rejected instead of being silently ignored, so a scenario never appears to test
 something it does not. `mocks`, inputs' `client_address` and
-`execution.drain_timeout` are specified in [mocking.md](mocking.md).
+`headers`, `defaults.headers` and `execution.drain_timeout` are specified in [mocking.md](mocking.md).
 `assertions` is specified in [assertions.md](assertions.md).
 
 ## Timeline
@@ -191,6 +191,7 @@ not exist. Project and library endpoints are listed in `architecture.md`.
 | `GET /api/v1/runs[?scenario&runtime&result&limit&cursor]` | `RunPage{runs, next_cursor}`: a page of the caller's runs, newest first, each with its list summary and without its report. Filters match exactly; `limit` is 1 to 500 (default 50); `cursor` is the previous page's `next_cursor` for the same filters, which is absent on the last page. A bad limit, an unknown result or a cursor of other filters is 400 |
 | `GET /api/v1/suites` | Retained suites, newest first, as a bare array of `Suite` admission metadata (`id`, `created`, `config` label, members with `run_id` or `error`); no member states, outcomes or submitted text. `GET /api/v1/suites/{id}` derives those |
 | `GET /api/v1/runs/{id}` | `Run`: state, times, error, and the report without snapshot stores |
+| `GET /api/v1/runs/{id}/listing` | `Run` as `GET /api/v1/runs` lists it: state, times and the list summary, without the report. A finished run's report can be hundreds of megabytes; this reads a run that is off the list's first page cheaply (`GetRunListing`) |
 | `GET /api/v1/runs/{id}/report[?wait=true]` | The complete report, byte-identical to `run` JSON output |
 | `GET /api/v1/runs/{id}/log` | `RunLog{run_id, kept, log, truncated}`: a failed or partial run's Collector log tail, 64 KB of whole lines with environment values redacted; `kept: false` for other runs; `Cache-Control: no-store` |
 | `POST /api/v1/runs/{id}/cancel` | Cancel a queued or running run |
@@ -247,9 +248,9 @@ The API must not be usable from web pages the browser visits:
 - Every request to `linea-server` is authenticated (API token, OIDC session or trusted
   headers from a configured proxy) and authorized by the server config's bindings.
   `linea-server` accepts any `Host` (`Options.RemoteAccess`); authentication, not a
-  loopback Host check, keeps the API private. The Compose stack's proxy signs
-  every request in as one local admin, so it refuses other `Host` names
-  (`docs/debugger/deploy-compose.md`, Identity). Requests name no host
+  loopback Host check, keeps the API private. With `LINEA_AUTH=local` the
+  Compose stack's proxy signs every request in as one local admin, so it
+  refuses other `Host` names (`docs/debugger/deploy-compose.md`, Sign-in). Requests name no host
   file.
 - An API handler built without `RemoteAccess` (tests, in-process adapters)
   answers 403 for a `Host` that is not `localhost` or a loopback IP.

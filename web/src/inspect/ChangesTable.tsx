@@ -11,6 +11,7 @@ import {
   type SortingState,
 } from '@tanstack/react-table';
 import type { Change } from '../api/types';
+import { refLabel } from './filtering';
 import { pageOf } from './pages';
 import { Pagination } from './Pagination';
 
@@ -25,15 +26,18 @@ const show = (v: unknown) => (v === undefined ? '' : typeof v === 'string' ? v :
 
 /**
  * ChangesTable lists the field changes a stage made, sortable, filterable by
- * record, 25 at a time.
+ * record, 25 at a time. A record reads by its name from names (its body, span
+ * or metric name) over its position, or by its position alone.
  */
 export function ChangesTable({
   changes,
   record,
+  names,
   onRecord,
 }: {
   changes: Change[];
   record?: string;
+  names?: ReadonlyMap<string, string>;
   onRecord(entity: string | undefined): void;
 }) {
   const [sorting, setSorting] = useState<SortingState>([]);
@@ -43,11 +47,18 @@ export function ChangesTable({
     () => col.columns([
       col.accessor('entity', {
         header: 'Record',
-        cell: (c) => (
-          <button type="button" className="link" onClick={() => onRecord(c.getValue())} title="Show only this record">
-            {c.getValue()}
-          </button>
-        ),
+        cell: (c) => {
+          const entity = c.getValue();
+          const name = names?.get(entity);
+          return (
+            <>
+              <button type="button" className="link" onClick={() => onRecord(entity)} title={`${entity}: open this record on Changes`}>
+                {name || refLabel(entity)}
+              </button>
+              {name && <div className="muted small">{refLabel(entity)}</div>}
+            </>
+          );
+        },
       }),
       col.accessor('path', { header: 'Field', cell: (c) => <code>{c.getValue()}</code> }),
       col.accessor('op', { header: 'Change', cell: (c) => <span className={`op op-${c.getValue()}`}>{c.getValue().replace('_', ' ')}</span> }),
@@ -63,7 +74,7 @@ export function ChangesTable({
       }),
       col.accessor((c) => c.confidence ?? 'exact', { id: 'confidence', header: 'Match' }),
     ]),
-    [onRecord],
+    [names, onRecord],
   );
   const table = useTable({
     features,

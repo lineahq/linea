@@ -696,6 +696,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/fleet/connection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Contact fleet now and report each step: reaching fleet with the server's credential, the livecapture plugin, and config management. A failing step is part of the answer; without a fleet connection configured is false. */
+        get: operations["checkFleetConnection"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/fleet/events": {
         parameters: {
             query?: never;
@@ -1167,7 +1184,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** One bounded page of a finished run's recorded evidence, as MCP's linea_get_execution_trace: stage_changes, records, journey, statements or events. Never executes anything. A cursor continues only the same run, family and parameters; page sizes above the server's budgets are lowered and listed in page.clamped. */
+        /** One bounded page of a finished run's recorded evidence, as MCP's linea_get_execution_trace: stage_changes, records, journey, statements, events or recommendations. Never executes anything. A cursor continues only the same run, family and parameters; page sizes above the server's budgets are lowered and listed in page.clamped. */
         get: operations["queryRunEvidence"];
         put?: never;
         post?: never;
@@ -1229,6 +1246,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{id}/listing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A run as the run list shows it: its state and, once done, the summary of its report, without the report. It reads a run off the list's pages without the cost of its evidence. */
+        get: operations["getRunListing"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{id}/log": {
         parameters: {
             query?: never;
@@ -1240,6 +1274,23 @@ export interface paths {
         get: operations["getRunLog"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runs/{id}/recommendations/{n}/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run one recommendation's change as a candidate: the run's captured bundle with the change layered as provider overrides after its unchanged configuration, on the same inputs and runtime, without reading the host. Waits for the candidate, which is an ordinary run, and compares it with the run: confidence verified_on_input when the output is the same, differs_on_input when it differs. Ending the request cancels the candidate. Verifiable changes: a processor swap, a removed transform statement or filter condition (its list replaced, rebuilt from the run's configuration text) and an option with a value; others are invalid_request. Send an empty JSON body. */
+        post: operations["verifyRecommendation"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1832,6 +1883,75 @@ export interface components {
         AuditPage: {
             events?: components["schemas"]["AuditEvent"][];
             next_cursor?: string;
+        };
+        BatchArrival: {
+            batcher: number;
+            items: number;
+            offset_ms?: number;
+            resources: number;
+            seq: number;
+            services?: string[];
+        };
+        BatchBatcher: {
+            arrivals: number;
+            evicted?: boolean;
+            flushes: number;
+            items: number;
+            metadata?: {
+                [key: string]: string[];
+            };
+            refused?: boolean;
+            unknown?: boolean;
+        };
+        BatchFlush: {
+            batcher: number;
+            distinct_resources: number;
+            items: number;
+            left: number;
+            offset_ms?: number;
+            pending: number;
+            resources: number;
+            seq: number;
+            services?: string[];
+            sources?: components["schemas"]["BatchSource"][];
+            split?: boolean;
+            trigger: string;
+            wait_ms?: components["schemas"]["BatchWait"];
+        };
+        BatchSettings: {
+            cache_size?: number;
+            metadata_cardinality_limit?: number;
+            metadata_keys?: string[];
+            send_batch_max_size: number;
+            send_batch_size: number;
+            sizer?: string;
+            timeout: string;
+            type?: string;
+            unbatched?: boolean;
+        };
+        BatchSource: {
+            arrival: number;
+            items: number;
+        };
+        BatchWait: {
+            max: number;
+            min: number;
+        };
+        Batching: {
+            arrivals?: components["schemas"]["BatchArrival"][];
+            batchers?: components["schemas"]["BatchBatcher"][];
+            flushes?: components["schemas"]["BatchFlush"][];
+            notes?: string[];
+            pipeline: string;
+            processor: string;
+            settings: components["schemas"]["BatchSettings"];
+            signal: string;
+            verification: string;
+        };
+        Benefit: {
+            count: number;
+            metric: string;
+            of?: number;
         };
         BisectCulprit: {
             diff: string;
@@ -2473,6 +2593,17 @@ export interface components {
             runtime?: string;
             scenarios?: components["schemas"]["SuiteScenario"][];
         };
+        ConfigChange: {
+            component?: string;
+            group?: number;
+            index?: number;
+            op: string;
+            option?: string;
+            path?: string;
+            processors?: string[];
+            text?: string;
+            value?: string;
+        };
         ConfigGraph: {
             diagnostics?: components["schemas"]["Diagnostic"][];
             topology?: components["schemas"]["Graph"];
@@ -2610,6 +2741,10 @@ export interface components {
             /** Format: date-time */
             time: string;
         };
+        Evidence: {
+            ref: string;
+            section: string;
+        };
         EvidenceResult: {
             complete: boolean;
             family: string;
@@ -2638,10 +2773,47 @@ export interface components {
             id: string;
             stage: string;
         };
+        FilterCondition: {
+            condition: string;
+            context: string;
+            error?: string;
+            error_mode: string;
+            errors: number;
+            evaluated: number;
+            index: number;
+            matched: number;
+            records: number;
+            source: string;
+        };
+        FilterDrop: {
+            condition: number;
+            records: number;
+            ref: string;
+            removed?: components["schemas"]["FilterRecord"][];
+        };
         FilterLimits: {
             max_condition_chars: number;
             max_conditions: number;
             max_regex_chars: number;
+        };
+        FilterRecord: {
+            lineage: string;
+            name: string;
+            ref: string;
+        };
+        Filtering: {
+            conditions?: components["schemas"]["FilterCondition"][];
+            dropped: number;
+            drops?: components["schemas"]["FilterDrop"][];
+            error?: string;
+            input: number;
+            notes?: string[];
+            output?: number;
+            pipeline: string;
+            processor: string;
+            records: number;
+            signal: string;
+            verification: string;
         };
         FleetAgent: {
             attributes?: {
@@ -2760,6 +2932,13 @@ export interface components {
             items?: components["schemas"]["FleetAssignmentPreview"][];
             next_cursor?: string;
         };
+        FleetCheck: {
+            code?: string;
+            duration_ms: number;
+            message: string;
+            name: string;
+            status: string;
+        };
         FleetConfig: {
             /** Format: date-time */
             created_at: string;
@@ -2801,6 +2980,13 @@ export interface components {
         FleetConfigVersionPage: {
             items?: components["schemas"]["FleetConfigVersion"][];
             next_cursor?: string;
+        };
+        FleetConnection: {
+            /** Format: date-time */
+            checked_at: string;
+            checks?: components["schemas"]["FleetCheck"][];
+            configured: boolean;
+            endpoint?: string;
         };
         FleetDeleted: {
             deleted: boolean;
@@ -2938,6 +3124,48 @@ export interface components {
             statements?: components["schemas"]["Statement"][];
             status: string;
         };
+        GroupAttribute: {
+            key: string;
+            moved?: boolean;
+            value: string;
+        };
+        GroupBlockIn: {
+            attributes?: components["schemas"]["GroupAttribute"][];
+            records: number;
+        };
+        GroupBlockOut: {
+            attributes?: components["schemas"]["GroupAttribute"][];
+            from?: components["schemas"]["GroupSource"][];
+            records?: components["schemas"]["GroupRecord"][];
+        };
+        GroupRecord: {
+            from: number;
+            lineage: string;
+            moved?: string[];
+            name: string;
+        };
+        GroupRequest: {
+            after?: components["schemas"]["GroupBlockOut"][];
+            before?: components["schemas"]["GroupBlockIn"][];
+            grouped: number;
+            input: number;
+            kept: number;
+            moved?: string[];
+            output?: number;
+            unfollowed: number;
+        };
+        GroupSource: {
+            block: number;
+            records: number;
+        };
+        Grouping: {
+            keys?: string[];
+            notes?: string[];
+            pipeline: string;
+            processor: string;
+            requests?: components["schemas"]["GroupRequest"][];
+            signal: string;
+        };
         Hop: {
             changes?: components["schemas"]["Change"][];
             component?: string;
@@ -2969,6 +3197,8 @@ export interface components {
             client_address?: string;
             counts: components["schemas"]["Counts"];
             error?: string;
+            headers?: string[];
+            headers_dropped?: boolean;
             injected: boolean;
             mock?: string;
             receiver: string;
@@ -2990,6 +3220,7 @@ export interface components {
                 [key: string]: unknown;
             };
             inspection_schema: string;
+            recommendations?: components["schemas"]["Recommendation"][];
             references?: components["schemas"]["Reference"][];
             runtime?: components["schemas"]["ReportRuntime"];
             topology?: components["schemas"]["Graph"];
@@ -3049,6 +3280,12 @@ export interface components {
             object: number;
             unmatched_after: number;
             unmatched_before: number;
+        };
+        Measure: {
+            after: number;
+            before: number;
+            metric: string;
+            subject: string;
         };
         Metadata: {
             /** Format: date-time */
@@ -3201,6 +3438,55 @@ export interface components {
             reason?: string;
             size: number;
         };
+        Recommendation: {
+            benefit?: components["schemas"]["Benefit"];
+            blockers?: string[];
+            change?: components["schemas"]["ConfigChange"];
+            components?: string[];
+            confidence: string;
+            coverage?: string[];
+            evidence?: components["schemas"]["Evidence"][];
+            holds: string;
+            kind: string;
+            output?: string;
+            pipeline?: string;
+            rule: string;
+            subject?: string;
+            summary: string;
+        };
+        RecommendationDiff: {
+            after?: components["schemas"]["RecommendationSide"];
+            before?: components["schemas"]["RecommendationSide"];
+            components?: string[];
+            pipeline?: string;
+            rule: string;
+            status: string;
+            subject?: string;
+        };
+        RecommendationSide: {
+            benefit?: components["schemas"]["Benefit"];
+            confidence: string;
+            index: number;
+            kind: string;
+            summary: string;
+        };
+        RecommendationVerification: {
+            candidate: components["schemas"]["Run"];
+            comparison?: components["schemas"]["RunComparison"];
+            confidence?: string;
+            error?: string;
+            measured?: components["schemas"]["Measure"][];
+            overrides?: string[];
+            recommendation: number;
+            rule: string;
+            run: string;
+        };
+        Recommendations: {
+            items?: components["schemas"]["RecommendationDiff"][];
+            new: number;
+            persists: number;
+            resolved: number;
+        };
         RecordLineage: {
             connector?: string;
             deliveries?: components["schemas"]["Delivery"][];
@@ -3241,11 +3527,15 @@ export interface components {
         Report: {
             aggregations?: components["schemas"]["Aggregation"][];
             assertions?: components["schemas"]["AssertionReport"];
+            batching?: components["schemas"]["Batching"][];
             comparison?: components["schemas"]["Comparison"];
+            filtering?: components["schemas"]["Filtering"][];
+            grouping?: components["schemas"]["Grouping"][];
             limits?: components["schemas"]["ReportLimits"];
             lineage?: components["schemas"]["RecordLineage"][];
             ottl?: components["schemas"]["OttldebugReport"][];
             provenance?: components["schemas"]["Provenance"];
+            recommendations?: components["schemas"]["Recommendation"][];
             reference?: components["schemas"]["Result"];
             references?: components["schemas"]["Reference"][];
             report_schema: string;
@@ -3443,6 +3733,7 @@ export interface components {
             notes?: string[];
             outcome: string;
             reasons?: components["schemas"]["ComparisonReason"][];
+            recommendations?: components["schemas"]["Recommendations"];
             records?: components["schemas"]["ComparisonRecords"];
             routes?: components["schemas"]["ComparisonRoute"][];
         };
@@ -7727,6 +8018,47 @@ export interface operations {
             };
         };
     };
+    checkFleetConnection: {
+        parameters: {
+            query?: {
+                /** @description The project the request works in: the project new work and saved artifacts go to, whose runtimes and saved work it uses, and that narrows lists. Empty is the default project; operations on an existing resource use the resource's project. */
+                project?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The checks, in the order they ran. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetConnection"];
+                };
+            };
+            /** @description Not signed in. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationError"];
+                };
+            };
+            /** @description The caller may not read fleet. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationError"];
+                };
+            };
+        };
+    };
     listFleetEvents: {
         parameters: {
             query?: {
@@ -9530,11 +9862,11 @@ export interface operations {
     queryRunEvidence: {
         parameters: {
             query: {
-                /** @description stage_changes, records, journey, statements or events. */
-                family: "stage_changes" | "records" | "journey" | "statements" | "events";
-                /** @description Pipeline ID for stage_changes and records (empty for a connector); optional filter for statements. */
+                /** @description stage_changes, records, journey, statements, events or recommendations. */
+                family: "stage_changes" | "records" | "journey" | "statements" | "events" | "recommendations";
+                /** @description Pipeline ID for stage_changes and records (empty for a connector); optional filter for statements and recommendations. */
                 pipeline?: string;
-                /** @description The stage for stage_changes and records, the transform processor for statements, an optional filter for events. */
+                /** @description The stage for stage_changes and records, the transform processor for statements, an optional filter for events and recommendations. */
                 component?: string;
                 /** @description Signal of a connector stage that has several. */
                 signal?: string;
@@ -9804,6 +10136,40 @@ export interface operations {
             };
         };
     };
+    getRunListing: {
+        parameters: {
+            query?: {
+                /** @description The project the request works in: the project new work and saved artifacts go to, whose runtimes and saved work it uses, and that narrows lists. Empty is the default project; operations on an existing resource use the resource's project. */
+                project?: string;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The run as listed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Run"];
+                };
+            };
+            /** @description Unknown run, or a deleted run ("run was deleted"). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     getRunLog: {
         parameters: {
             query?: {
@@ -9829,6 +10195,78 @@ export interface operations {
             };
             /** @description Unknown or deleted run. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    verifyRecommendation: {
+        parameters: {
+            query?: {
+                /** @description The project the request works in: the project new work and saved artifacts go to, whose runtimes and saved work it uses, and that narrows lists. Empty is the default project; operations on an existing resource use the resource's project. */
+                project?: string;
+            };
+            header?: never;
+            path: {
+                id: string;
+                /** @description The recommendation's position in the report's recommendations. */
+                n: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The candidate run and its comparison with the run. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecommendationVerification"];
+                };
+            };
+            /** @description The recommendation's change cannot be verified, or n is not a number. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Unknown run or recommendation, or the run's bundle is not kept. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The run is not done, or the candidate would run on another runtime build. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Storage admission or evidence reservation exceeds its limits. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The platform queue is full or execution admission is closed. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

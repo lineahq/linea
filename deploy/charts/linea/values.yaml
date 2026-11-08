@@ -34,13 +34,93 @@ oidc:
   existingSecret: ""
 
 fleet:
-  # linea-fleet's management API, for fleet management and live capture.
+  # A fleet deployed separately: linea-fleet's management API, for fleet
+  # management and live capture. Leave empty with deploy.enabled.
   url: ""
   # Plain HTTP to fleet, on a protected network.
   allowHTTP: false
   # The management token, or a Secret holding it under the key token.
   token: ""
   existingSecret: ""
+  # Fleet and the live-capture plugin in this release, connected to the
+  # server on their own (docs/debugger/deploy-kubernetes.md#fleet-and-live-capture).
+  # The chart generates the server's fleet token once, keeps it in a Secret
+  # and installs it as fleet's first admin; it does not expire. Each runs one
+  # pod that is replaced, not rolled, so its migrations, run by an init
+  # container, never overlap a running instance.
+  deploy:
+    enabled: false
+    # The fleet identity recorded in its database; never change it later.
+    serverID: linea-fleet
+    # Remote config management for supervised Collectors: config versions,
+    # assignments and rollouts. Off, fleet only reports.
+    configManagement: false
+    image:
+      repository: ghcr.io/lineahq/linea-fleet
+      # Defaults to the chart's appVersion.
+      tag: ""
+      pullPolicy: IfNotPresent
+    # Where fleet and the plugin keep their data. With postgresql.enabled
+    # and no existingSecret, the chart creates the databases fleet and
+    # livecapture with their own migration and runtime roles in the bundled
+    # PostgreSQL. Otherwise create them yourself and name a Secret holding
+    # the keys fleet-migrate-url, fleet-runtime-url, capture-migrate-url and
+    # capture-runtime-url (docs/fleet/deployment.md for the roles).
+    database:
+      existingSecret: ""
+      # The runtime roles that migrations grant their privileges to.
+      fleetRuntimeRole: fleet_app
+      captureRuntimeRole: capture_app
+    # OpAMP for Collectors on agentPort (ws://, plain), the management API on
+    # managementPort for the server. Collectors outside the cluster need a
+    # LoadBalancer or NodePort type, or an ingress you add.
+    service:
+      type: ClusterIP
+      annotations: {}
+      agentPort: 4320
+      managementPort: 8080
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        memory: 1Gi
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    livecapture:
+      # Lets the server's fleet credential capture points a Collector marks
+      # raw (the plugin's raw_principals). Who may then capture raw is the
+      # debugger's capture.raw permission. Off: only redacted points.
+      rawCapture: false
+      image:
+        repository: ghcr.io/lineahq/linea-fleet-livecapture
+        # Defaults to the chart's appVersion.
+        tag: ""
+        pullPolicy: IfNotPresent
+      # The control (controlPort) and delivery (deliveryPort) endpoints
+      # Collectors' livecapture extension dials, over TLS.
+      service:
+        type: ClusterIP
+        annotations: {}
+        controlPort: 4340
+        deliveryPort: 4341
+      tls:
+        # A kubernetes.io/tls Secret for the control and delivery endpoints.
+        # Empty: the chart generates a self-signed certificate once, for the
+        # Service's names and extraHosts, and keeps it; Collectors trust the
+        # Secret's tls.crt.
+        secretName: ""
+        extraHosts: []
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          memory: 512Mi
+      nodeSelector: {}
+      tolerations: []
+      affinity: {}
 
 server:
   # Identical instances behind the Service. With more than one, a

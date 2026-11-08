@@ -21,6 +21,8 @@ interface Props {
   /** The transform replay for this input, which adds a statement to each change. */
   report?: OTTLReport;
   onOpenStatements?(): void;
+  /** A filter processor's verified replay: the sentence naming the condition that removed a dropped record. */
+  removedBy?(entity: string): string | undefined;
 }
 
 const GLYPHS: Record<RecordState, [string, GlyphTone]> = { edited: ['~', 'mod'], dropped: ['−', 'drop'], new: ['+', 'keep'], unchanged: ['·', 'none'], recorded: ['·', 'none'] };
@@ -40,7 +42,7 @@ function where(levels: RecordView['levels']): string {
  * stage input is one row; a row opens to its fields grouped by where they
  * live, with before and after values and the OTTL path of each field.
  */
-export function RecordChanges({ diff, before, after, onFollow, record, onClearRecord, afterMissingReason, report, onOpenStatements }: Props) {
+export function RecordChanges({ diff, before, after, onFollow, record, onClearRecord, afterMissingReason, report, onOpenStatements, removedBy }: Props) {
   const views = useMemo(() => recordViews(diff, before, after, report), [diff, before, after, report]);
   const sharedBy = useMemo(() => {
     const count = new Map<string, number>();
@@ -87,7 +89,7 @@ export function RecordChanges({ diff, before, after, onFollow, record, onClearRe
         return <RecordRow {...s} onToggle={s.toggle} glyph={glyph} glyphTone={tone} badge={r.badge} badgeTone={r.tone} title={r.title} service={r.service}
           dim={r.state === 'dropped'} dataRecord={r.entity}
           why={r.state === 'edited' ? `Changed in ${where(r.levels)}${r.confidence ? ` · ${r.confidence}-confidence match` : ''}`
-            : r.state === 'dropped' ? 'Removed by this processor' : r.state === 'new' ? 'Created by this processor' : incomplete ? 'No change found' : 'No change'}
+            : r.state === 'dropped' ? removedBy?.(r.entity) ?? 'Removed by this processor' : r.state === 'new' ? 'Created by this processor' : incomplete ? 'No change found' : 'No change'}
           pills={r.state === 'edited' ? <Pill tone="mod">{plural(r.changed, 'change')}</Pill>
             : r.state === 'dropped' ? <Pill tone="drop">dropped</Pill> : r.state === 'new' ? <Pill tone="keep">new</Pill> : <Pill>{incomplete ? 'no change found' : 'unchanged'}</Pill>} />;
       }}

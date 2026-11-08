@@ -3,7 +3,7 @@
 The `collector/livecapture` module requires Collector `v0.162.0` /
 `v1.68.0` and OTTL `v0.162.0`. These are minimums. This note records how the
 module behaves on later releases. Verified on 2026-11-03 against 0.163.0 and
-0.164.0.
+0.164.0, and on 2026-11-08 against 0.165.0.
 
 ## Releases checked
 
@@ -11,6 +11,7 @@ module behaves on later releases. Verified on 2026-11-03 against 0.163.0 and
 | --- | --- | --- | --- | --- |
 | 0.163.0 | `v1.69.0` | `v0.163.0` | pass | pass, with the root-module replace |
 | 0.164.0 | `v1.70.0` | `v1.3.0` | pass | pass, with the root-module replace |
+| 0.165.0 | `v1.71.0` | `v1.4.0` | pass | pass, with the root-module replace |
 
 - **Module tests:** a copy of `collector/livecapture` and `collector/provider`
   with every Collector module raised to the release, then `go build`,
@@ -18,7 +19,7 @@ module behaves on later releases. Verified on 2026-11-03 against 0.163.0 and
 - **OCB build:** the unmodified repository module, through an OCB manifest
   at the release with `otlpreceiver`, `debugexporter`, `captureprocessor`,
   `livecaptureextension` and the contrib `opampextension` (0.164.1 for
-  0.164). `otelcol-custom validate` accepts the minimal configuration from
+  0.164, 0.165.0 for 0.165). `otelcol-custom validate` accepts the minimal configuration from
   [the components README](../collector-components/README.md#minimal-configuration).
 - OTTL left the `v0.x` line at 0.164: `pkg/ottl` `v1.3.0` belongs to Collector
   0.164.0 (`v1.2.0` was never tagged).
@@ -43,7 +44,7 @@ build's release:
 
 ```yaml
 replaces:
-  - go.opentelemetry.io/collector => go.opentelemetry.io/collector v0.164.0
+  - go.opentelemetry.io/collector => go.opentelemetry.io/collector v0.165.0
 ```
 
 Raising the module's own minimum to 0.163.0 or newer would remove the need for

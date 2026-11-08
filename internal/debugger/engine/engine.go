@@ -25,13 +25,14 @@ import (
 	// The optional features this runtime's manifest brings.
 	"github.com/lineahq/linea/internal/debugger/instrument"
 	"github.com/lineahq/linea/internal/debugger/ottldebug"
+	"github.com/lineahq/linea/internal/debugger/recommend"
 	"github.com/lineahq/linea/internal/debugger/scenario"
 	"github.com/lineahq/linea/internal/debugger/telemetry"
 	"github.com/lineahq/linea/internal/debugger/topology"
 )
 
 // ReportSchemaVersion versions the Report JSON shape.
-const ReportSchemaVersion = "0.14"
+const ReportSchemaVersion = "0.15"
 
 // Request selects a configuration and its inputs. The configuration is a
 // path (Config) or text (ConfigYAML); the inputs are exactly one of a fixture
@@ -231,7 +232,23 @@ type Report struct {
 	// Sampling explains the per-trace decisions of tail sampling
 	// processors: the policies and what each one found in the trace.
 	Sampling []*analysis.Sampling `json:"sampling"`
-	OTTL     []*ottldebug.Report  `json:"ottl"`
+	// Batching explains when and why each batch processor sent what it
+	// held: its arrivals, its flushes and their triggers (report schema
+	// 0.15).
+	Batching []*analysis.Batching `json:"batching,omitempty"`
+	// Grouping explains how each groupbyattrs processor regrouped every
+	// request into resources and where each record went (report schema
+	// 0.15).
+	Grouping []*analysis.Grouping `json:"grouping,omitempty"`
+	// Filtering explains every filter processor input: which condition
+	// removed each item, and what each condition was evaluated on, matched
+	// and failed on (report schema 0.15).
+	Filtering []*analysis.Filtering `json:"filtering,omitempty"`
+	OTTL      []*ottldebug.Report   `json:"ottl"`
+	// Recommendations are suggestions derived from the sections above and
+	// the topology: avoidable work, settings this input never exercised and
+	// risky orderings, each with its evidence (report schema 0.15).
+	Recommendations []recommend.Recommendation `json:"recommendations,omitempty"`
 	// Timestamps relates the input timestamps to the run's wall clock and
 	// says whether they were rebased.
 	Timestamps *Timestamps           `json:"timestamps,omitempty"`
@@ -321,9 +338,29 @@ func Execute(ctx context.Context, req Request) (*Report, error) {
 	if rep.Sampling, err = explainSampling(ctx, resolved, rep.Stages, rep.Result); err != nil {
 		return nil, err
 	}
+	if rep.Batching, err = explainBatching(resolved, rep.Stages, rep.Lineage, rep.Result, opts.Inputs); err != nil {
+		return nil, err
+	}
+	if rep.Grouping, err = explainGrouping(resolved, rep.Stages, rep.Lineage, rep.Result); err != nil {
+		return nil, err
+	}
+	if rep.Filtering, err = explainFiltering(ctx, resolved, rep.Stages, rep.Lineage, rep.Result); err != nil {
+		return nil, err
+	}
 	if rep.OTTL, err = replayTransforms(ctx, resolved, rep.Stages, rep.Result); err != nil {
 		return nil, err
 	}
+	placements, err := placeFilters(ctx, resolved, rep.Topology, rep.Stages, rep.Lineage, rep.Filtering, rep.Result)
+	if err != nil {
+		return nil, err
+	}
+	dead, err := deadWrites(resolved, rep.Topology, rep.Lineage)
+	if err != nil {
+		return nil, err
+	}
+	rep.Recommendations = recommend.Recommend(recommend.Input{Topology: rep.Topology, Stages: rep.Stages, Filtering: rep.Filtering,
+		OTTL: rep.OTTL, Batching: rep.Batching, Grouping: rep.Grouping, Sampling: rep.Sampling, Placements: placements, DeadWrites: dead,
+		ContextLosses: contextLosses(resolved, rep.Topology), ExporterBatches: exporterBatches(resolved)})
 	if len(assertions) > 0 {
 		if rep.Assertions, err = assertion.Evaluate(assertions, rep.Topology, rep.Result); err != nil {
 			return nil, err

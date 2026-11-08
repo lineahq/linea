@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 
 	"github.com/lineahq/linea/internal/debugger/platform"
 )
@@ -118,6 +119,8 @@ func captureDataCmd(ctx context.Context, command string, args []string, stdout, 
 		}
 		return exitOK
 	}
+	// A derived fixture, scenario or export is the artifact itself, to
+	// redirect to a file; only records and deletion get a text view.
 	switch v := result.(type) {
 	case *platform.CaptureFixture:
 		fmt.Fprintln(stdout, v.FixtureJSON)
@@ -126,15 +129,37 @@ func captureDataCmd(ctx context.Context, command string, args []string, stdout, 
 	case *platform.CaptureExport:
 		fmt.Fprint(stdout, v.Content)
 	case *platform.CaptureRecordsPage:
-		fmt.Fprintf(stdout, "Receipt watermark: %d\n", v.Watermark)
-		for _, item := range v.Items {
-			fmt.Fprintf(stdout, "%d\t%s\t%s/%s\t%s\toversize=%t\n", item.Sequence, item.Stream.CollectorID, item.Stream.Pipeline, item.Stream.Point, item.Stream.Signal, item.Oversize)
-		}
-		if v.NextCursor != "" {
-			fmt.Fprintf(stdout, "Next page: --cursor %s\n", v.NextCursor)
+		if err := writeCaptureRecords(stdout, v); err != nil {
+			return fail(stderr, err)
 		}
 	default:
-		fmt.Fprintln(stdout, "Capture deleted.")
+		fmt.Fprintf(stdout, "deleted capture %s\n", *id)
 	}
 	return exitOK
+}
+
+// writeCaptureRecords prints one page of a capture's records: their
+// sequence and stream, never the telemetry itself.
+func writeCaptureRecords(w io.Writer, v *platform.CaptureRecordsPage) error {
+	t := newTextOut(w)
+	title := "capture records"
+	if v.SessionID != "" {
+		title = "capture " + v.SessionID
+	}
+	t.line(0, "%s: %s on this page", title, plural(len(v.Items), "record"))
+	t.line(1, "receipt watermark: %d", v.Watermark)
+	if len(v.Items) > 0 {
+		t.heading("records")
+		var rows [][]string
+		for _, item := range v.Items {
+			oversize := "-"
+			if item.Oversize {
+				oversize = "yes"
+			}
+			rows = append(rows, []string{strconv.Itoa(item.Sequence), item.Stream.CollectorID, item.Stream.Pipeline + "/" + item.Stream.Point, item.Stream.Signal, oversize})
+		}
+		t.table(1, []string{"seq", "collector", "pipeline/point", "signal", "oversize"}, rows)
+	}
+	t.nextPage(v.NextCursor)
+	return t.err()
 }

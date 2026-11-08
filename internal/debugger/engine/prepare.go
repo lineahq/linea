@@ -387,7 +387,7 @@ func loadInputs(req Request, read func(string) ([]byte, error)) (executionInputs
 			if err != nil {
 				return data, err
 			}
-			in.ClientAddress, in.After = f.ClientAddress, f.After
+			in.ClientAddress, in.Headers, in.After = f.ClientAddress, f.Headers, f.After
 			data.opts.Inputs = append(data.opts.Inputs, in)
 		}
 	} else {

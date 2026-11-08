@@ -14,7 +14,8 @@
 // Scope: trace_statements (resource, scope, span), log_statements (resource,
 // scope, log) and metric_statements (resource, scope, metric, datapoint,
 // exemplar). Everything else, such as span events, group conditions,
-// shared_cache and flatten_data, is reported as unsupported rather than
+// shared_cache and flattened logs (flatten.log, flatten_data before 0.165),
+// is reported as unsupported rather than
 // approximated.
 package ottlreplay
 
@@ -64,7 +65,7 @@ const (
 	VerificationNotVerifiable  = ottldebug.VerificationNotVerifiable
 )
 
-func init() { features.ProvideTransform(Replay, Evaluate) }
+func init() { features.ProvideTransform(Replay, Evaluate, Access) }
 
 // Replay replays cfg's statements for the input's signal on input and
 // compares the result to output, the processor's correlated stage.output
@@ -157,9 +158,10 @@ func replay(ctx context.Context, processor string, cfg component.Config, inputSe
 		rep.Notes = append(rep.Notes, input.Signal.String()+" statements are not replayed")
 		return rep, data, false, false, nil
 	}
-	// flatten_data gives every log record its own resource and scope before
-	// the statements run and regroups them afterwards.
-	flatten := input.Signal == pipeline.SignalLogs && tcfg.FlattenData
+	// flatten.log (flatten_data before 0.165) gives every log record its own
+	// resource and scope before the statements run and regroups them
+	// afterwards.
+	flatten := input.Signal == pipeline.SignalLogs && flattensLogs(tcfg)
 
 	pc, err := newParserCollection(input.Signal, tcfg.ErrorMode)
 	if err != nil {
@@ -183,7 +185,7 @@ func replay(ctx context.Context, processor string, cfg component.Config, inputSe
 		case !supported:
 			g.Status, g.Reason = StatusNotEvaluated, "follows an unsupported group, so its input is unknown"
 		case flatten:
-			g.Status, g.Reason = StatusUnsupported, "flatten_data is not replayed"
+			g.Status, g.Reason = StatusUnsupported, "flattened logs (flatten.log, flatten_data) are not replayed"
 		case len(cs.Conditions) > 0:
 			// Group conditions are compiled by the processor with the filter
 			// processor's internal function set, which is not importable.

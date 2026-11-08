@@ -18,7 +18,6 @@ import (
 	"github.com/lineahq/linea/internal/debugger/release"
 	"github.com/lineahq/linea/internal/debugger/runresult"
 
-	"go.opentelemetry.io/collector/client"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/connector"
 	"go.opentelemetry.io/collector/exporter"
@@ -173,7 +172,11 @@ type target struct {
 	client   net.Addr
 	// clientAddress is client as the input declared it.
 	clientAddress string
-	after         time.Duration
+	// headers are the input's request headers (lowercased names), and
+	// keepHeaders whether its receiver hands them to the pipeline.
+	headers     map[string][]string
+	keepHeaders bool
+	after       time.Duration
 }
 
 // providerInput is the input as providers' OnInput hooks see it.
@@ -274,9 +277,7 @@ func Run(ctx context.Context, opts Options) (*runresult.Result, error) {
 			}, payload)
 			inputs[i].Injected = true
 			ictx := instrument.WithEmission(ctx, seq)
-			if t.client != nil {
-				ictx = client.NewContext(ictx, client.Info{Addr: t.client})
-			}
+			ictx = t.withClient(ictx)
 			if err := rep.inject(ictx, t.receiver, payload); err != nil {
 				inputs[i].Error = err.Error()
 			}
@@ -374,6 +375,10 @@ func newInputResults(targets []target) []runresult.InputResult {
 		if t.after > 0 {
 			out[i].After = t.after.String()
 		}
+		if len(t.headers) > 0 {
+			out[i].Headers = t.headerNames()
+			out[i].HeadersDropped = !t.keepHeaders
+		}
 	}
 	return out
 }
@@ -390,7 +395,12 @@ func resolveTargets(cfg *otelcol.Config, inputs []Input, mocked bool) ([]target,
 		if err != nil {
 			return nil, fmt.Errorf("input %d: %w", i+1, err)
 		}
-		targets[i] = target{receiver: id, payload: in.Payload, clientAddress: in.ClientAddress, after: in.After}
+		targets[i] = target{receiver: id, payload: in.Payload, clientAddress: in.ClientAddress, headers: in.Headers, after: in.After}
+		if len(in.Headers) > 0 {
+			if targets[i].keepHeaders, err = includesMetadata(cfg, id); err != nil {
+				return nil, fmt.Errorf("input %d: %w", i+1, err)
+			}
+		}
 		if in.ClientAddress != "" {
 			if targets[i].client, err = ParseClientAddress(in.ClientAddress); err != nil {
 				return nil, fmt.Errorf("input %d: %w", i+1, err)

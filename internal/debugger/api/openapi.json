@@ -311,6 +311,274 @@
         },
         "type": "object"
       },
+      "BatchArrival": {
+        "properties": {
+          "batcher": {
+            "type": "integer"
+          },
+          "items": {
+            "type": "integer"
+          },
+          "offset_ms": {
+            "type": "number"
+          },
+          "resources": {
+            "type": "integer"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "services": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "batcher",
+          "items",
+          "resources",
+          "seq"
+        ],
+        "type": "object"
+      },
+      "BatchBatcher": {
+        "properties": {
+          "arrivals": {
+            "type": "integer"
+          },
+          "evicted": {
+            "type": "boolean"
+          },
+          "flushes": {
+            "type": "integer"
+          },
+          "items": {
+            "type": "integer"
+          },
+          "metadata": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object"
+          },
+          "refused": {
+            "type": "boolean"
+          },
+          "unknown": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "arrivals",
+          "flushes",
+          "items"
+        ],
+        "type": "object"
+      },
+      "BatchFlush": {
+        "properties": {
+          "batcher": {
+            "type": "integer"
+          },
+          "distinct_resources": {
+            "type": "integer"
+          },
+          "items": {
+            "type": "integer"
+          },
+          "left": {
+            "type": "integer"
+          },
+          "offset_ms": {
+            "type": "number"
+          },
+          "pending": {
+            "type": "integer"
+          },
+          "resources": {
+            "type": "integer"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "services": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/BatchSource"
+            },
+            "type": "array"
+          },
+          "split": {
+            "type": "boolean"
+          },
+          "trigger": {
+            "type": "string"
+          },
+          "wait_ms": {
+            "$ref": "#/components/schemas/BatchWait"
+          }
+        },
+        "required": [
+          "batcher",
+          "distinct_resources",
+          "items",
+          "left",
+          "pending",
+          "resources",
+          "seq",
+          "trigger"
+        ],
+        "type": "object"
+      },
+      "BatchSettings": {
+        "properties": {
+          "cache_size": {
+            "type": "integer"
+          },
+          "metadata_cardinality_limit": {
+            "type": "integer"
+          },
+          "metadata_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "send_batch_max_size": {
+            "type": "integer"
+          },
+          "send_batch_size": {
+            "type": "integer"
+          },
+          "sizer": {
+            "type": "string"
+          },
+          "timeout": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "unbatched": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "send_batch_max_size",
+          "send_batch_size",
+          "timeout"
+        ],
+        "type": "object"
+      },
+      "BatchSource": {
+        "properties": {
+          "arrival": {
+            "type": "integer"
+          },
+          "items": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "arrival",
+          "items"
+        ],
+        "type": "object"
+      },
+      "BatchWait": {
+        "properties": {
+          "max": {
+            "type": "number"
+          },
+          "min": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "max",
+          "min"
+        ],
+        "type": "object"
+      },
+      "Batching": {
+        "properties": {
+          "arrivals": {
+            "items": {
+              "$ref": "#/components/schemas/BatchArrival"
+            },
+            "type": "array"
+          },
+          "batchers": {
+            "items": {
+              "$ref": "#/components/schemas/BatchBatcher"
+            },
+            "type": "array"
+          },
+          "flushes": {
+            "items": {
+              "$ref": "#/components/schemas/BatchFlush"
+            },
+            "type": "array"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "pipeline": {
+            "type": "string"
+          },
+          "processor": {
+            "type": "string"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/BatchSettings"
+          },
+          "signal": {
+            "type": "string"
+          },
+          "verification": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pipeline",
+          "processor",
+          "settings",
+          "signal",
+          "verification"
+        ],
+        "type": "object"
+      },
+      "Benefit": {
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "metric": {
+            "type": "string"
+          },
+          "of": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count",
+          "metric"
+        ],
+        "type": "object"
+      },
       "BisectCulprit": {
         "properties": {
           "diff": {
@@ -2670,6 +2938,44 @@
         ],
         "type": "object"
       },
+      "ConfigChange": {
+        "properties": {
+          "component": {
+            "type": "string"
+          },
+          "group": {
+            "type": "integer"
+          },
+          "index": {
+            "type": "integer"
+          },
+          "op": {
+            "type": "string"
+          },
+          "option": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "processors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "text": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "op"
+        ],
+        "type": "object"
+      },
       "ConfigGraph": {
         "properties": {
           "diagnostics": {
@@ -3178,6 +3484,21 @@
         ],
         "type": "object"
       },
+      "Evidence": {
+        "properties": {
+          "ref": {
+            "type": "string"
+          },
+          "section": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref",
+          "section"
+        ],
+        "type": "object"
+      },
       "EvidenceResult": {
         "properties": {
           "complete": {
@@ -3283,6 +3604,77 @@
         ],
         "type": "object"
       },
+      "FilterCondition": {
+        "properties": {
+          "condition": {
+            "type": "string"
+          },
+          "context": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "error_mode": {
+            "type": "string"
+          },
+          "errors": {
+            "type": "integer"
+          },
+          "evaluated": {
+            "type": "integer"
+          },
+          "index": {
+            "type": "integer"
+          },
+          "matched": {
+            "type": "integer"
+          },
+          "records": {
+            "type": "integer"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "condition",
+          "context",
+          "error_mode",
+          "errors",
+          "evaluated",
+          "index",
+          "matched",
+          "records",
+          "source"
+        ],
+        "type": "object"
+      },
+      "FilterDrop": {
+        "properties": {
+          "condition": {
+            "type": "integer"
+          },
+          "records": {
+            "type": "integer"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "removed": {
+            "items": {
+              "$ref": "#/components/schemas/FilterRecord"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "condition",
+          "records",
+          "ref"
+        ],
+        "type": "object"
+      },
       "FilterLimits": {
         "properties": {
           "max_condition_chars": {
@@ -3299,6 +3691,84 @@
           "max_condition_chars",
           "max_conditions",
           "max_regex_chars"
+        ],
+        "type": "object"
+      },
+      "FilterRecord": {
+        "properties": {
+          "lineage": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "lineage",
+          "name",
+          "ref"
+        ],
+        "type": "object"
+      },
+      "Filtering": {
+        "properties": {
+          "conditions": {
+            "items": {
+              "$ref": "#/components/schemas/FilterCondition"
+            },
+            "type": "array"
+          },
+          "dropped": {
+            "type": "integer"
+          },
+          "drops": {
+            "items": {
+              "$ref": "#/components/schemas/FilterDrop"
+            },
+            "type": "array"
+          },
+          "error": {
+            "type": "string"
+          },
+          "input": {
+            "type": "integer"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "output": {
+            "type": "integer"
+          },
+          "pipeline": {
+            "type": "string"
+          },
+          "processor": {
+            "type": "string"
+          },
+          "records": {
+            "type": "integer"
+          },
+          "signal": {
+            "type": "string"
+          },
+          "verification": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "dropped",
+          "input",
+          "pipeline",
+          "processor",
+          "records",
+          "signal",
+          "verification"
         ],
         "type": "object"
       },
@@ -3686,6 +4156,32 @@
         },
         "type": "object"
       },
+      "FleetCheck": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "duration_ms": {
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "duration_ms",
+          "message",
+          "name",
+          "status"
+        ],
+        "type": "object"
+      },
       "FleetConfig": {
         "properties": {
           "created_at": {
@@ -3830,6 +4326,31 @@
             "type": "string"
           }
         },
+        "type": "object"
+      },
+      "FleetConnection": {
+        "properties": {
+          "checked_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/FleetCheck"
+            },
+            "type": "array"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "endpoint": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "checked_at",
+          "configured"
+        ],
         "type": "object"
       },
       "FleetDeleted": {
@@ -4309,6 +4830,185 @@
         ],
         "type": "object"
       },
+      "GroupAttribute": {
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "moved": {
+            "type": "boolean"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "value"
+        ],
+        "type": "object"
+      },
+      "GroupBlockIn": {
+        "properties": {
+          "attributes": {
+            "items": {
+              "$ref": "#/components/schemas/GroupAttribute"
+            },
+            "type": "array"
+          },
+          "records": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "records"
+        ],
+        "type": "object"
+      },
+      "GroupBlockOut": {
+        "properties": {
+          "attributes": {
+            "items": {
+              "$ref": "#/components/schemas/GroupAttribute"
+            },
+            "type": "array"
+          },
+          "from": {
+            "items": {
+              "$ref": "#/components/schemas/GroupSource"
+            },
+            "type": "array"
+          },
+          "records": {
+            "items": {
+              "$ref": "#/components/schemas/GroupRecord"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "GroupRecord": {
+        "properties": {
+          "from": {
+            "type": "integer"
+          },
+          "lineage": {
+            "type": "string"
+          },
+          "moved": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "lineage",
+          "name"
+        ],
+        "type": "object"
+      },
+      "GroupRequest": {
+        "properties": {
+          "after": {
+            "items": {
+              "$ref": "#/components/schemas/GroupBlockOut"
+            },
+            "type": "array"
+          },
+          "before": {
+            "items": {
+              "$ref": "#/components/schemas/GroupBlockIn"
+            },
+            "type": "array"
+          },
+          "grouped": {
+            "type": "integer"
+          },
+          "input": {
+            "type": "integer"
+          },
+          "kept": {
+            "type": "integer"
+          },
+          "moved": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "output": {
+            "type": "integer"
+          },
+          "unfollowed": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "grouped",
+          "input",
+          "kept",
+          "unfollowed"
+        ],
+        "type": "object"
+      },
+      "GroupSource": {
+        "properties": {
+          "block": {
+            "type": "integer"
+          },
+          "records": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "block",
+          "records"
+        ],
+        "type": "object"
+      },
+      "Grouping": {
+        "properties": {
+          "keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "pipeline": {
+            "type": "string"
+          },
+          "processor": {
+            "type": "string"
+          },
+          "requests": {
+            "items": {
+              "$ref": "#/components/schemas/GroupRequest"
+            },
+            "type": "array"
+          },
+          "signal": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pipeline",
+          "processor",
+          "signal"
+        ],
+        "type": "object"
+      },
       "Hop": {
         "properties": {
           "changes": {
@@ -4420,6 +5120,15 @@
           "error": {
             "type": "string"
           },
+          "headers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "headers_dropped": {
+            "type": "boolean"
+          },
           "injected": {
             "type": "boolean"
           },
@@ -4484,6 +5193,12 @@
           },
           "inspection_schema": {
             "type": "string"
+          },
+          "recommendations": {
+            "items": {
+              "$ref": "#/components/schemas/Recommendation"
+            },
+            "type": "array"
           },
           "references": {
             "items": {
@@ -4697,6 +5412,29 @@
           "object",
           "unmatched_after",
           "unmatched_before"
+        ],
+        "type": "object"
+      },
+      "Measure": {
+        "properties": {
+          "after": {
+            "type": "integer"
+          },
+          "before": {
+            "type": "integer"
+          },
+          "metric": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "after",
+          "before",
+          "metric",
+          "subject"
         ],
         "type": "object"
       },
@@ -5250,6 +5988,200 @@
         ],
         "type": "object"
       },
+      "Recommendation": {
+        "properties": {
+          "benefit": {
+            "$ref": "#/components/schemas/Benefit"
+          },
+          "blockers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "change": {
+            "$ref": "#/components/schemas/ConfigChange"
+          },
+          "components": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "confidence": {
+            "type": "string"
+          },
+          "coverage": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/Evidence"
+            },
+            "type": "array"
+          },
+          "holds": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "output": {
+            "type": "string"
+          },
+          "pipeline": {
+            "type": "string"
+          },
+          "rule": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "confidence",
+          "holds",
+          "kind",
+          "rule",
+          "summary"
+        ],
+        "type": "object"
+      },
+      "RecommendationDiff": {
+        "properties": {
+          "after": {
+            "$ref": "#/components/schemas/RecommendationSide"
+          },
+          "before": {
+            "$ref": "#/components/schemas/RecommendationSide"
+          },
+          "components": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "pipeline": {
+            "type": "string"
+          },
+          "rule": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "rule",
+          "status"
+        ],
+        "type": "object"
+      },
+      "RecommendationSide": {
+        "properties": {
+          "benefit": {
+            "$ref": "#/components/schemas/Benefit"
+          },
+          "confidence": {
+            "type": "string"
+          },
+          "index": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "confidence",
+          "index",
+          "kind",
+          "summary"
+        ],
+        "type": "object"
+      },
+      "RecommendationVerification": {
+        "properties": {
+          "candidate": {
+            "$ref": "#/components/schemas/Run"
+          },
+          "comparison": {
+            "$ref": "#/components/schemas/RunComparison"
+          },
+          "confidence": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "measured": {
+            "items": {
+              "$ref": "#/components/schemas/Measure"
+            },
+            "type": "array"
+          },
+          "overrides": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "recommendation": {
+            "type": "integer"
+          },
+          "rule": {
+            "type": "string"
+          },
+          "run": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "candidate",
+          "recommendation",
+          "rule",
+          "run"
+        ],
+        "type": "object"
+      },
+      "Recommendations": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RecommendationDiff"
+            },
+            "type": "array"
+          },
+          "new": {
+            "type": "integer"
+          },
+          "persists": {
+            "type": "integer"
+          },
+          "resolved": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "new",
+          "persists",
+          "resolved"
+        ],
+        "type": "object"
+      },
       "RecordLineage": {
         "properties": {
           "connector": {
@@ -5407,8 +6339,26 @@
           "assertions": {
             "$ref": "#/components/schemas/AssertionReport"
           },
+          "batching": {
+            "items": {
+              "$ref": "#/components/schemas/Batching"
+            },
+            "type": "array"
+          },
           "comparison": {
             "$ref": "#/components/schemas/Comparison"
+          },
+          "filtering": {
+            "items": {
+              "$ref": "#/components/schemas/Filtering"
+            },
+            "type": "array"
+          },
+          "grouping": {
+            "items": {
+              "$ref": "#/components/schemas/Grouping"
+            },
+            "type": "array"
           },
           "limits": {
             "$ref": "#/components/schemas/ReportLimits"
@@ -5427,6 +6377,12 @@
           },
           "provenance": {
             "$ref": "#/components/schemas/Provenance"
+          },
+          "recommendations": {
+            "items": {
+              "$ref": "#/components/schemas/Recommendation"
+            },
+            "type": "array"
           },
           "reference": {
             "$ref": "#/components/schemas/Result"
@@ -6179,6 +7135,9 @@
               "$ref": "#/components/schemas/ComparisonReason"
             },
             "type": "array"
+          },
+          "recommendations": {
+            "$ref": "#/components/schemas/Recommendations"
           },
           "records": {
             "$ref": "#/components/schemas/ComparisonRecords"
@@ -13153,6 +14112,54 @@
         "summary": "Read one version with its body; fleet returns bodies to an admin credential only."
       }
     },
+    "/api/v1/fleet/connection": {
+      "get": {
+        "operationId": "checkFleetConnection",
+        "parameters": [
+          {
+            "description": "The project the request works in: the project new work and saved artifacts go to, whose runtimes and saved work it uses, and that narrows lists. Empty is the default project; operations on an existing resource use the resource's project.",
+            "in": "query",
+            "name": "project",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetConnection"
+                }
+              }
+            },
+            "description": "The checks, in the order they ran."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationError"
+                }
+              }
+            },
+            "description": "Not signed in."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationError"
+                }
+              }
+            },
+            "description": "The caller may not read fleet."
+          }
+        },
+        "summary": "Contact fleet now and report each step: reaching fleet with the server's credential, the livecapture plugin, and config management. A failing step is part of the answer; without a fleet connection configured is false."
+      }
+    },
     "/api/v1/fleet/events": {
       "get": {
         "operationId": "listFleetEvents",
@@ -15572,7 +16579,7 @@
             }
           },
           {
-            "description": "stage_changes, records, journey, statements or events.",
+            "description": "stage_changes, records, journey, statements, events or recommendations.",
             "in": "query",
             "name": "family",
             "required": true,
@@ -15582,13 +16589,14 @@
                 "records",
                 "journey",
                 "statements",
-                "events"
+                "events",
+                "recommendations"
               ],
               "type": "string"
             }
           },
           {
-            "description": "Pipeline ID for stage_changes and records (empty for a connector); optional filter for statements.",
+            "description": "Pipeline ID for stage_changes and records (empty for a connector); optional filter for statements and recommendations.",
             "in": "query",
             "name": "pipeline",
             "schema": {
@@ -15596,7 +16604,7 @@
             }
           },
           {
-            "description": "The stage for stage_changes and records, the transform processor for statements, an optional filter for events.",
+            "description": "The stage for stage_changes and records, the transform processor for statements, an optional filter for events and recommendations.",
             "in": "query",
             "name": "component",
             "schema": {
@@ -15718,7 +16726,7 @@
             "description": "The run has not finished or has no report."
           }
         },
-        "summary": "One bounded page of a finished run's recorded evidence, as MCP's linea_get_execution_trace: stage_changes, records, journey, statements or events. Never executes anything. A cursor continues only the same run, family and parameters; page sizes above the server's budgets are lowered and listed in page.clamped."
+        "summary": "One bounded page of a finished run's recorded evidence, as MCP's linea_get_execution_trace: stage_changes, records, journey, statements, events or recommendations. Never executes anything. A cursor continues only the same run, family and parameters; page sizes above the server's budgets are lowered and listed in page.clamped."
       }
     },
     "/api/v1/runs/{id}/export": {
@@ -15983,6 +16991,52 @@
         "summary": "Keep a run: retention and prune skip it until it is unkept, and it may still be unfinished. Allowed for the run's owner and for an admin. Like every PUT, the request needs Content-Type: application/json, though it has no body."
       }
     },
+    "/api/v1/runs/{id}/listing": {
+      "get": {
+        "operationId": "getRunListing",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The project the request works in: the project new work and saved artifacts go to, whose runtimes and saved work it uses, and that narrows lists. Empty is the default project; operations on an existing resource use the resource's project.",
+            "in": "query",
+            "name": "project",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            },
+            "description": "The run as listed."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Unknown run, or a deleted run (\"run was deleted\")."
+          }
+        },
+        "summary": "A run as the run list shows it: its state and, once done, the summary of its report, without the report. It reads a run off the list's pages without the cost of its evidence."
+      }
+    },
     "/api/v1/runs/{id}/log": {
       "get": {
         "operationId": "getRunLog",
@@ -16027,6 +17081,102 @@
           }
         },
         "summary": "The tail of a failed or partial run's Collector log: at most 64 KB of whole lines at info level and above, with every environment value the configuration read redacted. Only a run that failed, or whose execution ended partial or failed, keeps it; kept is false otherwise. It is deleted with the run. Sent with Cache-Control: no-store."
+      }
+    },
+    "/api/v1/runs/{id}/recommendations/{n}/verify": {
+      "post": {
+        "operationId": "verifyRecommendation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The recommendation's position in the report's recommendations.",
+            "in": "path",
+            "name": "n",
+            "required": true,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The project the request works in: the project new work and saved artifacts go to, whose runtimes and saved work it uses, and that narrows lists. Empty is the default project; operations on an existing resource use the resource's project.",
+            "in": "query",
+            "name": "project",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecommendationVerification"
+                }
+              }
+            },
+            "description": "The candidate run and its comparison with the run."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The recommendation's change cannot be verified, or n is not a number."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Unknown run or recommendation, or the run's bundle is not kept."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The run is not done, or the candidate would run on another runtime build."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Storage admission or evidence reservation exceeds its limits."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The platform queue is full or execution admission is closed."
+          }
+        },
+        "summary": "Run one recommendation's change as a candidate: the run's captured bundle with the change layered as provider overrides after its unchanged configuration, on the same inputs and runtime, without reading the host. Waits for the candidate, which is an ordinary run, and compares it with the run: confidence verified_on_input when the output is the same, differs_on_input when it differs. Ending the request cancels the candidate. Verifiable changes: a processor swap, a removed transform statement or filter condition (its list replaced, rebuilt from the run's configuration text) and an option with a value; others are invalid_request. Send an empty JSON body."
       }
     },
     "/api/v1/runs/{id}/report": {

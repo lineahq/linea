@@ -1,5 +1,5 @@
 import type { CollectorGroup, CollectorGroupPage, CollectorGroupMembersPage, CaptureMetadataUpdate } from './types';
-import type { ComparisonRequest, ComparisonRuns, Evaluation, EvaluationInfo, StatementTest, StatementTestRequest } from './types';
+import type { ComparisonRequest, ComparisonRuns, Evaluation, EvaluationInfo, RecommendationVerification, StatementTest, StatementTestRequest } from './types';
 import type {
   CaptureStream, CaptureRecordsPage, CaptureDeriveRequest, CaptureFixture, CaptureScenarioRequest, CaptureScenario, CaptureExportRequest, CaptureExport,
   CaptureSelection,
@@ -65,7 +65,7 @@ import type {
 import type {
   CollectorGroupSave, FleetAgentConfig, FleetAgentDetail, FleetAgentPage, FleetAssignment, FleetAssignmentCreate, FleetAssignmentPage, FleetAssignmentPreviewPage,
   FleetConfig, FleetConfigCreate, FleetConfigPage, FleetConfigUpdate, FleetConfigVersion, FleetConfigVersionCreate, FleetConfigVersionPage,
-  FleetEventPage, FleetOverview, FleetRollout, FleetRolloutPage, FleetRolloutStart, FleetRolloutTargetPage,
+  FleetConnection, FleetEventPage, FleetOverview, FleetRollout, FleetRolloutPage, FleetRolloutStart, FleetRolloutTargetPage,
 } from './types';
 import type { AuditPage, RoleBindingRequest, RoleBindings, Session } from './types';
 import type { CopyRequest, LibraryPage, ProjectRequest, Projects, SavedArtifact as Copied, Sharing } from './types';
@@ -181,6 +181,7 @@ export const api = {
   /** addRoleBinding grants a role at the managed bindings' revision; 409 when it moved. */
   addRoleBinding: (req: RoleBindingRequest) => call<RoleBindings>('POST', '/api/v1/role-bindings', req),
   removeRoleBinding: (id: string, revision: number) => call<RoleBindings>('DELETE', `/api/v1/role-bindings/${encodeURIComponent(id)}` + query({ revision })),
+  fleetConnection: () => call<FleetConnection>('GET', fleet('connection')),
   fleetOverview: (groupBy = '') => call<FleetOverview>('GET', fleet() + query({ group_by: groupBy })),
   fleetAgents: (q: FleetAgentQuery = {}) => call<FleetAgentPage>('GET', fleet('agents') + query({ ...q })),
   fleetAgent: (id: string) => call<FleetAgentDetail>('GET', fleet('agents', id)),
@@ -250,6 +251,8 @@ export const api = {
   /** rerunSuite queues a new suite from a finished suite's recorded inputs (202). */
   rerunSuite: (id: string) => call<Suite>('POST', `/api/v1/suites/${encodeURIComponent(id)}/rerun`),
   run: (id: string) => call<Run>('GET', `/api/v1/runs/${encodeURIComponent(id)}`),
+  /** runListing is a run as the run list shows it: its summary, never its report. */
+  runListing: (id: string) => call<Run>('GET', `/api/v1/runs/${encodeURIComponent(id)}/listing`),
   compareRuns: (before: string, after: string) =>
     call<RunComparison>('GET', `/api/v1/runs/${encodeURIComponent(before)}/compare/${encodeURIComponent(after)}`),
   runInputs: (id: string) => call<RunInputs>('GET', `/api/v1/runs/${encodeURIComponent(id)}/inputs`),
@@ -259,6 +262,14 @@ export const api = {
   /** testStatementOnRun runs an edited statement on a run's recorded inputs (202 queued, 200 for an invalid candidate). */
   testStatementOnRun: (id: string, req: StatementTestRequest) =>
     call<StatementTest>('POST', `/api/v1/runs/${encodeURIComponent(id)}/statements/test`, req),
+  /**
+   * verifyRecommendation runs recommendation n (its position in the report)
+   * of a finished run as a candidate on the run's inputs and waits for the
+   * comparison (200); one more run. Swaps, removed statements or conditions
+   * and options with a value verify.
+   */
+  verifyRecommendation: (id: string, n: number) =>
+    call<RecommendationVerification>('POST', `/api/v1/runs/${encodeURIComponent(id)}/recommendations/${n}/verify`, {}),
   /** runEvaluations lists the assertion evaluations recorded beside a run (by MCP), oldest first, without results. */
   runEvaluations: (id: string) => call<EvaluationInfo[]>('GET', `/api/v1/runs/${encodeURIComponent(id)}/evaluations`),
   runEvaluation: (id: string, evaluation: string) =>

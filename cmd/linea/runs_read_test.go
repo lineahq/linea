@@ -56,7 +56,7 @@ func TestRunAndSuiteReadsMatchHTTP(t *testing.T) {
 			t.Fatalf("%v text: exit %d, %s%s", tc.args, code, out, stderr)
 		}
 	}
-	if code, out, _ := runCLI(t, "runs", "show", "--server", server, "--run", id); !strings.HasPrefix(out, "run "+id+": state done") || code != exitOK {
+	if code, out, _ := runCLI(t, "runs", "show", "--server", server, "--run", id); !strings.HasPrefix(out, "run "+id+"\n  state: done\n") || code != exitOK {
 		t.Fatalf("show text = %q", out)
 	}
 

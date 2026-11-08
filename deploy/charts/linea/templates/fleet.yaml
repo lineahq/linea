@@ -1,0 +1,564 @@
+{{- /*
+Fleet and the live-capture plugin in this release (fleet.deploy.enabled),
+like the Compose overlay compose.fleet.yaml: their own databases and roles,
+migrations before each start, and the server's generated fleet token
+installed as the first fleet admin, so the server connects on its own.
+*/}}
+{{- if include "linea.fleetDeployed" . }}
+{{- $fleet := include "linea.fleetName" . }}
+{{- $capture := include "linea.livecaptureName" . }}
+{{- $dbSecret := include "linea.fleetDatabaseSecret" . }}
+{{- $d := .Values.fleet.deploy }}
+{{- $lc := $d.livecapture }}
+{{- $hostToken := include "linea.livecaptureToken" (list . "host-token") }}
+{{- $serviceToken := include "linea.livecaptureToken" (list . "service-token") }}
+{{- $metricsToken := include "linea.livecaptureToken" (list . "metrics-token") }}
+{{- $pluginsJSON := dict "plugins" (list (dict "id" "livecapture" "version" "0.4.0" "api_version" "2" "endpoint" (printf "http://%s-plugin:8090" $capture) "enabled" true "allow_insecure_http" true "permissions" (list "agents.read" "credentials.introspect") "host_token_file" "/etc/fleet/plugins/host-token" "service_token_file" "/etc/fleet/plugins/service-token")) | toJson }}
+{{- $configJSON := dict "id" "livecapture" "version" "0.4.0" "host_endpoint" (printf "http://%s:8081" $fleet) "allow_insecure_host" true "host_token_file" "/etc/livecapture/host-token" "service_token_file" "/etc/livecapture/service-token" "metrics_token_file" "/etc/livecapture/metrics-token" "http_listen" "0.0.0.0:8090" "control_listen" "0.0.0.0:4340" "delivery_listen" "0.0.0.0:4341" "tls_cert_file" "/etc/livecapture/tls.crt" "tls_key_file" "/etc/livecapture/tls.key" "test_insecure" false "capture_label" "capture" "raw_principals" (ternary (list (index (splitList "_" (include "linea.fleetToken" .)) 1)) (list) (eq (toString $lc.rawCapture) "true")) "max_peers" 256 | toJson }}
+# The server's fleet admin token, generated once and kept.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "linea.fleetSecret" . }}
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  token: {{ include "linea.fleetToken" . | quote }}
+---
+{{- if not $d.database.existingSecret }}
+{{- $url := "postgres://%s:%s@%s:5432/%s?sslmode=disable" }}
+{{- $pg := include "linea.postgresqlName" . }}
+# The roles' passwords, generated once and kept, and the URLs built from them.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $dbSecret }}
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  fleet-migrate-password: {{ include "linea.fleetDatabasePassword" (list . "fleet-migrate-password") | quote }}
+  fleet-runtime-password: {{ include "linea.fleetDatabasePassword" (list . "fleet-runtime-password") | quote }}
+  capture-migrate-password: {{ include "linea.fleetDatabasePassword" (list . "capture-migrate-password") | quote }}
+  capture-runtime-password: {{ include "linea.fleetDatabasePassword" (list . "capture-runtime-password") | quote }}
+  fleet-migrate-url: {{ printf $url "fleet_migrator" (include "linea.fleetDatabasePassword" (list . "fleet-migrate-password")) $pg "fleet" | quote }}
+  fleet-runtime-url: {{ printf $url $d.database.fleetRuntimeRole (include "linea.fleetDatabasePassword" (list . "fleet-runtime-password")) $pg "fleet" | quote }}
+  capture-migrate-url: {{ printf $url "capture_migrator" (include "linea.fleetDatabasePassword" (list . "capture-migrate-password")) $pg "livecapture" | quote }}
+  capture-runtime-url: {{ printf $url $d.database.captureRuntimeRole (include "linea.fleetDatabasePassword" (list . "capture-runtime-password")) $pg "livecapture" | quote }}
+---
+# Creates or updates the fleet and livecapture databases and their roles in
+# the bundled PostgreSQL, as its owner. One Job per release revision; fleet
+# and the plugin retry their migrations until it is done.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-db-%d" $fleet .Release.Revision }}
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fleet-db
+spec:
+  backoffLimit: 10
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Chart.Name }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: fleet-db
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: databases
+          image: {{ include "linea.image" .Values.postgresql.image | quote }}
+          imagePullPolicy: {{ .Values.postgresql.image.pullPolicy }}
+          command: [sh, -c]
+          args:
+            - |
+              set -eu
+              export PGHOST={{ $pg }} PGUSER=linea PGDATABASE=linea
+              PGPASSWORD=$(cat /etc/postgresql-secret/password); export PGPASSWORD
+              for name in fleet-migrate-password fleet-runtime-password capture-migrate-password capture-runtime-password; do
+                export "$(echo "$name" | tr a-z- A-Z_)=$(cat "/etc/fleet-db/$name")"
+              done
+              until pg_isready -q; do sleep 2; done
+              psql --quiet --set ON_ERROR_STOP=1 --set fa={{ $d.database.fleetRuntimeRole }} --set ca={{ $d.database.captureRuntimeRole }} <<'SQL'
+              \getenv fm FLEET_MIGRATE_PASSWORD
+              \getenv fr FLEET_RUNTIME_PASSWORD
+              \getenv cm CAPTURE_MIGRATE_PASSWORD
+              \getenv cr CAPTURE_RUNTIME_PASSWORD
+              SELECT format('CREATE ROLE %I', r) FROM unnest(ARRAY['fleet_migrator', :'fa', 'capture_migrator', :'ca']) r
+                WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = r) \gexec
+              ALTER ROLE fleet_migrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD :'fm';
+              ALTER ROLE :"fa" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD :'fr';
+              ALTER ROLE capture_migrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD :'cm';
+              ALTER ROLE :"ca" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD :'cr';
+              SELECT format('CREATE DATABASE %I', d) FROM unnest(ARRAY['fleet','livecapture']) d
+                WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = d) \gexec
+              -- Each role reaches its own database only.
+              REVOKE ALL ON DATABASE linea, postgres, fleet, livecapture FROM PUBLIC;
+              GRANT CONNECT, CREATE ON DATABASE fleet TO fleet_migrator;
+              GRANT CONNECT ON DATABASE fleet TO :"fa";
+              GRANT CONNECT, CREATE ON DATABASE livecapture TO capture_migrator;
+              GRANT CONNECT ON DATABASE livecapture TO :"ca";
+              \connect fleet
+              REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+              \connect livecapture
+              REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+              SQL
+              echo 'fleet and livecapture databases are ready'
+          env:
+            - {name: HOME, value: /tmp}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - {name: postgresql, mountPath: /etc/postgresql-secret, readOnly: true}
+            - {name: passwords, mountPath: /etc/fleet-db, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: postgresql
+          secret:
+            secretName: {{ $pg }}
+            items: [{key: password, path: password}]
+        - name: passwords
+          secret:
+            secretName: {{ $dbSecret }}
+            items:
+              - {key: fleet-migrate-password, path: fleet-migrate-password}
+              - {key: fleet-runtime-password, path: fleet-runtime-password}
+              - {key: capture-migrate-password, path: capture-migrate-password}
+              - {key: capture-runtime-password, path: capture-runtime-password}
+        - {name: tmp, emptyDir: {}}
+---
+{{- end }}
+# The tokens between fleet and the plugin, generated once and kept.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $capture }}
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  host-token: {{ $hostToken | quote }}
+  service-token: {{ $serviceToken | quote }}
+  metrics-token: {{ $metricsToken | quote }}
+---
+{{- if not $lc.tls.secretName }}
+{{- $cert := include "linea.livecaptureCertificate" . | fromYaml }}
+# The plugin's self-signed certificate, generated once and kept. Collectors
+# trust tls.crt.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "linea.livecaptureTLSSecret" . }}
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  tls.crt: {{ index $cert "tls.crt" | b64enc }}
+  tls.key: {{ index $cert "tls.key" | b64enc }}
+---
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fleet }}
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+data:
+  plugins.json: {{ $pluginsJSON | quote }}
+  livecapture.json: {{ $configJSON | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fleet }}
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fleet
+  {{- with $d.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ $d.service.type }}
+  selector:
+    {{- include "linea.fleetSelector" . | nindent 4 }}
+  ports:
+    - {name: management, port: {{ $d.service.managementPort }}, targetPort: management}
+    - {name: opamp, port: {{ $d.service.agentPort }}, targetPort: opamp}
+    - {name: plugin-host, port: 8081, targetPort: plugin-host}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fleet }}
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fleet
+spec:
+  # One instance, replaced rather than rolled: migrations run before it
+  # starts and never beside a running instance.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "linea.fleetSelector" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "linea.fleetSelector" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ $pluginsJSON | sha256sum }}
+        checksum/tokens: {{ print $hostToken $serviceToken | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 40
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # Retries until the databases exist; a current schema changes nothing.
+        - name: migrate
+          image: {{ include "linea.image" (dict "repository" $d.image.repository "tag" ($d.image.tag | default .Chart.AppVersion)) | quote }}
+          imagePullPolicy: {{ $d.image.pullPolicy }}
+          args: [migrate, --runtime-role, {{ $d.database.fleetRuntimeRole | quote }}]
+          env:
+            - {name: LINEA_FLEET_DATABASE_URL_FILE, value: /etc/fleet/migrate/url}
+          securityContext: &hardened
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources: &initResources
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}
+          volumeMounts:
+            - {name: migrate-url, mountPath: /etc/fleet/migrate, readOnly: true}
+        # Installs the server's token as the first admin; no change once it is.
+        - name: bootstrap
+          image: {{ include "linea.image" (dict "repository" $d.image.repository "tag" ($d.image.tag | default .Chart.AppVersion)) | quote }}
+          imagePullPolicy: {{ $d.image.pullPolicy }}
+          args: [bootstrap, --server-id, {{ $d.serverID | quote }}, --name, linea-server]
+          env:
+            - {name: LINEA_FLEET_DATABASE_URL_FILE, value: /etc/fleet/runtime/url}
+            - {name: LINEA_FLEET_BOOTSTRAP_TOKEN_FILE, value: /etc/fleet/admin/token}
+          securityContext: *hardened
+          resources: *initResources
+          volumeMounts:
+            - {name: runtime-url, mountPath: /etc/fleet/runtime, readOnly: true}
+            - {name: admin-token, mountPath: /etc/fleet/admin, readOnly: true}
+      containers:
+        - name: fleet
+          image: {{ include "linea.image" (dict "repository" $d.image.repository "tag" ($d.image.tag | default .Chart.AppVersion)) | quote }}
+          imagePullPolicy: {{ $d.image.pullPolicy }}
+          args:
+            - --server-id={{ $d.serverID }}
+            - --management-listen=0.0.0.0:8080
+            - --agent-listen=0.0.0.0:4320
+            # OpAMP over plain ws://; put TLS in front of the Service for
+            # Collectors outside the cluster.
+            - --allow-insecure-remote
+            - --plugins-config=/etc/fleet/plugins/plugins.json
+            - --plugin-listen=0.0.0.0:8081
+            - --config-management={{ $d.configManagement | default false }}
+          env:
+            - {name: LINEA_FLEET_DATABASE_URL_FILE, value: /etc/fleet/runtime/url}
+          ports:
+            - {name: management, containerPort: 8080}
+            - {name: opamp, containerPort: 4320}
+            - {name: plugin-host, containerPort: 8081}
+          readinessProbe:
+            exec:
+              command: [/linea-fleet, probe]
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command: [/linea-fleet, probe]
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 4
+          resources:
+            {{- toYaml $d.resources | nindent 12 }}
+          securityContext: *hardened
+          volumeMounts:
+            - {name: runtime-url, mountPath: /etc/fleet/runtime, readOnly: true}
+            - {name: plugins, mountPath: /etc/fleet/plugins, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: migrate-url
+          secret:
+            secretName: {{ $dbSecret }}
+            items: [{key: fleet-migrate-url, path: url}]
+        - name: runtime-url
+          secret:
+            secretName: {{ $dbSecret }}
+            items: [{key: fleet-runtime-url, path: url}]
+        - name: admin-token
+          secret:
+            secretName: {{ include "linea.fleetSecret" . }}
+            items: [{key: token, path: token}]
+        - name: plugins
+          projected:
+            sources:
+              - configMap:
+                  name: {{ $fleet }}
+                  items: [{key: plugins.json, path: plugins.json}]
+              - secret:
+                  name: {{ $capture }}
+                  items:
+                    - {key: host-token, path: host-token}
+                    - {key: service-token, path: service-token}
+        - {name: tmp, emptyDir: {sizeLimit: 16Mi}}
+      {{- with $d.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $d.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $d.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $capture }}
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+    app.kubernetes.io/component: livecapture
+  {{- with $lc.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ $lc.service.type }}
+  selector:
+    {{- include "linea.livecaptureSelector" . | nindent 4 }}
+  ports:
+    - {name: control, port: {{ $lc.service.controlPort }}, targetPort: control}
+    - {name: delivery, port: {{ $lc.service.deliveryPort }}, targetPort: delivery}
+---
+# Fleet's route to the plugin. It includes a pod that is not ready, because
+# the plugin turns ready only after fleet has reached it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $capture }}-plugin
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+    app.kubernetes.io/component: livecapture
+spec:
+  type: ClusterIP
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "linea.livecaptureSelector" . | nindent 4 }}
+  ports:
+    - {name: plugin, port: 8090, targetPort: plugin}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $capture }}
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+    app.kubernetes.io/component: livecapture
+spec:
+  # One owner of the capture database, replaced rather than rolled: the
+  # plugin holds its database lock while it runs, and its migration takes it.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "linea.livecaptureSelector" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "linea.livecaptureSelector" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ $configJSON | sha256sum }}
+        checksum/tokens: {{ print $hostToken $serviceToken $metricsToken | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: migrate
+          image: {{ include "linea.image" (dict "repository" $lc.image.repository "tag" ($lc.image.tag | default .Chart.AppVersion)) | quote }}
+          imagePullPolicy: {{ $lc.image.pullPolicy }}
+          args: [migrate, --runtime-role, {{ $d.database.captureRuntimeRole | quote }}]
+          env:
+            - {name: LINEA_FLEET_CAPTURE_DATABASE_URL_FILE, value: /etc/livecapture-migrate/url}
+          securityContext: &pluginHardened
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}
+          volumeMounts:
+            - {name: migrate-url, mountPath: /etc/livecapture-migrate, readOnly: true}
+      containers:
+        - name: livecapture
+          image: {{ include "linea.image" (dict "repository" $lc.image.repository "tag" ($lc.image.tag | default .Chart.AppVersion)) | quote }}
+          imagePullPolicy: {{ $lc.image.pullPolicy }}
+          args: [serve, --config, /etc/livecapture/config.json]
+          env:
+            - {name: LINEA_FLEET_CAPTURE_DATABASE_URL_FILE, value: /etc/livecapture/runtime-url}
+          ports:
+            - {name: control, containerPort: 4340}
+            - {name: delivery, containerPort: 4341}
+            - {name: plugin, containerPort: 8090}
+          readinessProbe:
+            exec:
+              command: [/plugin, probe, --config, /etc/livecapture/config.json]
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command: [/plugin, probe, --config, /etc/livecapture/config.json]
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 4
+          resources:
+            {{- toYaml $lc.resources | nindent 12 }}
+          securityContext: *pluginHardened
+          volumeMounts:
+            - {name: config, mountPath: /etc/livecapture, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: migrate-url
+          secret:
+            secretName: {{ $dbSecret }}
+            items: [{key: capture-migrate-url, path: url}]
+        - name: config
+          projected:
+            sources:
+              - configMap:
+                  name: {{ $fleet }}
+                  items: [{key: livecapture.json, path: config.json}]
+              - secret:
+                  name: {{ $capture }}
+                  items:
+                    - {key: host-token, path: host-token}
+                    - {key: service-token, path: service-token}
+                    - {key: metrics-token, path: metrics-token}
+              - secret:
+                  name: {{ include "linea.livecaptureTLSSecret" . }}
+                  items:
+                    - {key: tls.crt, path: tls.crt}
+                    - {key: tls.key, path: tls.key}
+              - secret:
+                  name: {{ $dbSecret }}
+                  items: [{key: capture-runtime-url, path: runtime-url}]
+        - {name: tmp, emptyDir: {sizeLimit: 16Mi}}
+      {{- with $lc.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $lc.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $lc.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- if .Values.networkPolicy.enabled }}
+---
+# The server reaches the management API and the plugin the host API;
+# Collectors reach OpAMP from anywhere.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fleet }}
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "linea.fleetSelector" . | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "linea.serverSelector" . | nindent 14 }}
+      ports:
+        - port: management
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "linea.livecaptureSelector" . | nindent 14 }}
+      ports:
+        - port: plugin-host
+    - ports:
+        - port: opamp
+---
+# Fleet reaches the plugin's API; Collectors reach control and delivery from
+# anywhere.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $capture }}
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "linea.livecaptureSelector" . | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "linea.fleetSelector" . | nindent 14 }}
+      ports:
+        - port: plugin
+    - ports:
+        - port: control
+        - port: delivery
+{{- end }}
+{{- end }}

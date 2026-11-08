@@ -54,12 +54,15 @@ var componentsMigration string
 //go:embed migrations/010_acting_for.sql
 var actingMigration string
 
-var migrations = []string{migration, deploymentTokensMigration, lifecycleMigration, replicasMigration, inventoryMigration, pluginsMigration, configMigration, rolloutMigration, componentsMigration, actingMigration}
+//go:embed migrations/011_credential_expiry.sql
+var credentialExpiryMigration string
+
+var migrations = []string{migration, deploymentTokensMigration, lifecycleMigration, replicasMigration, inventoryMigration, pluginsMigration, configMigration, rolloutMigration, componentsMigration, actingMigration, credentialExpiryMigration}
 
 // adminLock serializes offline administration (migrate, bootstrap, grants).
 // v1 servers held the same lock, so a v1 server also blocks migration to v2.
 const adminLock int64 = 731281604309
-const schemaVersion = 10
+const schemaVersion = 11
 
 // ErrOwnerBusy is retryable contention, distinct from schema/identity conflicts.
 var ErrOwnerBusy = fmt.Errorf("fleet administration or a v1 server already active: %w", fleet.ErrConflict)
@@ -377,7 +380,7 @@ func (s *Store) register(ctx context.Context) error {
 			return err
 		}
 		var admins int
-		if err := tx.QueryRow(ctx, "SELECT count(*) FROM fleet.credentials WHERE role='admin' AND revoked_at IS NULL AND expires_at>now()").Scan(&admins); err != nil {
+		if err := tx.QueryRow(ctx, "SELECT count(*) FROM fleet.credentials WHERE role='admin' AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>now())").Scan(&admins); err != nil {
 			return err
 		}
 		if admins == 0 {

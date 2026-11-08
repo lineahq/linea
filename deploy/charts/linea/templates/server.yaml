@@ -75,10 +75,10 @@ spec:
             {{- if .Values.server.mcp }}
             - --mcp
             {{- end }}
-            {{- if .Values.fleet.url }}
-            - --fleet-url={{ .Values.fleet.url }}
+            {{- if include "linea.hasFleet" . }}
+            - --fleet-url={{ include "linea.fleetURL" . }}
             - --fleet-token-file=/etc/linea/fleet/token
-            {{- if .Values.fleet.allowHTTP }}
+            {{- if include "linea.fleetAllowHTTP" . }}
             - --fleet-allow-http
             {{- end }}
             {{- end }}
@@ -142,7 +142,7 @@ spec:
               mountPath: /etc/linea/ca
               readOnly: true
             {{- end }}
-            {{- if .Values.fleet.url }}
+            {{- if include "linea.hasFleet" . }}
             - name: fleet
               mountPath: /etc/linea/fleet
               readOnly: true
@@ -190,7 +190,7 @@ spec:
             secretName: {{ .Values.server.caSecret }}
             items: [{key: {{ .Values.server.caKey | quote }}, path: ca.crt}]
         {{- end }}
-        {{- if .Values.fleet.url }}
+        {{- if include "linea.hasFleet" . }}
         - name: fleet
           secret:
             secretName: {{ include "linea.fleetSecret" . }}

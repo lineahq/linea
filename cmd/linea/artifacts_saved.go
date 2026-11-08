@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"text/tabwriter"
 	"time"
 
 	"github.com/lineahq/linea/internal/debugger/api"
@@ -49,20 +48,40 @@ func artifactsListCmd(ctx context.Context, args []string, stdout, stderr io.Writ
 	} else {
 		var page platform.ArtifactPage
 		if err = json.Unmarshal(raw, &page); err == nil {
-			tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "ARTIFACT\tKIND\tLABEL\tGENERATION\tUPDATED")
-			for _, m := range page.Items {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\n", m.ID, m.Kind, m.Label, m.Generation, m.Updated.Local().Format(time.DateTime))
-			}
-			if err = tw.Flush(); err == nil && page.NextCursor != "" {
-				fmt.Fprintf(stdout, "more: --cursor %s\n", page.NextCursor)
-			}
+			err = writeArtifactList(stdout, &page)
 		}
 	}
 	if err != nil {
 		return fail(stderr, err)
 	}
 	return exitOK
+}
+
+// writeArtifactList prints one row per saved artifact and the next page.
+func writeArtifactList(w io.Writer, page *platform.ArtifactPage) error {
+	t := newTextOut(w)
+	if len(page.Items) == 0 {
+		t.none("artifacts")
+	}
+	rows := make([][]string, 0, len(page.Items))
+	for _, m := range page.Items {
+		rows = append(rows, []string{m.ID, string(m.Kind), fmt.Sprint(m.Generation), m.Updated.Local().Format(time.DateTime), m.Label})
+	}
+	t.table(0, []string{"artifact", "kind", "generation", "updated", "label"}, rows)
+	t.nextPage(page.NextCursor)
+	return t.err()
+}
+
+// writeArtifactMetadata prints one saved artifact's metadata.
+func writeArtifactMetadata(w io.Writer, m *platform.ArtifactMetadata) error {
+	t := newTextOut(w)
+	t.line(0, "artifact %s", m.ID)
+	t.field(1, "kind", string(m.Kind))
+	t.field(1, "label", m.Label)
+	t.field(1, "generation", fmt.Sprint(m.Generation))
+	t.field(1, "head", m.Head)
+	t.field(1, "updated", m.Updated.Local().Format(time.DateTime))
+	return t.err()
 }
 
 // artifactsShowCmd prints an artifact's metadata or, with --revision, that
@@ -98,8 +117,7 @@ func artifactsShowCmd(ctx context.Context, args []string, stdout, stderr io.Writ
 		if *format == "json" {
 			_, err = stdout.Write(raw)
 		} else {
-			_, err = fmt.Fprintf(stdout, "%s %s (%s): generation %d, head %s, updated %s\n", m.Kind, m.Label, m.ID, m.Generation, m.Head,
-				m.Updated.Local().Format(time.DateTime))
+			err = writeArtifactMetadata(stdout, &m)
 		}
 		if err != nil {
 			return fail(stderr, err)

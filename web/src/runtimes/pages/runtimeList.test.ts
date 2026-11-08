@@ -52,6 +52,14 @@ describe('the default runtime', () => {
     expect(runtimeRows([runtime('acme', '0.162.0')], '0.162.0', 'acme')[1].isDefault).toBe(false);
   });
 
+  it('shows the built-in runtime a team server lists as the one built-in row, with its workers', () => {
+    const rows = runtimeRows([catalog('built-in', { default: true, image: '' } as Partial<Runtime>), catalog('lab')], '0.162.0');
+    expect(rows.map((r) => [r.key, r.type, r.state.label, r.isDefault])).toEqual([
+      ['built-in', 'Built-in', '1 worker', true], ['catalog:lab', 'Worker image', '1 worker', false],
+    ]);
+    expect(runtimeDetail(rows[0], '0.162.0').facts).toContainEqual(['Workers', '1 connected · 2 slots']);
+  });
+
   it('offers Make default on built-in and catalog rows that are not the default', () => {
     const rows = runtimeRows([catalog('lab'), runtime('acme', '0.162.0')], '0.162.0', 'lab');
     expect(rows.map((r) => [r.name, canBeDefault(r)])).toEqual([['built-in', true], ['acme', false], ['lab', false]]);

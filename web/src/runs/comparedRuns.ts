@@ -6,7 +6,8 @@ import { firstPageRuns, withRuns } from './runPages';
 
 /**
  * useComparedRuns is the run list's first page plus any compared run older
- * than it, read on its own, so a comparison link keeps working once newer
+ * than it, read on its own as the list shows it (its summary, not its
+ * report, which can be large), so a comparison link keeps working once newer
  * runs push a run off the first page. `pending` holds while such a run is
  * being read; a run that cannot be read is simply missing from `list`.
  */
@@ -16,8 +17,8 @@ export function useComparedRuns(ids: readonly (string | undefined)[]) {
   const older = useQueries({
     queries: ids.map((id) => ({
       // Under ['runs'], so invalidating the run list refreshes these too.
-      queryKey: ['runs', 'one', id],
-      queryFn: () => api.run(id!),
+      queryKey: ['runs', 'listing', id],
+      queryFn: () => api.runListing(id!),
       enabled: !!runs.data && !!id && !first.some((r) => r.id === id),
       retry: false,
     })),

@@ -7,7 +7,10 @@ machines. It runs the same platform as the CLI, web client and MCP, so every
 capability works the same way in all three.
 
 Run it on one machine with the [Docker Compose stack](deploy-compose.md), or on
-a cluster with the [Kubernetes chart](deploy-kubernetes.md). The mechanisms
+a cluster with the [Kubernetes chart](deploy-kubernetes.md). Both run the same
+server with the same config: sign-in, roles, storage and limits do not depend
+on which you choose. Compose writes the config from `.env`, the chart from its
+values. The mechanisms
 behind this page are in [team server
 mechanisms](../internals/debugger-team-server.md).
 
@@ -221,6 +224,12 @@ Every request works in one project. With none named, it works in `default`.
 | HTTP API | The `project` query parameter, such as `GET /api/v1/runs?project=payments`. Naming it twice is refused. |
 | MCP | The `Linea-Project` header, or `?project=` on the MCP URL. `linea_list_projects` lists the projects the caller can use. |
 
+Lists of runs, suites, saved work and captures show only the named project's
+work. With no project named they show every project you may read, which is
+what the CLI and API do without `--project` or `?project=`. Opening a run or
+artifact by its ID works from any project you may read it in, so a link to it
+keeps working after you switch.
+
 A project you hold no permission in is refused as forbidden, as is reading
 another project's run or artifact by its ID.
 
@@ -410,8 +419,8 @@ instance. One instance at a time does housekeeping and run retention.
 | CLI waits | The connected CLI retries a report wait that gets a lost connection, or a 502, 503 or 504 without an operation error code, for up to 30 s of such failures, so it reaches another instance. |
 | Builder autoscaling | `--metrics-listen ADDR` serves the build queue's counts at `GET /metrics` on its own listener, without credentials ([scaling builders](deploy-kubernetes.md#scaling-builders)). |
 
-[Docker Compose](deploy-compose.md) runs two instances behind HAProxy for a
-local multi-instance stack; the [Kubernetes chart](deploy-kubernetes.md) runs
+[Docker Compose](deploy-compose.md) runs `LINEA_REPLICAS` instances (1) behind
+HAProxy on one machine; the [Kubernetes chart](deploy-kubernetes.md) runs
 `server.replicas` instances.
 
 ## Limits
@@ -527,6 +536,10 @@ linea logout --server https://debugger.example.com
   it with the sign-in, and uses it for every later `--server` command to that
   server, also when `$LINEA_TOKEN` supplies the token. A later `login` without
   `--ca` keeps the stored CA.
+- Against a server without CLI sign-in, `login` stores nothing. If the server
+  already signs requests in, as the Compose stack's proxy does, it says that no
+  sign-in is needed and exits 0; otherwise it asks for an API token in
+  `$LINEA_TOKEN` and exits 1.
 
 MCP clients and scripts may also present the provider's ID or access tokens
 (JWTs) as bearer tokens, accepted only for the configured audiences.

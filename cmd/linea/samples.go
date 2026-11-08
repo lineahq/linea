@@ -9,7 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"text/tabwriter"
+	"strings"
 
 	"github.com/lineahq/linea/samples"
 )
@@ -51,14 +51,7 @@ func samplesCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	} else {
 		var list []samples.Sample
 		if err = json.Unmarshal(raw, &list); err == nil {
-			tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "SAMPLE\tEXPECT\tTITLE")
-			for _, s := range list {
-				fmt.Fprintf(tw, "%s\t%s\t%s\n", s.ID, s.Expect, s.Title)
-			}
-			if err = tw.Flush(); err == nil {
-				_, err = fmt.Fprintln(stdout, "\nwrite one to disk with: linea samples get <sample>")
-			}
+			err = writeSamples(stdout, list)
 		}
 	}
 	if err != nil {
@@ -114,12 +107,55 @@ func samplesGetCmd(args []string, stdout, stderr io.Writer) int {
 			return fail(stderr, err)
 		}
 	}
-	config, scenario, input := paths[0], paths[2], paths[1]
-	fmt.Fprintf(stdout, "wrote %s, %s and %s\n\n%s\n%s\n\n", config, input, scenario, s.Title, s.Description)
-	fmt.Fprintf(stdout, "check its assertions:\n  linea test --config %s --scenario %s\n", config, scenario)
-	fmt.Fprintf(stdout, "see what every stage did:\n  linea run --config %s --scenario %s\n", config, scenario)
-	if s.Expect == "fail" {
-		fmt.Fprintln(stdout, "\nThis sample's assertions fail as shipped: find the bug and fix the configuration until test passes.")
+	if err := writeSampleGet(stdout, s, *dir, paths[0], paths[1], paths[2]); err != nil {
+		return fail(stderr, err)
 	}
 	return exitOK
+}
+
+// writeSamples prints one row per sample and how to write one to disk.
+func writeSamples(w io.Writer, list []samples.Sample) error {
+	t := newTextOut(w)
+	if len(list) == 0 {
+		t.none("samples")
+	}
+	rows := make([][]string, 0, len(list))
+	for _, s := range list {
+		rows = append(rows, []string{s.ID, s.Expect, s.Title})
+	}
+	t.table(0, []string{"sample", "expect", "title"}, rows)
+	if len(list) > 0 {
+		t.printf("\n")
+		t.line(0, "write one to disk with: linea samples get <sample>")
+	}
+	return t.err()
+}
+
+// writeSampleGet prints what samples get wrote and the commands that run it.
+func writeSampleGet(w io.Writer, s samples.Sample, dir, config, input, scenario string) error {
+	t := newTextOut(w)
+	t.line(0, "wrote sample %s to %s", s.ID, dir)
+	t.field(1, "title", s.Title)
+	t.field(1, "expect", s.Expect)
+	if description := strings.TrimSpace(s.Description); description != "" {
+		t.heading("description")
+		for _, l := range strings.Split(description, "\n") {
+			if l = strings.TrimRight(l, " \r"); l == "" {
+				t.printf("\n")
+				continue
+			}
+			t.line(1, "%s", l)
+		}
+	}
+	t.heading("files")
+	t.field(1, "config", config)
+	t.field(1, "input", input)
+	t.field(1, "scenario", scenario)
+	t.heading("next")
+	t.line(1, "check its assertions: linea test --config %s --scenario %s", config, scenario)
+	t.line(1, "see what every stage did: linea run --config %s --scenario %s", config, scenario)
+	if s.Expect == "fail" {
+		t.line(1, "this sample's assertions fail as shipped: find the bug and fix the configuration until test passes")
+	}
+	return t.err()
 }

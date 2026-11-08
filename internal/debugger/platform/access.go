@@ -94,6 +94,19 @@ func (s *Service) visible(caller Caller, perm authz.Permission, project string) 
 	return s.effective.Load().Allowed(identity(caller.Principal), perm, authz.Scope{Kind: authz.ScopeProject, ID: project})
 }
 
+// listIn is the list filter for perm in a list operation: with a project
+// named on the request, that project alone, once caller holds perm in it;
+// otherwise every project caller holds perm in (projects).
+func (s *Service) listIn(caller Caller, perm authz.Permission) ([]string, error) {
+	if caller.Project == "" {
+		return s.projects(caller, perm), nil
+	}
+	if err := s.authorizeIn(caller, perm, caller.Project); err != nil {
+		return nil, err
+	}
+	return []string{caller.Project}, nil
+}
+
 // projects is the list filter for perm: nil when the caller holds it in every
 // project, otherwise the projects it holds it in (possibly none).
 func (s *Service) projects(caller Caller, perm authz.Permission) []string {

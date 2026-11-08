@@ -246,6 +246,30 @@ Verified against debugger API 1 / Collector v0.162.0.
   says decisions are explained when the run ends. Details:
   [sampling.md](sampling.md).
 
+## Batches
+
+- A batch processor opens on its Batches tab (Changes shows no attribute
+  change for it), built from `report.batching` (matched by processor and
+  pipeline), in the record-view style of the Decisions tab:
+  - A summary (requests in, batches out, reasons) with the settings.
+  - Impact: a table of requests, items per request, resource blocks and the
+    added wait, into and out of the processor, plus batchers with
+    `metadata_keys`.
+  - Batchers: what `metadata_keys` does, and with it one row per batcher
+    (its metadata values, requests, items, batches and reasons).
+  - Batches: the shared record list, one row per batch with its reason,
+    batcher and wait, opening to the requests it carries and its resource
+    blocks. Filters by reason.
+  `batching.ts` builds the rows (`batching.test.ts`); styles are the
+  `.bt-*` table rules in `styles.css`. A normalized report has no times, so
+  the wait is left out. Details: [batching.md](batching.md).
+- A receiver's, exporter's or extension's Data view lists the records of all
+  its requests in one `SignalExplorer` per signal (`requests`,
+  `requestRows`), with a Request column and filter, so one batch is not read
+  as everything exported. Record refs stay those of their own request. The
+  tree and raw views show one request, picked by position ("Request 2 · 4
+  log records", `payloads.ts`).
+
 ## OTTL debugger and statement edits
 
 - **Where it lives.** For a transform stage input, the Telemetry tab opens on an
@@ -541,10 +565,12 @@ refreshes the usage and the run lists. Admin is not in the session's permission
 list, so the form is disabled for a role without `run.delete` (which an admin
 always holds) and a 403 reads "Only an admin may prune runs." The run overview
 lists stand-in components, components with stand-in values and unavailable
-references with their remedy in an open "Stand-ins" section (`runs/standins.ts`,
-tested), never in a collapsed disclosure; the pipeline graph marks `stand_in`
-nodes. Simulated endpoints are listed in an open "Simulated endpoints" section
-too. The graph shows every configured extension in a row above the pipelines,
+references with their remedy in a "Stand-ins" section of its collapsed Run
+details (`runs/standins.ts`, tested). The Overview's warn line states that
+stand-ins or mocks took part and opens that section, so the fact is never
+hidden. The pipeline graph marks `stand_in`
+nodes. Simulated endpoints are listed in a "Simulated endpoints" section of
+Run details. The graph shows every configured extension in a row above the pipelines,
 each with its execution mode (`laneModel`'s `extensions: 'running'` option shows
 only running ones); an extension opens on "Activity" (`ExtensionActivity.tsx`:
 its endpoints, lifecycle and log entries paged by 25, its metrics) and "Data"
@@ -557,8 +583,14 @@ whole-page "Compare runs" state (`/?run=<a>&compare=<b>`). It is reached from
 the runs drawer, the run list or "Compare with…". The earlier admitted run is
 the baseline (list order, since a pair shares its creation time). It reads the
 newest page of the run list and reads a compared run older than that page on its
-own (`runs/comparedRuns.ts`, merged newest first by `withRuns`), so only a
-deleted or unreadable run is reported as not in the list. It shows the platform
+own as the list shows it (`GET /runs/{id}/listing`, its summary without the
+report, which a large run makes hundreds of megabytes; `runs/comparedRuns.ts`,
+merged newest first by `withRuns`), so only a deleted or unreadable run is
+reported as not in the list. The comparison does not wait for the runs'
+reports: the side cards show the listing's scenario and input count until
+`useRunDetails` has read them, and the batching card appears then.
+While the server compares, `debugger/Working.tsx` shows a status with the
+elapsed time (`elapsedText` in `runFacts.ts`, tested). It shows the platform
 comparison: eligibility and every inconclusive reason in the open, exporter
 outputs, and one row per changed injected record that opens to where the record
 ended, "Follow in both" and its fields per exporter. Follow in both lines up the
@@ -568,6 +600,18 @@ the step `diverges_at` names, and links to follow the record in either run
 SHA-256, `runs/inputDiff.ts`, tested), an "Input differences" card names them
 and "Configuration diff" shows each as a unified diff, read from
 `GET /runs/{id}/inputs`. Its view model, `runs/compare.ts`, is pure and tested.
+A "Batching" card puts each batch processor (by processor and pipeline) of both
+runs side by side: its settings, a strip of the batches each run sent (width by
+items, tone by why the batch left) and the outcome rows, with changed rows
+marked. It reads each run's own report `batching`, not the platform comparison,
+so it shows even when the comparison is inconclusive (`runs/batchingCompare.ts`,
+tested).
+A "Recommendations" card lists the platform comparison's `recommendations`:
+each one resolved, new or persisting, with its rule title, the summary of
+the run that has it (the after run's for one that persists, with the change
+of its benefit count), its pipeline, components and subject, and links to
+open it in either run. It renders 25 rows a page (`runs/recommendationsCompare.ts`,
+tested; [recommendations.md](recommendations.md#comparison)).
 "Compare with…" (`CompareMenu`) also runs a finished run's input with another
 configuration, the open one or one of the five newest saved ones, beside the
 run's own recorded configuration: one `POST /comparisons` on the run's runtime
@@ -599,7 +643,10 @@ default" sets the team's default (below), which leaves the workspace selection
 as it is.
 
 - `/runtimes` (`RuntimesPage.tsx`, view model `runtimeList.ts`) lists built,
-  imported and catalog runtimes with the selected one beside the list. It
+  imported and catalog runtimes with the selected one beside the list. A team
+  server lists the built-in runtime too, served by its workers; that entry is
+  the built-in row (its workers chip and Workers fact), never a second row, and
+  `runtimeOptions` likewise offers built-in once. It
   pushes, imports and removes after an inline confirmation. "Build a runtime"
   opens the builder card (`RuntimeForm`) and "Import image" the import card;
   the builder card also shows the CLI line (`CLI_STEPS`:
@@ -749,10 +796,15 @@ empty strings and match confidence (only medium-confidence matches are called
 out). Matching totals include explicitly added/removed records; only the
 remainder is uncertain. Never invent counterparts for unmatched or buffered
 records, and never claim which statement dropped a record: the replay counts
-statements per input, not per record. A transform adds a "By" column and a
+statements per input, not per record. A filter processor whose replay is
+verified (`replay_verified`) is the exception: a dropped row names the
+condition that removed it (`removedBy` in `filtering.ts`), otherwise it says
+"Removed by this processor". A transform adds a "By" column and a
 statements key from the OTTL replay; editing stays in the Statements tab
 (`OTTLPanel`, whose edits are server candidates; `candidates.ts` words their
-failures), which the Changes view links to. A buffered (deferred) processor
+failures), which the Changes view links to. A statement's details name each
+record from the stage input (body, span or metric name, `recordNames`) over its
+1-based position, never by its raw ref alone, and open it on Changes. A buffered (deferred) processor
 input, as with batch or tail_sampling, shows the stage's reconciliation instead:
 all buffered inputs against all later emissions, concatenated in event order by
 `deferred.ts` (tested), whose refs map back to their own events for following
@@ -785,20 +837,115 @@ covered by its tests and `panes.test.ts`. The panes are the left pane (inputs,
 or the run's whole-run views), the graph and the bottom pane (the selected
 component, or the run's progress). The product UI dropped pane expand and
 restore. `inspectorTabs.ts` defines the information architecture. The whole-run
-Overview, Records (record journeys) and Timeline (`INVESTIGATE_TABS`) live in
+Overview, Assertions, Records (record journeys), Timeline and Recommendations (`INVESTIGATE_TABS`) live in
 the Investigate pane (`debugger/InvestigatePane.tsx`). A failed run, or one
 whose execution ended partial or failed, adds a Collector log disclosure to the
 Overview (`RunLogPanel.tsx`; `keepsRunLog` and `runLogView` in `runLog.ts`,
 tested) from `GET /runs/{id}/log`. It opens when the log has lines and shows the
-server's redacted text unchanged. A done run's Overview lists the assertion
-checks recorded beside it ("Recorded checks", `RecordedChecks.tsx`,
-`debugger/evaluations.ts`, tested; `GET /runs/{id}/evaluations`), such as an
-agent's `linea_evaluate_assertions`, each opening to its results; the web's own
-checks are not recorded, and nothing shows when there are none. Component views
+server's redacted text unchanged.
+
+The Overview (`RunOverview.tsx`) is lean. In order it holds the outcome facets,
+the run's error callouts with the Collector log, the evidence-limit warning
+callout (never collapsed or hidden), up to three compact `od-card` summaries
+(each a header row of label and short status, and a link button to its tab),
+one warn line and a collapsed "Run details" disclosure.
+**Assertions** (`assertionsCard` in `overview.ts`, tested) shows the status
+("1 of 2 failed"), one line per assertion that did not pass (name and target,
+never the evidence; failed and errored first, then inconclusive, which is never
+counted as a pass), "All N passed" when all passed, or "No assertions" with the
+sentence that behavior was not checked; "Open assertions" selects the
+Assertions tab. **Key findings** lists each finding as an icon, its title and
+its actions as inline link buttons, with one muted footer line "Observed in run
+<name>" instead of per-finding provenance and detail text; it is omitted
+without findings and while the run is live. **Recommendations** shows the count
+and `recommendationHint` (how many concern data at risk and how many this input left untested), then the Recommendations
+tab's sections in its order, each a muted heading ("Holds for any input",
+"Depends on this input", "Not tested by this input";
+`recommendationKindGroups` in `recommendations.ts`, tested) over one row per
+rule in it (`recommendationKinds`, tested): its kind chip, the rule's title and
+"×N" when the rule fired more than once, data at risk first; "Open
+recommendations" selects the Recommendations tab; it is omitted when there are
+none and while live. The warn line (`notRealLine`, tested) appears when a
+mocked component, stand-in, unsupported component or component with no recorded
+output exists ("2 mocked components, 1 stand-in · checks through stand-ins are
+inconclusive"); it is a button that opens and scrolls to Run details. Captured
+exporters and simulated extensions are how every run works and are not counted.
+"Run details" is one collapsed `detail-disclosure` holding What was recorded,
+Mocks, stand-ins and missing references (`runs/standins.ts`, tested), Simulated
+endpoints, Inputs and outputs, Notes and the run's Sources with runtime and
+settle (`RunInputsPanel`).
+
+The Assertions tab (`debugger/AssertionsTab.tsx`; its count is on the tab and
+styled as failing when an assertion failed or errored) holds what each assertion
+checked with its outcome and evidence, the "No assertions" sentence, and the
+assertion checks recorded beside a done run ("Recorded checks",
+`RecordedChecks.tsx`, `debugger/evaluations.ts`, tested;
+`GET /runs/{id}/evaluations`), such as an agent's `linea_evaluate_assertions`,
+each opening to its results; the web's own checks are not recorded, and nothing
+shows when there are none. A live run says assertions are available when it
+finishes. The
+Recommendations tab (`debugger/RecommendationsTab.tsx`, its count on the tab;
+`debugger/recommendations.ts`, tested) lists them as compact cards that keep
+all the information, in three sections by the report's `holds`
+(`recommendationGroups`, tested; `holdsOf` reads a report without the field
+as `any_input` only when `static`): "Holds for any input", "Depends on this
+input", and "Not tested by this input" for `untested` recommendations, which
+show their condition, statement or policy and no change; report order within
+each, empty sections left out. Per recommendation: its kind, a title from its rule and a
+chip of what the change does to the exported data (`effect`, from the report's
+`output`: same output, regroups only, or changes output; a verification's
+confidence settles it, and the chip's tooltip says it in full), the server's
+summary, the change in brief (`changeText`: a processor order as the moves
+from the pipeline's current order, `moves`, with the whole order listed when
+there are more than two; a removal as the statement or condition itself,
+which the summary locates; `changeTitle` says it in full as a tooltip), one
+short line of what it would save (`savesText`) with its share of the run's
+total and a small bar (`share`; its tooltip names whose total through
+`totalText`: the condition or statement evaluations of the component, the
+record passes through the processors of the pipeline), its limits and
+coverage, and on one row a
+link to each component it names and what it rests on. It words them only:
+it adds, ranks or hides none, and a change is never applied to the draft.
+A recommendation with a change the server can run (`verifiable`) has "Verify on this
+input"; a removal of something that changed nothing here (`checksOnly`) has
+"Check it runs on this input" instead, since its output cannot differ on this
+input and the run only shows the edited configuration loads and runs
+(`VerifyRecommendation.tsx`; `verificationView` in
+`recommendations.ts`, tested), disabled without `run.submit`. It is on
+demand, one more run: `POST /runs/{id}/recommendations/{n}/verify` runs the
+change as a candidate on the run's inputs and waits. Meanwhile a status below
+the button shows the elapsed time against the original run's duration, with a
+bar capped at 95% (`verifyProgress` in `recommendations.ts`, tested); the server
+reports no progress, so it is an estimate. The card then shows the
+server's outcome (same output, different output, inconclusive with the
+comparison's reasons, or the candidate's failure), a table of what it
+measured on this input, now and with the change (`measuredViews` in
+`recommendations.ts`, tested: the server's `measured` counts the change
+moved, with their relative change, less work in the pass colour, then always the records the
+exporters received from the comparison, a change there in the warning
+colour), each scenario assertion
+whose outcome the change changed, saying so in the outcome when one that
+passed no longer passes, the provenance the
+verification earns, and a link comparing the candidate with the run
+(`/?run=<candidate>&compare=<run>`). The result lives in the card only;
+reopening the run shows the rule's own confidence.
+Component views
 live in the bottom pane (`debugger/ComponentPane.tsx`; before a run,
 `PREPARE_TABS` explains how the component will run and shows its configuration).
 Compare runs is its own state. Processors open directly on Changes, with
-optional Statements for transform; tail_sampling opens on Decisions
+optional Statements for transform; batch opens on Batches
+(`BatchingPanel.tsx`, the step-by-step story of requests and batches; logic in `batching.ts`);
+groupbyattrs opens on Grouping (`GroupingPanel.tsx`, the resource blocks in
+beside the blocks out with the attributes moved up from the records and each
+record linked to its path; it reads `report.grouping`, named and summarized
+in `grouping.ts`); filter opens on Filter (`FilteringPanel.tsx`: with several requests, each
+condition's counts over the whole run; then per request each condition with
+its counts and whether it removed nothing, both tables ending with an "All
+conditions" row of their sums (`conditionSum`, the total a filter
+recommendation's share is part of), without listing records, which
+Changes shows; it reads `report.filtering`, summed and summarized in
+`filtering.ts`);
+tail_sampling opens on Decisions
 (`SamplingPanel.tsx`, a trace-per-row record list whose opened row is the ladder
 of policies; logic in `sampling.ts`) and a Configuration tab; extensions open on
 Activity, then Data; receiver/exporter/connector views retain Data, with Routing
@@ -821,7 +968,10 @@ inline input and no assertions as a quick run (its mocks and settings sent
 as `setup_yaml`), anything else as a scenario, and any input can run alone.
 `workspace/migrate.ts` (tested) folds separate quick drafts into the
 document. `input/InputsPanel.tsx` edits inputs as cards started from payload
-templates (`input/templates.ts`), files or pasted JSON.
+templates (`input/templates.ts`), files or pasted JSON. Each card edits its
+request headers (`HeadersEditor.tsx`, `setHeaders`) and shows the scenario's
+`defaults.headers` it also sends, which Run settings edits; any valid header
+name, checked as the scenario check does (`headerProblem`).
 `config/ConfigTools.tsx` holds the configuration start screen, templates
 and "+ Insert component"; `config/templates.ts` (tested) inserts a component
 snippet into the chosen pipelines through `yaml` nodes, keeping comments, and
@@ -1030,7 +1180,9 @@ Projects:
   read from `?project=` in the URL, then the `linea.project` localStorage key
   (per-viewer; reads and writes are guarded), else `default`
   (`chooseProject`). Switching resets every query except `session` and
-  `projects`, so no page shows another project's data.
+  `projects`, so no page shows another project's data. That includes the
+  first choice after load, even of `default`: until then requests name no
+  project, and a list without one holds every project the session may read.
 - `/saved/library` (`saved/LibraryPage.tsx`) lists `GET /library`: the items
   shared with the work project, or for `library.publish` holders the whole
   library ("Show"). "Copy into project" copies an item
@@ -1131,8 +1283,16 @@ through the existing records endpoint, 100 per page, client-side (no new
 shape). Selections over 200 records or 1 MiB warn and offer a sample of 100;
 the fixture limits still apply. A finished capture with nothing selected
 shows "Next steps": it is already stored, nothing to save, and offers a sample
-or all records. "Use records" defaults to New scenario (`newScenarioPatch`),
-which replaces the open scenario only after `useReplaceDrafts` confirms.
+or all records. "Use records" makes one input per signal (`mergeFixtures`
+in `inputs.ts` concatenates the streams' OTLP resource lists; every stream
+keeps its `capture_origins` entry). It defaults to New configuration and
+scenario: `starterConfig` (OTLP receiver, one pipeline per captured signal,
+debug exporter) with the records on `otlp`, no receiver choice, applied as
+one `newPatch` after `useReplaceDrafts` confirms for both drafts. "Add to the
+open scenario" asks for one receiver per signal; a signal no receiver
+accepts offers "Add a <signal> pipeline", which edits the configuration
+draft through `addSignalPipeline` (reusing or adding an `otlp` receiver and
+a `debug` exporter) only when the user clicks it.
 The capture aside (`.capture-aside`) is fixed-width and never scrolls
 sideways.
 
@@ -1153,8 +1313,13 @@ version or removal starts a rollout too), Rollouts and a rollout's page
 (waves, policy, targets by outcome, and only the controls the state allows;
 roll back and cancel ask first), Events (a feed that reads from fleet's last
 cursor every 5 seconds while visible, newest first, at most 500) and Config
-bisect. `FleetGate` explains a missing fleet connection or config
-management. The view model `fleetView.ts` (names, chips, group and rollout
+bisect, and Connection (`/fleet/connection`: `GET /api/v1/fleet/connection`
+as a checks table with a verdict, "Test connection" to run it again, which also
+refreshes the overview, and without a fleet a setup view naming the Helm
+value, the Compose script and the server flags; the connection is deployment
+configuration, so the page sets nothing). `FleetGate` explains a missing fleet
+connection or config management and links to Connection. `connection.ts`
+(step titles, chips, verdict) is pure and tested. The view model `fleetView.ts` (names, chips, group and rollout
 forms, tallies, event words, refusal hints) is pure and tested; the pages are
 tested in `fleet/pages/FleetPages.test.ts`. Writes need the server's fleet
 credential to have fleet's admin role; fleet's own check is the only gate.

@@ -34,7 +34,7 @@ func TestPostgresLifecycle(t *testing.T) {
 	ctx := context.Background()
 	// Seed the unmodified S2 schema and a legacy bound credential, then exercise
 	// the actual upgrade. Fresh installation is covered by the Docker smoke.
-	legacy, err := auth.Generate(auth.CredentialRequest{ID: "00000000000000000000000000000009", Name: "legacy-bound", Role: "agent", ExpiresAt: time.Now().Add(time.Hour)}, time.Now())
+	legacy, err := auth.Generate(auth.CredentialRequest{ID: "00000000000000000000000000000009", Name: "legacy-bound", Role: "agent", ExpiresAt: new(time.Now().Add(time.Hour))}, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,6 +69,9 @@ func TestPostgresLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal("bootstrap:", err)
 	}
+	if issued.Credential.ExpiresAt != nil {
+		t.Fatal("bootstrap administrator expires")
+	}
 	if _, err := Bootstrap(ctx, url, "integration-fleet", "another-admin"); !errors.Is(err, fleet.ErrConflict) {
 		t.Fatal("bootstrap duplicated active administrator")
 	}
@@ -83,14 +86,14 @@ func TestPostgresLifecycle(t *testing.T) {
 	if err != nil || other.ReplicaID() == s.ReplicaID() {
 		t.Fatal("second replica was refused:", err)
 	}
-	pending := sha256.Sum256([]byte(actingMigration))
-	if _, err := s.pool.Exec(ctx, "DELETE FROM fleet.schema_version WHERE version=10"); err != nil {
+	pending := sha256.Sum256([]byte(credentialExpiryMigration))
+	if _, err := s.pool.Exec(ctx, "DELETE FROM fleet.schema_version WHERE version=11"); err != nil {
 		t.Fatal(err)
 	}
 	if err := Migrate(ctx, url); !errors.Is(err, ErrReplicasActive) {
 		t.Fatal("migration ran while replicas were alive:", err)
 	}
-	if _, err := s.pool.Exec(ctx, "INSERT INTO fleet.schema_version(version,checksum) VALUES(10,$1)", hex.EncodeToString(pending[:])); err != nil {
+	if _, err := s.pool.Exec(ctx, "INSERT INTO fleet.schema_version(version,checksum) VALUES(11,$1)", hex.EncodeToString(pending[:])); err != nil {
 		t.Fatal(err)
 	}
 	if err := other.StopAgents(ctx); err != nil {
@@ -154,7 +157,7 @@ func TestPostgresLifecycle(t *testing.T) {
 	admin := issued.Token
 	issue := func(id, role string) auth.Issued {
 		t.Helper()
-		req := auth.CredentialRequest{ID: id, Name: role + "-fixture", Role: role, ExpiresAt: time.Now().Add(time.Hour)}
+		req := auth.CredentialRequest{ID: id, Name: role + "-fixture", Role: role, ExpiresAt: new(time.Now().Add(time.Hour))}
 		body, _ := json.Marshal(req)
 		data := request("POST", "/api/v1/credentials", admin, string(body), "", 201)
 		var response auth.Issued
@@ -167,6 +170,20 @@ func TestPostgresLifecycle(t *testing.T) {
 		return response
 	}
 	reader := issue("00000000000000000000000000000011", "reader")
+	if stored, err := s.Credential(ctx, issued.Credential.ID); err != nil || stored.ExpiresAt != nil || !stored.Active(time.Now()) {
+		t.Fatal("stored bootstrap administrator has an expiry or is inactive")
+	}
+	request("POST", "/api/v1/credentials", admin, `{"id":"000000000000000000000000000000a1","name":"service","role":"reader"}`, "", 201)
+	request("POST", "/api/v1/credentials", admin, `{"id":"000000000000000000000000000000a2","name":"agent","role":"agent"}`, "", 400)
+	if raw, err := pgx.Connect(ctx, url); err != nil {
+		t.Fatal(err)
+	} else {
+		_, err := raw.Exec(ctx, "INSERT INTO fleet.credentials(id,name,role,token_hash,created_at) VALUES($1,'raw-agent','agent',$2,now())", "000000000000000000000000000000a3", make([]byte, 32))
+		_ = raw.Close(ctx)
+		if err == nil {
+			t.Fatal("database accepted an agent credential without expiry")
+		}
+	}
 	lifecycle, err := s.SetPluginLifecycle(ctx, issued.Credential.ID, fleet.PluginLifecycle{ID: "inventory-example", Desired: "draining"}, 0)
 	if err != nil || lifecycle.Revision != 1 {
 		t.Fatal("plugin lifecycle create failed")
@@ -210,7 +227,7 @@ func TestPostgresLifecycle(t *testing.T) {
 	if bytes.Contains(metadata, []byte("of1_")) || bytes.Contains(metadata, []byte("token_hash")) || bytes.Contains(metadata, []byte(`"agent_id"`)) {
 		t.Fatal("credential metadata exposed secrets or obsolete UID binding")
 	}
-	duplicate, _ := json.Marshal(auth.CredentialRequest{ID: reader.Credential.ID, Name: "duplicate", Role: "reader", ExpiresAt: time.Now().Add(time.Hour)})
+	duplicate, _ := json.Marshal(auth.CredentialRequest{ID: reader.Credential.ID, Name: "duplicate", Role: "reader", ExpiresAt: new(time.Now().Add(time.Hour))})
 	request("POST", "/api/v1/credentials", admin, string(duplicate), "", 409)
 
 	g, err := gateway.NewAuthorized(s, service, nil, 5, 4096)
@@ -473,7 +490,7 @@ func TestPostgresLifecycle(t *testing.T) {
 	}
 	// An expired credential is rejected even if its hash is otherwise valid.
 	past := time.Now().Add(-time.Hour)
-	expired, _ := auth.Generate(auth.CredentialRequest{ID: "00000000000000000000000000000014", Name: "expired", Role: "reader", ExpiresAt: past.Add(time.Minute)}, past)
+	expired, _ := auth.Generate(auth.CredentialRequest{ID: "00000000000000000000000000000014", Name: "expired", Role: "reader", ExpiresAt: new(past.Add(time.Minute))}, past)
 	if err := s.InsertCredential(ctx, issued.Credential.ID, expired.Credential); err != nil {
 		t.Fatal(err)
 	}
@@ -509,7 +526,7 @@ func TestPostgresLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer maintenance.Close(ctx)
-	if _, err := maintenance.Exec(ctx, "UPDATE fleet.schema_version SET version=11 WHERE version=10"); err != nil {
+	if _, err := maintenance.Exec(ctx, "UPDATE fleet.schema_version SET version=12 WHERE version=11"); err != nil {
 		t.Fatal(err)
 	}
 	if err := Migrate(ctx, url); !errors.Is(err, fleet.ErrConflict) {
@@ -521,13 +538,13 @@ func TestPostgresLifecycle(t *testing.T) {
 		}
 		t.Fatal("server accepted a newer schema")
 	}
-	if _, err := maintenance.Exec(ctx, "UPDATE fleet.schema_version SET version=10,checksum='tampered' WHERE version=11"); err != nil {
+	if _, err := maintenance.Exec(ctx, "UPDATE fleet.schema_version SET version=11,checksum='tampered' WHERE version=12"); err != nil {
 		t.Fatal(err)
 	}
 	if err := Migrate(ctx, url); !errors.Is(err, fleet.ErrConflict) {
 		t.Fatal("migration accepted a modified checksum")
 	}
-	if _, err := maintenance.Exec(ctx, "UPDATE fleet.schema_version SET checksum=$1 WHERE version=10", hex.EncodeToString(pending[:])); err != nil {
+	if _, err := maintenance.Exec(ctx, "UPDATE fleet.schema_version SET checksum=$1 WHERE version=11", hex.EncodeToString(pending[:])); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := maintenance.Exec(ctx, "UPDATE fleet.schema_version SET checksum='tampered' WHERE version=1"); err != nil {

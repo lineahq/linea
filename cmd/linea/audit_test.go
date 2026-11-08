@@ -23,7 +23,7 @@ func TestAuditPagesTheServerLog(t *testing.T) {
 		t.Fatalf("json page = %s, %v", raw, err)
 	}
 	code, out, stderr := runCLI(t, "audit", "--server", server, "--limit", "1")
-	if code != exitOK || !strings.HasPrefix(out, "TIME") || !strings.Contains(out, "ListAuditEvents") || !strings.Contains(out, "more: --cursor ") {
+	if code != exitOK || !strings.HasPrefix(out, "TIME") || !strings.Contains(out, "ListAuditEvents") || !strings.Contains(out, "next page: --cursor ") {
 		t.Fatalf("text: exit %d, %s%s", code, out, stderr)
 	}
 	if code, _, stderr := runCLI(t, "audit", "--server", server, "--since", "yesterday"); code != exitError || !strings.Contains(stderr, "RFC 3339") {

@@ -41,7 +41,7 @@ func TestVersionShowsACustomBuild(t *testing.T) {
 	t.Cleanup(func() { customBuild = old })
 	stdout.Reset()
 	if code := run(context.Background(), []string{"version"}, &stdout, &stderr); code != exitOK ||
-		!strings.Contains(stdout.String(), "custom build with linea build, unverified Collector release\n  source example.com/proc from /src/proc at abc\ncomponents:\n") {
+		!strings.Contains(stdout.String(), "  build: custom, made with linea build\n  collector release: unverified\n  source: example.com/proc from /src/proc at abc\n\nCOMPONENTS\n  MODULE") {
 		t.Fatalf("custom version text: exit %d\n%s", code, stdout.String())
 	}
 	stdout.Reset()

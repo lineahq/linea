@@ -88,7 +88,12 @@ component list.*
 
 ## Turn it on
 
-The overlay
+With the debugger's deployments, set `LINEA_FLEET_CONFIG_MANAGEMENT=true`
+for the Compose stack with fleet
+([settings](../debugger/deploy-compose.md#fleet-and-live-capture)) or
+`fleet.deploy.configManagement: true` in the Helm chart
+([Fleet and live capture](../debugger/deploy-kubernetes.md#fleet-and-live-capture)).
+For fleet's own Compose files, the overlay
 [`compose.supervised.yaml`](../../deploy/compose/fleet/compose.supervised.yaml)
 adds `--config-management` to fleet and one example supervised Collector: the
 official `opentelemetry-collector-opampsupervisor` image with the official

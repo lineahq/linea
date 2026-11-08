@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Report, Run } from '../api/types';
 import {
+  elapsedText,
   assertionFact, assertionOutcomeFact, comparedAssertions, comparedEvidence, comparedExecution, evidenceFact, executionFact, filterRuns, inputCount,
   modesOf, NO_FILTER, runFacts, runLabel, runtimesOf, runtimeText, scenariosOf, serverFilter, sourceText, toggleSelection, whenText,
 } from './runFacts';
@@ -129,5 +130,14 @@ describe('the sides of a comparison', () => {
   it('words one assertion in each run, absent when the run lacks it', () => {
     expect(['pass', 'fail', 'inconclusive', undefined].map((o) => assertionOutcomeFact(o).text)).toEqual(['Passed', 'Failed', 'Inconclusive', 'Absent']);
     expect(assertionOutcomeFact('fail').tone).toBe('fail');
+  });
+});
+
+describe('elapsedText', () => {
+  it('counts seconds, then minutes and seconds', () => {
+    expect(elapsedText(0)).toBe('0 s');
+    expect(elapsedText(4_400)).toBe('4 s');
+    expect(elapsedText(59_400)).toBe('59 s');
+    expect(elapsedText(75_000)).toBe('1 min 15 s');
   });
 });

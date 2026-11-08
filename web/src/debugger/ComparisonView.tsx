@@ -13,6 +13,10 @@ import {
   assertionOutcomes, COMPARE_FILTERS, compareCandidates, compareItems, comparePair, fateText, finished, outputRows, summaryCards, verdict,
 } from '../runs/compare';
 import { differingInputs } from '../runs/inputDiff';
+import { batchingChanges, batchingHeadline, type BatchCell, type BatchingChange } from '../runs/batchingCompare';
+import { recommendationChanges, type RecommendationChangesView } from '../runs/recommendationsCompare';
+import { pageOf } from '../inspect/pages';
+import { itemNoun, TRIGGER_LABELS, type Trigger } from '../inspect/batching';
 import { followRows } from '../runs/followBoth';
 import { useComparedRuns } from '../runs/comparedRuns';
 import { FactChip } from './FactChip';
@@ -21,6 +25,7 @@ import {
   type ComparedRun,
 } from './runFacts';
 import { useRunDetails } from './useRunDetails';
+import { Working } from './Working';
 
 interface Props {
   /** The selected run (`?run=`). */
@@ -78,7 +83,7 @@ export function ComparisonView({ runId, compareId, onChangeRuns }: Props) {
   } else if (!finished(first) || !finished(second)) {
     body = callout('info', 'A compared run has not finished', 'Compare it once it ends; both runs are compared from their recorded evidence.');
   } else if (comparison.error) body = callout('fail', 'Could not compare the runs', comparison.error.message);
-  else if (!comparison.data) body = <div className="od-empty" role="status"><div className="od-empty__body">Comparing…</div></div>;
+  else if (!comparison.data) body = <Working text="Comparing the two runs on the server" detail="Each injected record is followed through both runs and what the exporters received is compared, so large runs take a while." />;
   else body = <Comparison c={comparison.data} runs={list} />;
 
   return (
@@ -242,6 +247,10 @@ function Comparison({ c, runs }: { c: RunComparison; runs: Run[] }) {
         ) : <div className="od-card__body od-muted" style={{ fontSize: 12.5 }}>Neither run delivered any output.</div>}
       </section>
 
+      <BatchingComparison changes={batchingChanges(sides.runs.get(c.before.id)?.report?.batching, sides.runs.get(c.after.id)?.report?.batching)} label={label} />
+
+      <RecommendationsComparison view={recommendationChanges(c)} c={c} label={label} />
+
       {open ? <Details c={c} label={label} /> : (
         <section className="od-card" style={{ opacity: 0.6 }} aria-label="Record changes">
           <div className="od-card__head"><h2 className="od-card__title" style={{ margin: 0 }}>Record changes</h2><span className="od-chip od-chip--warn"><Icon name="triangle-alert" size={12} />Not conclusive</span></div>
@@ -253,16 +262,140 @@ function Comparison({ c, runs }: { c: RunComparison; runs: Run[] }) {
   );
 }
 
+/**
+ * RecommendationsComparison lists which recommendations the change resolved,
+ * which are new in the candidate and which persist, from the platform
+ * comparison. It words them only: it never changes the comparison's outcome.
+ */
+function RecommendationsComparison({ view, c, label }: { view?: RecommendationChangesView; c: RunComparison; label: { before: string; after: string } }) {
+  const [page, setPage] = useState(0);
+  if (!view) return null;
+  const runIds = { before: c.before.id, after: c.after.id };
+  const p = pageOf(view.rows, page);
+  return (
+    <section className="od-card" style={{ overflow: 'hidden' }} aria-label="Recommendations">
+      <div className="od-card__head">
+        <h2 className="od-card__title" style={{ margin: 0 }}>Recommendations</h2>
+        <span className="od-subtle" style={{ fontSize: 12 }}>{view.summary}</span>
+      </div>
+      {view.rows.length ? (
+        <table className="od-table">
+          <thead><tr><th>Change</th><th>Recommendation</th><th>Where</th><th aria-label="Open" /></tr></thead>
+          <tbody>
+            {p.shown.map((r) => (
+              <tr key={r.key}>
+                <td><span className={`od-chip ${r.tone === 'neutral' ? 'od-chip--plain' : `od-chip--${r.tone}`}`}>{r.statusLabel}</span></td>
+                <td>
+                  <div className="t-body-strong" title={r.rule}>{r.title}</div>
+                  <div style={{ fontSize: 12.5 }}>{r.summary}</div>
+                  {r.benefitChange && <div className="od-muted" style={{ fontSize: 12.5 }}>{r.benefitChange}</div>}
+                </td>
+                <td style={{ fontSize: 12.5 }}>
+                  {r.pipeline && <div className="od-muted">pipeline <code>{r.pipeline}</code></div>}
+                  {r.components.map((x) => <div key={x}><code>{x}</code></div>)}
+                  {r.subject && <div><code>{r.subject}</code></div>}
+                </td>
+                <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  {r.runs.map((side) => (
+                    <Link key={side} to="/" search={{ run: runIds[side] }} className="od-btn od-btn--link od-btn--sm"><span>Open in {label[side]}</span></Link>
+                  ))}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+      {p.pages > 1 && (
+        <div className="od-pager">
+          <span>{`${p.start + 1}–${p.start + p.shown.length} of ${view.rows.length}`}</span>
+          <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+            <button type="button" className="od-btn od-btn--ghost od-btn--sm" disabled={p.page === 0} onClick={() => setPage(p.page - 1)}>Previous recommendations</button>
+            <span>Page {p.page + 1} of {p.pages}</span>
+            <button type="button" className="od-btn od-btn--ghost od-btn--sm" disabled={p.page + 1 >= p.pages} onClick={() => setPage(p.page + 1)}>Next recommendations</button>
+          </span>
+        </div>
+      )}
+    </section>
+  );
+}
+
+const BATCH_TONES: Record<Trigger, string> = { size: 'keep', timeout: 'mod', shutdown: 'none', immediate: 'none', evicted: 'none' };
+
+/**
+ * BatchingComparison puts each batch processor's settings and batches in both
+ * runs side by side, from each run's own report, so a changed send_batch_size,
+ * timeout or metadata_keys shows what it did to the batches.
+ */
+function BatchingComparison({ changes, label }: { changes: BatchingChange[]; label: { before: string; after: string } }) {
+  if (!changes.length) return null;
+  return (
+    <section className="od-card" style={{ overflow: 'hidden' }} aria-label="Batching">
+      <div className="od-card__head">
+        <h2 className="od-card__title" style={{ margin: 0 }}>Batching</h2>
+        <span className="od-subtle" style={{ fontSize: 12 }}>each batch processor's settings and the batches it sent</span>
+      </div>
+      {changes.map((ch) => (
+        <div key={ch.key} className="od-card__body cmp-batching" aria-label={`Batching of ${ch.processor}${ch.pipeline ? ` in ${ch.pipeline}` : ''}`}>
+          <div className="t-body-strong">
+            <span className="mono">{ch.processor}</span>{ch.pipeline && <span className="od-subtle" style={{ fontWeight: 400 }}> · pipeline {ch.pipeline}</span>}
+          </div>
+          <div className="od-muted" style={{ fontSize: 12.5, margin: '2px 0 8px' }}>{batchingHeadline(ch)}</div>
+          <div className="cmp-batch-strips">
+            <BatchStrip name={`Baseline ${label.before}`} cells={ch.batches.before} signal={ch.signal} />
+            <BatchStrip name={`Candidate ${label.after}`} cells={ch.batches.after} signal={ch.signal} />
+          </div>
+          <table className="od-table">
+            <thead><tr><th /><th className="num">Baseline {label.before}</th><th className="num">Candidate {label.after}</th></tr></thead>
+            <tbody>
+              {[...ch.settings.map((r) => ({ ...r, setting: true })), ...ch.outcome.map((r) => ({ ...r, setting: false }))].map((r) => (
+                <tr key={r.label} className={r.changed ? 'cmp-changed' : undefined}>
+                  <td className={r.setting ? 'mono' : undefined}>{r.label}</td>
+                  <td className="num">{r.before}</td>
+                  <td className="num">{r.after}{r.changed && <span className="od-delta od-delta--same"> changed</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+/** BatchStrip draws one run's batches in order, each as wide as what it carried and toned by why it left. */
+function BatchStrip({ name, cells, signal }: { name: string; cells: BatchCell[]; signal: string }) {
+  return (
+    <div className="cmp-batch-strip">
+      <span className="od-subtle cmp-batch-strip__name">{name}</span>
+      {cells.length ? (
+        <ol className="cmp-batch-strip__cells" aria-label={`${name}: ${cells.length} batches`}>
+          {cells.map((b, i) => {
+            const text = `Batch ${i + 1}: ${itemNoun(signal, b.items)}, ${TRIGGER_LABELS[b.trigger]}${b.batcher ? `, ${b.batcher}` : ''}`;
+            return (
+              <li key={i} className={`rv-glyph-${BATCH_TONES[b.trigger]}`} style={{ flexGrow: b.items || 1 }} title={text} aria-label={text}>
+                {b.items}
+              </li>
+            );
+          })}
+        </ol>
+      ) : <span className="od-subtle" style={{ fontSize: 12 }}>no batches</span>}
+    </div>
+  );
+}
+
 /** Side is one identity card: role, the run, its three separate facts, and where and when it ran. */
 function Side({ role, info, run, outcomes }: { role: string; info: ComparedRun; run?: Run; outcomes: string[] }) {
-  const meta = [run && whenText(run.created), sourceText(run?.report), runtimeLabel(info.runtime), info.mode, inputCount(run?.report) !== undefined && `${inputCount(run?.report)} inputs`]
+  // The run list's entry until the run's report is read (useRunDetails).
+  const inputs = inputCount(run?.report) ?? run?.summary?.injected;
+  const scenario = run?.report?.scenario ?? run?.summary?.scenario;
+  const meta = [run && whenText(run.created), sourceText(run?.report), runtimeLabel(info.runtime), info.mode, inputs !== undefined && `${inputs} inputs`]
     .filter(Boolean).join(' · ');
   return (
     <div className="od-cmp__side">
       <span className="od-cmp__role">{role}</span>
       <div className="od-ident">
         <span className="od-ident__marker od-ident__marker--run"><Icon name="run-marker" size={14} />Run {runLabel(info.id)}</span>
-        {run?.report?.scenario && <span className="od-ident__name">{run.report.scenario}</span>}
+        {scenario && <span className="od-ident__name">{scenario}</span>}
         <span style={{ flex: 1 }} />
         <Link to="/" search={{ run: info.id }} className="od-btn od-btn--link od-btn--sm"><span>Open run</span><Icon name="arrow-right" size={14} /></Link>
       </div>

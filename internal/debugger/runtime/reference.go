@@ -127,6 +127,12 @@ func RunReference(ctx context.Context, opts Options) (*runresult.Result, error) 
 			uris = append(uris, override("receivers", id, "protocols::http::endpoint", httpAddr))
 		}
 		grpcAddrs[id] = grpcAddr
+		// The reference run sends over gRPC, which it adds when only HTTP
+		// is configured; gRPC then keeps headers as the HTTP protocol
+		// would, as the instrumented run decides (includesMetadata).
+		if !cfg.Protocols.GRPC.HasValue() && cfg.Protocols.HTTP.HasValue() && cfg.Protocols.HTTP.Get().ServerConfig.IncludeMetadata {
+			uris = append(uris, override("receivers", id, "protocols::grpc::include_metadata", "true"))
+		}
 	}
 
 	sinks := map[string]*sink{}
@@ -213,7 +219,7 @@ func RunReference(ctx context.Context, opts Options) (*runresult.Result, error) 
 				client := t.client
 				dialed = func(local net.Addr) { peers.set(local, client) }
 			}
-			if err := sendOTLP(ctx, addr, t.payload.Clone(), dialed); err != nil {
+			if err := sendOTLP(t.outgoing(ctx), addr, t.payload.Clone(), dialed); err != nil {
 				inputs[i].Error = err.Error()
 			}
 		}

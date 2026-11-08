@@ -200,93 +200,137 @@ func connectedComparison(before, after, fixture, scenario, receiver, runtimeName
 // writeComparison prints the comparison as plain text; --format markdown
 // renders the same facts for a review.
 func writeComparison(w io.Writer, c *platform.Comparison) error {
-	var errs []error
-	printf := func(format string, a ...any) {
-		_, err := fmt.Fprintf(w, format, a...)
-		errs = append(errs, err)
-	}
-	printf("comparison: %s\n", c.Outcome)
+	t := newTextOut(w)
+	t.line(0, "%s  before %s -> after %s", t.status(string(c.Outcome), 0), c.Before.ID, c.After.ID)
 	for _, side := range []struct {
 		name string
 		run  platform.ComparisonRun
 	}{{"before", c.Before}, {"after", c.After}} {
 		r := side.run
-		printf("%s run %s", side.name, r.ID)
+		var parts []string
 		if r.Mode != "" {
-			printf(" (%s)", r.Mode)
+			parts = append(parts, r.Mode)
 		}
-		printf(": %s", r.End)
+		parts = append(parts, string(r.End))
 		if r.ExecutionStatus != "" {
-			printf(", execution %s", r.ExecutionStatus)
+			parts = append(parts, "execution "+string(r.ExecutionStatus))
 		}
 		if !r.Complete {
-			printf(", incomplete: %s", r.Incomplete)
+			parts = append(parts, "incomplete: "+r.Incomplete)
 		}
 		if r.Assertions != "" {
-			printf(", assertions %s", r.Assertions)
+			parts = append(parts, "assertions "+string(r.Assertions))
 		}
-		printf("\n")
+		t.field(1, side.name, strings.Join(parts, ", "))
 	}
 	if c.InputsIdentical {
-		printf("inputs: identical\n")
+		t.field(1, "inputs", "identical")
 	} else {
-		printf("inputs: not proven identical\n")
+		t.field(1, "inputs", "not proven identical")
 	}
-	for _, r := range c.Reasons {
-		printf("inconclusive: %s: %s\n", r.Code, r.Message)
-	}
-	for _, e := range c.Exporters {
-		printf("exporter %s (%s): %d -> %d record(s), %s\n", e.Exporter, e.Signal, e.Before, e.After, exporterText(e))
-		for _, g := range e.Changes {
-			printf("  %s %s in %d record(s): %s -> %s\n", g.Path, g.Op, g.Count, valueText(g.Before), valueText(g.After))
+	if len(c.Reasons) > 0 {
+		t.heading("inconclusive")
+		for _, r := range c.Reasons {
+			t.line(1, "%s: %s", r.Code, r.Message)
 		}
-		if e.ChangesTruncated {
-			printf("  more changes are not listed\n")
+	}
+	if len(c.Exporters) > 0 {
+		t.heading("exporters")
+		for _, e := range c.Exporters {
+			t.line(1, "%s (%s): %d -> %d record(s), %s", e.Exporter, e.Signal, e.Before, e.After, exporterText(e))
+			for _, g := range e.Changes {
+				t.line(2, "%s %s in %d record(s): %s -> %s", g.Path, g.Op, g.Count, valueText(g.Before), valueText(g.After))
+			}
+			if e.ChangesTruncated {
+				t.line(2, "more changes are not listed")
+			}
 		}
 	}
 	if r := c.Records; r != nil {
-		printf("injected records: %d aligned, %d changed, %d unaligned, %d uncertain\n", r.Aligned, r.Changed, r.Unaligned, r.Uncertain)
+		t.heading("injected records")
+		t.line(1, "%d aligned, %d changed, %d unaligned, %d uncertain", r.Aligned, r.Changed, r.Unaligned, r.Uncertain)
 		// Each changed record followed in both runs.
 		for _, it := range r.Items {
-			printf("  record %d %s (%s %q)", it.Input, it.Ref, it.Signal, it.Name)
+			detail := ""
 			if it.DivergesAt != "" {
-				printf(": diverges at %s", it.DivergesAt)
+				detail = ": diverges at " + it.DivergesAt
 			}
-			printf("\n    before: %s\n    after:  %s\n", pathText(it.Before), pathText(it.After))
+			t.line(1, "record %d %s (%s %q)%s", it.Input, it.Ref, it.Signal, it.Name, detail)
+			t.line(2, "before: %s", pathText(it.Before))
+			t.line(2, "after:  %s", pathText(it.After))
 		}
 		if r.Truncated {
-			printf("  more changed records are not listed\n")
+			t.line(1, "more changed records are not listed")
 		}
 	}
+	var routes []platform.ComparisonRoute
 	for _, r := range c.Routes {
 		if r.Changed {
-			printf("route %s -> %s: %d -> %d record(s)\n", r.Connector, r.Pipeline, r.Before, r.After)
+			routes = append(routes, r)
 		}
 	}
-	for _, e := range c.Errors {
-		where := e.Component
-		if e.Pipeline != "" {
-			where += " (" + e.Pipeline + ")"
+	if len(routes) > 0 {
+		t.heading("routes")
+		for _, r := range routes {
+			t.line(1, "%s -> %s: %d -> %d record(s)", r.Connector, r.Pipeline, r.Before, r.After)
 		}
-		printf("error at %s %s: %q %d -> %d time(s)\n", e.Source, where, e.Message, e.Before, e.After)
 	}
+	if len(c.Errors) > 0 {
+		t.heading("errors")
+		for _, e := range c.Errors {
+			where := e.Component
+			if e.Pipeline != "" {
+				where += " (" + e.Pipeline + ")"
+			}
+			t.line(1, "at %s %s: %q %d -> %d time(s)", e.Source, where, e.Message, e.Before, e.After)
+		}
+	}
+	var assertions []platform.ComparisonAssertion
 	for _, a := range c.Assertions {
 		if a.Changed || a.Before == "" || a.After == "" {
-			printf("assertion %q: %s -> %s\n", a.Name, outcomeText(string(a.Before)), outcomeText(string(a.After)))
+			assertions = append(assertions, a)
 		}
 	}
-	for _, i := range c.Ignored {
-		printf("ignored %s: %d difference(s)\n", i.Rule, i.Count)
-	}
-	for _, n := range c.Notes {
-		printf("note: %s\n", n)
-	}
-	for _, err := range errs {
-		if err != nil {
-			return err
+	if len(assertions) > 0 {
+		t.heading("assertions")
+		for _, a := range assertions {
+			t.line(1, "%q: %s -> %s", a.Name, outcomeText(string(a.Before)), outcomeText(string(a.After)))
 		}
 	}
-	return nil
+	if r := c.Recommendations; r != nil {
+		t.heading("recommendations")
+		t.line(1, "%s", r.Counts())
+		var items []platform.ComparisonRecommendation
+		for _, d := range r.Items {
+			if d.Status != platform.ComparisonRecommendationPersists {
+				items = append(items, d)
+			}
+		}
+		width := statusWidth(items, func(d platform.ComparisonRecommendation) string { return d.Status })
+		for _, d := range items {
+			where := strings.Join(d.Components, ", ")
+			if d.Pipeline != "" {
+				where += " (" + d.Pipeline + ")"
+			}
+			if d.Subject != "" {
+				where += ": " + d.Subject
+			}
+			t.line(1, "%s  %s at %s", t.status(d.Status, width), d.Rule, where)
+		}
+	}
+	if len(c.Ignored) > 0 {
+		t.heading("ignored")
+		for _, i := range c.Ignored {
+			t.line(1, "%s: %d difference(s)", i.Rule, i.Count)
+		}
+	}
+	if len(c.Notes) > 0 {
+		t.heading("notes")
+		for _, n := range c.Notes {
+			t.line(1, "%s", n)
+		}
+	}
+	return t.err()
 }
 
 // pathText lists the components a record passed through in one run, with the

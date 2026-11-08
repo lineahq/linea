@@ -43,6 +43,11 @@ func (c *Client) GetFleetOverview(ctx context.Context, groupBy string) (*platfor
 	return captureCall[platform.FleetOverview](ctx, c, http.MethodGet, path, nil)
 }
 
+// CheckFleetConnection contacts fleet through the server and reports each step.
+func (c *Client) CheckFleetConnection(ctx context.Context) (*platform.FleetConnection, error) {
+	return captureCall[platform.FleetConnection](ctx, c, http.MethodGet, fleetPath()+"/connection", nil)
+}
+
 // ListFleetAgents returns a page of fleet's agents.
 func (c *Client) ListFleetAgents(ctx context.Context, q platform.FleetAgentQuery) (*platform.FleetAgentPage, error) {
 	extra := url.Values{}

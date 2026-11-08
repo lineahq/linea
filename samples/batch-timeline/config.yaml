@@ -1,0 +1,28 @@
+# One batch processor with small sizes, so a handful of logs shows how it
+# decides when to send. The defaults are send_batch_size 8192, timeout 200ms
+# and no send_batch_max_size.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    # Send as soon as 4 logs are pending...
+    send_batch_size: 4
+    # ...but never more than 6 in one request.
+    send_batch_max_size: 6
+    # Otherwise send what is pending when the timer fires.
+    timeout: 300ms
+
+exporters:
+  otlp/backend:
+    endpoint: backend.example.invalid:4317
+
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/backend]

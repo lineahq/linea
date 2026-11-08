@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"text/tabwriter"
 	"time"
 
 	"github.com/lineahq/linea/internal/debugger/api"
@@ -113,23 +112,33 @@ func tokenListCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		}
 		return exitOK
 	}
-	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tPRINCIPAL\tLABEL\tCREATED\tEXPIRES\tSTATE")
-	now := time.Now()
-	for _, t := range tokens {
-		state := "active"
-		switch {
-		case t.Revoked != nil:
-			state = "revoked"
-		case !now.Before(t.Expires):
-			state = "expired"
-		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", t.ID, t.Principal, t.Label, t.Created.Local().Format(time.DateTime), t.Expires.Local().Format(time.DateTime), state)
-	}
-	if err := tw.Flush(); err != nil {
+	if err := writeTokens(stdout, tokens, time.Now()); err != nil {
 		return fail(stderr, err)
 	}
 	return exitOK
+}
+
+// writeTokens lists tokens. The state is the last column, so its color never
+// shifts the others.
+func writeTokens(w io.Writer, tokens []api.APIToken, now time.Time) error {
+	t := newTextOut(w)
+	if len(tokens) == 0 {
+		t.none("tokens")
+		return t.err()
+	}
+	var rows [][]string
+	for _, tok := range tokens {
+		state := "active"
+		switch {
+		case tok.Revoked != nil:
+			state = "revoked"
+		case !now.Before(tok.Expires):
+			state = "expired"
+		}
+		rows = append(rows, []string{tok.ID, tok.Principal, tok.Label, tok.Created.Local().Format(time.DateTime), tok.Expires.Local().Format(time.DateTime), t.status(state, 0)})
+	}
+	t.table(0, []string{"id", "principal", "label", "created", "expires", "state"}, rows)
+	return t.err()
 }
 
 func tokenRevokeCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {

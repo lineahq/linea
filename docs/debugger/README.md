@@ -8,7 +8,7 @@ through a CLI, a web client, an HTTP API and an MCP server for AI assistants.
 | Interface | Runs | Needs |
 | --- | --- | --- |
 | Direct CLI commands (`inspect`, `run`, `test`, `diff`) | On your machine, in the CLI's process | The `linea` binary and a Collector configuration |
-| Web client, HTTP API, MCP, `linea --server` | On a [team server](team-server.md), on Kubernetes or locally with Docker Compose | A running team server |
+| Web client, HTTP API, MCP, `linea --server` | On a [team server](team-server.md), run with Docker Compose or Kubernetes | A running team server |
 
 ```mermaid
 flowchart LR
@@ -34,7 +34,7 @@ page](https://github.com/lineahq/linea/releases) or build it as below;
 
 | Add | For |
 | --- | --- |
-| Docker | The local team server (Docker Compose), and building runtimes for other Collector releases or custom components |
+| Docker | A team server with Docker Compose, and building runtimes for other Collector releases or custom components |
 | Git, Go 1.27 or later, Node.js with pnpm | Building from source only. Use a POSIX shell (sh or bash) on Linux and macOS, or PowerShell 5.1 or later on Windows. Every developer script has a `.sh` and a `.ps1` form. |
 
 The built-in runtime pins the OpenTelemetry Collector release line to
@@ -127,6 +127,7 @@ the untracked `dist/linea-runtime/`:
 | `login --server <url> [--ca <pem>]` / `logout --server <url>` | Sign in to a team server's identity provider with the device flow, or forget the sign-in; later `--server` commands present it and trust the kept `--ca`. |
 | `build --manifest <yaml> [--docker] [--os <os> --arch <arch>]` | Compile a `linea` CLI whose in-process Collector has the manifest's release and components ([A CLI with your components](custom-cli.md)). |
 | `version` | Show debugger, Collector, schema and component versions. |
+| `completion bash\|zsh\|fish\|powershell` | Print a shell completion script for commands, subcommands, flags and flag values ([shell completion](#shell-completion)). |
 
 The team server is a separate binary, `linea-server --config <file> [--addr <host:port>] [--tls-cert-file <pem> --tls-key-file <pem> | --allow-http] [--mcp]`: web client, HTTP API and optionally MCP, every request authenticated and authorized by role bindings, on connected workers only (it links no Collector). `linea-server` without `--config` is refused. See [team server](team-server.md).
 
@@ -137,6 +138,41 @@ Run `linea <command> -h` for flags. `inspect`, `run`, `test` and `diff`:
   and the files it names on your machine and sends them inline, so the server
   needs no access to them;
 - take `--runtime <name>` to run on a built runtime.
+
+### Output
+
+Text output is plain text for people and language models alike. It starts
+with the verdict (`PASS`, `FAIL`, `VALID`, `COMPLETED` and so on), followed
+by sections under capitalized headings such as `WARNINGS`, `INPUTS`,
+`OUTPUTS`, `ASSERTIONS` and `STAGES`. Single facts are `key: value` lines,
+lists are aligned columns, and nothing is wrapped or truncated. A run report
+keeps its event log for last, under `EVENTS`. An empty list prints `no runs`
+(or `no builds`, `no captures` and so on), and a list with more pages ends
+with `next page: --cursor C`. Color appears only on a
+terminal, never when `NO_COLOR` is set, and only marks what the words
+already say, so a pipe or a file gets the same text without escape codes.
+`--format json` is the stable machine format; scripts should read it
+rather than the text.
+
+### Shell completion
+
+`linea completion <shell>` prints a script that completes commands,
+subcommands, flags, the values of flags with fixed choices (such as
+`--format`) and file names for file flags. Load it in your shell, or add the
+line to your profile:
+
+```sh
+source <(linea completion bash)          # ~/.bashrc
+source <(linea completion zsh)           # ~/.zshrc, after compinit
+linea completion fish | source           # ~/.config/fish/config.fish
+```
+
+```powershell
+linea completion powershell | Out-String | Invoke-Expression   # $PROFILE
+```
+
+The script asks the `linea` on your `PATH`, so completions always match
+its flags.
 
 | Exit code | Meaning |
 | --- | --- |
@@ -208,7 +244,20 @@ values. The report also contains:
 - batch emissions reconciled against the batch input;
 - a statement-by-statement OTTL replay of each transform processor, marked
   `replay_verified` only when it reproduces the processor's actual output;
-- explanations of routing rules and tail_sampling decisions;
+- explanations of routing rules and tail_sampling decisions, of why each
+  batch or queue_batch processor sent when it did, of how groupbyattrs regrouped each
+  record into its resource, and of which filter condition dropped each
+  record;
+- recommendations: work the run shows was avoidable (a filter condition or
+  OTTL statement that never matched, a processor that changed nothing), batch
+  settings the input never reached, and orderings that risk data, each with
+  its evidence, whether it keeps the exported data the same, what it would
+  save as a share of the run's work, and what the input did not cover. They
+  are suggestions; nothing changes your configuration. On request
+  (Verify on a recommendation in the web client,
+  `linea run --verify-recommendations`, or over HTTP or MCP; try
+  `samples/filter-order`), a suggested processor order runs on the same input and the output is
+  compared with the run's, with the work it saved measured before and after;
 - mocked dependencies and stand-ins: components outside the distribution, and
   references with no value supplied.
 
@@ -223,19 +272,23 @@ linea run --config traces-redact/config.yaml \
 ## Web client, HTTP API and MCP
 
 These belong to the team server. `linea-server` always serves one, composed by a
-server config (`--config`); there is no single-process local mode. On one
-machine, run the Docker Compose stack: two instances behind a load balancer,
-PostgreSQL, object storage, a pool worker that runs the built-in runtime, and a
-runtime builder. Nothing needs registering.
+server config (`--config`); there is no single-process mode. The config, not
+where the server runs, decides how people sign in, where it listens and what it
+keeps. The Docker Compose stack runs it on one machine: an instance (or more) behind a
+load balancer, PostgreSQL, object storage, a pool worker that runs the built-in
+runtime, and a runtime builder. Nothing needs registering.
 
 The stack is one file, `deploy/compose/linea/compose.yaml`, and a `.env`
-beside it with five random values. In a directory holding the file from a
-release's tag:
+beside it with five random values and the sign-in mode. `LINEA_AUTH=local`
+is one admin on `127.0.0.1` with no sign-in; `oidc` and `proxy` serve a team
+([sign-in](deploy-compose.md#sign-in)). In a directory holding the file from
+a release's tag:
 
 ```sh
 for name in POSTGRES_PASSWORD S3_ACCESS_KEY S3_SECRET_KEY WORKER_TOKEN BUILDER_TOKEN; do
   echo "LINEA_$name=$(openssl rand -hex 32)"
 done > .env
+echo LINEA_AUTH=local >> .env
 docker compose up -d
 ```
 
@@ -250,8 +303,9 @@ from its root.
 | MCP | `http://127.0.0.1:7070/mcp` |
 | CLI | `--server http://127.0.0.1:7070` |
 
-See [deploy-compose.md](deploy-compose.md). For a shared deployment use the
-[Kubernetes chart](deploy-kubernetes.md). Each instance serves, on one listener
+These are the defaults; `.env` sets another address, port and TLS. See
+[deploy-compose.md](deploy-compose.md), or the [Kubernetes
+chart](deploy-kubernetes.md) to run it on a cluster. Each instance serves, on one listener
 and one platform:
 
 - the web client: an editor, the pipeline graph, record changes, journeys and
@@ -343,7 +397,7 @@ CI](ci.md) and [`examples/ci/github-actions.yml`](../../examples/ci/github-actio
 | --- | --- |
 | [Glossary](glossary.md) | The words the interfaces show |
 | [Running a team server](team-server.md) | The server config, role bindings, projects and the library, sign-in, API tokens and what a team server refuses |
-| [Docker Compose](deploy-compose.md) | A team server with two instances, PostgreSQL, object storage and a worker on one machine |
+| [Docker Compose](deploy-compose.md) | A team server with one or more instances, PostgreSQL, object storage and a worker on one machine, configured by `.env` |
 | [Kubernetes](deploy-kubernetes.md) | The server image and the Helm chart |
 | [Collector checks in CI](ci.md) | `test` and `diff` in a pipeline, with their exit codes and the GitHub Actions example in `examples/ci/` |
 | [Building debug Collectors](runtime-builds.md) | Runtimes for another verified release or your own component modules: supported releases, manifests from the catalog, module sources; `upgrade-check` compares one configuration on two runtimes |

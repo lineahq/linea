@@ -2,7 +2,7 @@
 
 The Helm chart in `deploy/charts/linea` installs a [team server](team-server.md),
 a worker pool that runs the runtimes the server builds, and a builder that
-compiles them. For the same stack on one machine, see
+compiles them. For the same server on one machine, see
 [Docker Compose](deploy-compose.md).
 
 - The server runs as identical instances (`server.replicas`, default 2).
@@ -192,6 +192,7 @@ linea runtime default mine --server https://debugger.example.com
 | Dedicated workers (`worker.enabled`, default off) | `worker.replicas` pods running `linea-worker --connect` from a runtime image you built, `worker.capacity` requests at once. |
 | Bundled PostgreSQL (`postgresql.enabled`) | StatefulSet of one pod (PVC from `postgresql.persistence`), a Service on 5432, and a Secret with the generated password (key `password`, kept across upgrades). |
 | Bundled SeaweedFS (`seaweedfs.enabled`) | StatefulSet of one pod (PVC from `seaweedfs.persistence`) serving the S3 gateway on 8333, a Service, a Secret with the generated keys (`access-key`, `secret-key`, kept across upgrades), and a bucket Job per release revision that creates `seaweedfs.bucket` and keeps an existing one. |
+| Fleet and live capture (`fleet.deploy.enabled`) | A Deployment and Service each for fleet and the plugin, a database Job with the bundled PostgreSQL, their Secrets and a ConfigMap (see [Fleet and live capture](#fleet-and-live-capture)). |
 | NetworkPolicies | For the pool, the builder, the dedicated worker, each bundled store, and, with the build metrics, the server's metrics port (see [Egress](#egress)). |
 
 Secrets, each from a value or your own Secret:
@@ -199,7 +200,7 @@ Secrets, each from a value or your own Secret:
 | Secret | From | Your own | Keys |
 | --- | --- | --- | --- |
 | Store | `store.databaseURL`, `store.objects.accessKey`, `store.objects.secretKey` (or the bundled stores) | `store.existingSecret` | `database-url`, `access-key`, `secret-key` |
-| Fleet token | `fleet.token` | `fleet.existingSecret` | `token` |
+| Fleet token | `fleet.token`, or generated with `fleet.deploy.enabled` | `fleet.existingSecret` | `token` |
 | OIDC client secret | `oidc.clientSecret` | `oidc.existingSecret` | `client-secret` |
 | Worker token | `worker.token`, or generated | `worker.existingSecret` | `token` |
 | Builder token | `builder.token`, or generated | `builder.existingSecret` | `token` |
@@ -454,6 +455,55 @@ builder:
   cache:
     persistentVolumeClaim: {create: true, size: 20Gi}
 ```
+
+## Fleet and live capture
+
+With `fleet.deploy.enabled` the release also runs the [fleet
+server](../fleet/README.md) and its [live-capture
+plugin](../fleet/livecapture.md), and connects the server to fleet, so [live
+capture](livecapture.md) works in the web client, CLI and MCP as soon as the
+pods are ready. Nothing is copied by hand, and an upgrade keeps the
+connection. It works like the Compose stack's
+[overlay](deploy-compose.md#fleet-and-live-capture):
+
+```yaml
+postgresql: {enabled: true}
+fleet:
+  deploy:
+    enabled: true
+```
+
+| Step | What the chart does |
+| --- | --- |
+| Databases | With `postgresql.enabled` and no `fleet.deploy.database.existingSecret`, a Job per release revision creates the databases `fleet` and `livecapture` in the bundled PostgreSQL, each with its own migration and runtime role, and resets their generated passwords. With your own PostgreSQL, create them yourself and name a Secret with the keys `fleet-migrate-url`, `fleet-runtime-url`, `capture-migrate-url` and `capture-runtime-url` ([roles](../fleet/deployment.md)). |
+| Migrations | An init container in each pod migrates its schema before the pod starts. Each runs one pod, replaced rather than rolled, so a migration never overlaps a running instance. |
+| Server token | Generated once, kept in a Secret across upgrades and never printed. Fleet's `bootstrap` init container installs it as the first admin, without expiry; on later starts it changes nothing. |
+| Config management | Off: fleet only reports. `fleet.deploy.configManagement: true` starts it with `--config-management` for config versions, assignments and rollouts ([config management](../fleet/config-management.md)). |
+| Raw capture | Off: captures select only points a Collector marks redacted. `fleet.deploy.livecapture.rawCapture: true` puts the server's fleet credential into the plugin's `raw_principals`; who may capture raw is still the debugger's `capture.raw` permission ([raw capture](livecapture.md#raw-capture-and-permissions)). |
+| Plugin | Registered with fleet with generated host and service tokens. Its control and delivery endpoints serve TLS with `fleet.deploy.livecapture.tls.secretName`, or a self-signed certificate the chart generates once for the Service names and `tls.extraHosts`. |
+
+Install fails with `fleet.url`, `fleet.token` or `fleet.existingSecret` set
+beside `fleet.deploy.enabled`, or without a database for fleet.
+
+Collectors connect to:
+
+| Endpoint | Service and port | Protocol |
+| --- | --- | --- |
+| OpAMP | `<release>-linea-fleet:4320` (`fleet.deploy.service.agentPort`) | `ws://`, an agent credential per Collector |
+| Capture control | `<release>-linea-livecapture:4340` (`controlPort`) | gRPC over TLS |
+| Capture delivery | `<release>-linea-livecapture:4341` (`deliveryPort`) | gRPC over TLS |
+
+Both Services are `ClusterIP` by default; for Collectors outside the cluster
+set their `type` and add the address they use to `tls.extraHosts`. Collectors
+trust the plugin's certificate from its Secret:
+
+```sh
+kubectl -n <namespace> get secret <release>-linea-livecapture-tls -o jsonpath='{.data.tls\.crt}' | base64 -d > livecapture-ca.crt
+```
+
+The release's NetworkPolicies admit the management API only from the server,
+fleet's plugin host only from the plugin, the plugin's own port only from
+fleet, and OpAMP, control and delivery from anywhere.
 
 ## Private certificate authorities
 

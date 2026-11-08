@@ -205,6 +205,18 @@ func (s *Service) GetRun(ctx context.Context, caller Caller, id string) (_ Run, 
 	return r.View(false), nil
 }
 
+// GetRunListing returns a run as ListRuns lists it: its state and the listing
+// of its report, without the report. It reads a run off the list's pages
+// without the cost of its evidence.
+func (s *Service) GetRunListing(ctx context.Context, caller Caller, id string) (_ Run, err error) {
+	defer s.audit(&caller, "GetRunListing", &err)()
+	r, err := s.lookup(ctx, caller, authz.RunRead, id)
+	if err != nil {
+		return Run{}, err
+	}
+	return listed(r), nil
+}
+
 // ListRuns returns a page of retained runs newest first, without reports
 // but with their summaries, narrowed by q's filter.
 func (s *Service) ListRuns(ctx context.Context, caller Caller, q RunQuery) (_ *RunPage, err error) {
@@ -215,7 +227,11 @@ func (s *Service) ListRuns(ctx context.Context, caller Caller, q RunQuery) (_ *R
 	if err := q.validate(); err != nil {
 		return nil, classify(err, CodeInvalidRequest)
 	}
-	page, err := s.list(ctx, q, s.projects(caller, authz.RunRead))
+	projects, err := s.listIn(caller, authz.RunRead)
+	if err != nil {
+		return nil, err
+	}
+	page, err := s.list(ctx, q, projects)
 	return page, classify(err, CodeInternal)
 }
 

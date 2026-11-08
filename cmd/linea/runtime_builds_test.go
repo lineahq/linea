@@ -7,6 +7,9 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/lineahq/linea/internal/debugger/api"
 )
 
 // The catalog prints the same JSON locally, through a server and over HTTP.
@@ -42,4 +45,24 @@ func reindent(t *testing.T, raw []byte) []byte {
 		t.Fatal(err)
 	}
 	return out.Bytes()
+}
+
+// TestBuildsTextIsATableOrSaysThereAreNone prints each build's state and
+// creation time in a table, and no builds in words.
+func TestBuildsTextIsATableOrSaysThereAreNone(t *testing.T) {
+	var out bytes.Buffer
+	if err := writeBuilds(&out, nil, ""); err != nil || out.String() != "no builds\n" {
+		t.Fatalf("no builds = %q, %v", out.String(), err)
+	}
+	created := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	out.Reset()
+	err := writeBuilds(&out, []api.RuntimeBuild{{ID: "b1", Name: "edge", State: api.BuildDone, CollectorVersion: "0.162.0", Reused: true, Created: created}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 2 || strings.Join(strings.Fields(lines[0]), " ") != "BUILD NAME STATE COLLECTOR REUSED CREATED" ||
+		strings.Join(strings.Fields(lines[1]), " ") != "b1 edge done 0.162.0 yes "+created.Local().Format(time.DateTime) {
+		t.Fatalf("builds:\n%s", out.String())
+	}
 }

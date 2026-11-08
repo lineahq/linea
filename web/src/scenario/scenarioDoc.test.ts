@@ -19,6 +19,7 @@ import {
   removeItem,
   setConditions,
   setEnvironment,
+  setHeaders,
   setField,
   setInputSource,
   setTarget,
@@ -90,7 +91,8 @@ describe('readScenario', () => {
       settle: '',
       timestamps: '',
       environment: [['TOKEN', 'abc']],
-      inputs: [{ receiver: 'otlp', signal: '', file: 'logs.json', inlineSize: undefined, data: undefined, clientAddress: '', after: '' }],
+      headers: [],
+      inputs: [{ receiver: 'otlp', signal: '', file: 'logs.json', inlineSize: undefined, data: undefined, clientAddress: '', after: '', headers: [] }],
       files: [],
       kubeObjects: [],
       kubeFiles: [],
@@ -162,6 +164,31 @@ describe('editScenario', () => {
     expect(parse(typed).environment.NEW).toBe('v');
     expect(typed).not.toContain('"v"');
     expect(editScenario(scenario, setEnvironment([['A', '1'], ['A', '2']]))).toEqual({ error: 'The environment already has A.' });
+  });
+
+  it('reads and edits headers of an input and of every input', () => {
+    const withHeaders = `version: 1
+defaults:
+  headers:
+    user-agent: client/1.0
+inputs:
+  - receiver: otlp
+    headers:
+      x-team: [a, b]
+    file: in.json
+`;
+    const read = readScenario(withHeaders);
+    if (!('model' in read)) throw new Error(read.error);
+    expect(read.model.headers).toEqual([['user-agent', 'client/1.0']]);
+    expect(read.model.inputs[0].headers).toEqual([['x-team', 'a, b']]);
+    let y = edit(withHeaders, setHeaders(['inputs', 0, 'headers'], [['x-team', 'a, b'], ['X-Project', 'p1']]));
+    expect(parse(y).inputs[0].headers).toEqual({ 'x-team': ['a', 'b'], 'X-Project': 'p1' });
+    y = edit(y, setHeaders(['defaults', 'headers'], []));
+    expect(parse(y).defaults).toBeUndefined();
+    expect(editScenario(y, setHeaders(['inputs', 0, 'headers'], [['X-A', '1'], ['x-a', '2']]))).toEqual({ error: 'The headers already have x-a.' });
+    expect(editScenario(y, setHeaders(['inputs', 0, 'headers'], [['bad name', '1']]))).toEqual({ error: 'bad name is not a valid header name.' });
+    expect(editScenario(y, setHeaders(['inputs', 0, 'headers'], [['trace-bin', '1']]))).toHaveProperty('error');
+    expect(parse(edit(y, setHeaders(['inputs', 0, 'headers'], []))).inputs[0].headers).toBeUndefined();
   });
 
   it('sets a target and conditions', () => {

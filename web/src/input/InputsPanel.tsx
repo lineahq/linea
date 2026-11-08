@@ -18,7 +18,9 @@ import {
   setField,
   setInputData,
   setInputSource,
+  setHeaders,
   type Edit,
+  type Header,
   type InputModel,
 } from '../scenario/scenarioDoc';
 import { useDocEdit } from '../scenario/useDocEdit';
@@ -28,6 +30,8 @@ import { jsonProblem, summarizePayload } from './quickInput';
 import { CaptureInputPicker } from '../capture/CaptureInputPicker';
 import { useDenial } from '../ui/session';
 import { templatesFor, type PayloadTemplate } from './templates';
+import { HeadersEditor } from './HeadersEditor';
+import { headersChip } from './headers';
 
 interface Props {
   ws: WorkspaceState;
@@ -151,6 +155,7 @@ export function InputsPanel({ ws, topology, diagnostics, runInput, blocker, runn
               bySignal={bySignal}
               apply={apply}
               clientAddress={kube || input.clientAddress !== ''}
+              defaultHeaders={m.headers}
               run={() => runInput(i)}
               blocker={blocker(i)}
               running={running}
@@ -283,7 +288,9 @@ function InputCard({
   running,
   onRemoved,
   onMoved,
+  defaultHeaders,
 }: {
+  defaultHeaders: Header[];
   index: number;
   count: number;
   input: InputModel;
@@ -326,6 +333,11 @@ function InputCard({
           {what.text}
         </span>
         {input.after && <span className="chip" title="Waits this long after the previous input">after {input.after}</span>}
+        {headersChip(input.headers, defaultHeaders) && (
+          <span className="chip mono" title="The request headers this input is sent with">
+            {headersChip(input.headers, defaultHeaders)}
+          </span>
+        )}
         <span className="grow" />
         <button
           type="button"
@@ -367,6 +379,15 @@ function InputCard({
               )}
             </div>
           )}
+          <details className="input-headers" open={input.headers.length > 0 || undefined}>
+            <summary>
+              Headers <span className="muted small">{input.headers.length ? `${input.headers.length} set here` : 'none set here'}{defaultHeaders.length ? ` · ${defaultHeaders.length} from every input` : ''}</span>
+            </summary>
+            <p className="hint">
+              Sent with this input as HTTP headers or gRPC metadata. The pipeline sees them only when the receiver sets <code>include_metadata: true</code>; a batch processor's <code>metadata_keys</code> groups by them.
+            </p>
+            <HeadersEditor label={`Headers of input ${index + 1}`} entries={input.headers} defaults={defaultHeaders} onChange={(h) => apply(setHeaders(['inputs', index, 'headers'], h))} />
+          </details>
           {inline ? (
             <InlineData index={index} data={input.data ?? ''} apply={apply} signals={bySignal.get(input.receiver) ?? [...new Set([...bySignal.values()].flat())]} />
           ) : (
@@ -559,8 +580,8 @@ function SavedFixtures({ onPick, save }: { onPick(text: string): void; save?: st
 }
 
 /** RunSettings edits the document's name and execution settings. */
-function RunSettings({ model: m, apply }: { model: { name: string; timeout: string; settle: string; timestamps: string }; apply(e: Edit): boolean }) {
-  const set = [m.name && 'name', m.timeout && 'timeout', m.settle && 'settle', m.timestamps === 'rebase' && 'rebased timestamps'].filter(Boolean);
+function RunSettings({ model: m, apply }: { model: { name: string; timeout: string; settle: string; timestamps: string; headers: Header[] }; apply(e: Edit): boolean }) {
+  const set = [m.name && 'name', m.timeout && 'timeout', m.settle && 'settle', m.timestamps === 'rebase' && 'rebased timestamps', m.headers.length && 'headers'].filter(Boolean);
   return (
     <details className="run-settings">
       <summary>
@@ -588,6 +609,9 @@ function RunSettings({ model: m, apply }: { model: { name: string; timeout: stri
             </select>
           </label>
         </div>
+        <h4>Headers for every input</h4>
+        <p className="hint">Each input sends these unless it sets a header of the same name itself.</p>
+        <HeadersEditor label="Headers for every input" entries={m.headers} onChange={(h) => apply(setHeaders(['defaults', 'headers'], h))} />
       </div>
     </details>
   );

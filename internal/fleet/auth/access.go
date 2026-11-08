@@ -62,12 +62,20 @@ type Credential struct {
 	Labels map[string]string `json:"labels,omitempty"`
 	// RemoteConfig lets config management send configuration to agents
 	// using this credential. Only agent credentials can carry it.
-	RemoteConfig bool       `json:"remote_config"`
-	CreatedAt    time.Time  `json:"created_at"`
-	ExpiresAt    time.Time  `json:"expires_at"`
-	RevokedAt    *time.Time `json:"revoked_at,omitempty"`
-	Hash         []byte     `json:"-"`
+	RemoteConfig bool      `json:"remote_config"`
+	CreatedAt    time.Time `json:"created_at"`
+	// ExpiresAt is nil for an admin or reader credential that is valid
+	// until revoked. Agent credentials always expire.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	RevokedAt *time.Time `json:"revoked_at,omitempty"`
+	Hash      []byte     `json:"-"`
 }
+
+// Active reports whether the credential is neither revoked nor expired at now.
+func (c Credential) Active(now time.Time) bool {
+	return c.RevokedAt == nil && (c.ExpiresAt == nil || c.ExpiresAt.After(now))
+}
+
 type CredentialPage struct {
 	Items     []Credential `json:"items"`
 	NextAfter string       `json:"next_after,omitempty"`
@@ -78,7 +86,9 @@ type CredentialRequest struct {
 	Role         string            `json:"role"`
 	Labels       map[string]string `json:"labels,omitempty"`
 	RemoteConfig bool              `json:"remote_config,omitempty"`
-	ExpiresAt    time.Time         `json:"expires_at"`
+	// ExpiresAt is required for agent credentials. Omitted, an admin or
+	// reader credential is valid until revoked.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
 // Label bounds keep a credential's labels within 4 KiB of JSON.
@@ -136,10 +146,12 @@ func Generate(req CredentialRequest, now time.Time) (Issued, error) {
 		return Issued{}, fleet.Invalid("id " + fleet.IDRule)
 	case !SafeName(req.Name):
 		return Issued{}, fleet.Invalid(NameRule)
-	case !req.ExpiresAt.After(now) || req.ExpiresAt.After(now.Add(365*24*time.Hour)):
-		return Issued{}, fleet.Invalid("expires_at must be in the future and at most 365 days away")
 	case req.Role != "admin" && req.Role != "reader" && req.Role != "agent":
 		return Issued{}, fleet.Invalid("role must be admin, reader or agent")
+	case req.ExpiresAt == nil && req.Role == "agent":
+		return Issued{}, fleet.Invalid("expires_at is required for agent credentials")
+	case req.ExpiresAt != nil && (!req.ExpiresAt.After(now) || req.ExpiresAt.After(now.Add(365*24*time.Hour))):
+		return Issued{}, fleet.Invalid("expires_at must be in the future and at most 365 days away")
 	case !ValidLabels(req.Labels):
 		return Issued{}, fleet.Invalid(LabelsRule)
 	case req.Role != "agent" && (len(req.Labels) > 0 || req.RemoteConfig):
@@ -151,11 +163,52 @@ func Generate(req CredentialRequest, now time.Time) (Issued, error) {
 	}
 	token := "of1_" + req.ID + "_" + hex.EncodeToString(secret)
 	hash := sha256.Sum256([]byte(token))
-	c := Credential{ID: req.ID, Name: req.Name, Role: req.Role, RemoteConfig: req.RemoteConfig, CreatedAt: now.UTC(), ExpiresAt: req.ExpiresAt.UTC(), Hash: hash[:]}
+	c := Credential{ID: req.ID, Name: req.Name, Role: req.Role, RemoteConfig: req.RemoteConfig, CreatedAt: now.UTC(), Hash: hash[:]}
+	if req.ExpiresAt != nil {
+		expires := req.ExpiresAt.UTC()
+		c.ExpiresAt = &expires
+	}
 	if len(req.Labels) > 0 {
 		c.Labels = maps.Clone(req.Labels)
 	}
 	return Issued{Credential: c, Token: token}, nil
+}
+
+// TokenRule describes a credential token a deployment generates itself.
+const TokenRule = "token must be of1_, 32 lowercase hexadecimal characters, _ and 64 lowercase hexadecimal characters"
+
+// TokenID returns the credential ID a well-formed token names.
+func TokenID(token string) (string, bool) {
+	if len(token) != 101 || !strings.HasPrefix(token, "of1_") || token[36] != '_' {
+		return "", false
+	}
+	id, secret := token[4:36], token[37:]
+	if !fleet.ValidID(id) {
+		return "", false
+	}
+	b, err := hex.DecodeString(secret)
+	if err != nil || len(b) != 32 || hex.EncodeToString(b) != secret {
+		return "", false
+	}
+	return id, true
+}
+
+// Install is Generate for a token the deployment generated instead of fleet,
+// so the deployment can hand the same token to its clients (bootstrap).
+func Install(req CredentialRequest, token string, now time.Time) (Issued, error) {
+	id, ok := TokenID(token)
+	if !ok {
+		return Issued{}, fleet.Invalid(TokenRule)
+	}
+	req.ID = id
+	i, err := Generate(req, now)
+	if err != nil {
+		return Issued{}, err
+	}
+	hash := sha256.Sum256([]byte(token))
+	i.Credential.Hash = hash[:]
+	i.Token = token
+	return i, nil
 }
 
 func (s *Service) Issue(ctx context.Context, actor string, req CredentialRequest) (Issued, error) {
@@ -189,7 +242,7 @@ func (s *Service) Authenticate(ctx context.Context, r *http.Request) (Principal,
 		return Principal{}, err
 	}
 	hash := sha256.Sum256([]byte(token))
-	if subtle.ConstantTimeCompare(hash[:], c.Hash) != 1 || c.RevokedAt != nil || !c.ExpiresAt.After(time.Now()) {
+	if subtle.ConstantTimeCompare(hash[:], c.Hash) != 1 || !c.Active(time.Now()) {
 		return Principal{}, ErrUnauthorized
 	}
 	return Principal{ID: c.ID, Role: c.Role}, nil
@@ -221,10 +274,10 @@ func (s *Service) Introspect(ctx context.Context, tokenSHA256 [32]byte) (Introsp
 
 // introspection exposes only active agent credentials.
 func introspection(c Credential, now time.Time) Introspection {
-	if c.Role != "agent" || c.RevokedAt != nil || !c.ExpiresAt.After(now) {
+	if c.Role != "agent" || !c.Active(now) || c.ExpiresAt == nil {
 		return Introspection{}
 	}
-	expires := c.ExpiresAt
+	expires := *c.ExpiresAt
 	return Introspection{Active: true, CredentialID: c.ID, Role: c.Role, Labels: maps.Clone(c.Labels), ExpiresAt: &expires}
 }
 

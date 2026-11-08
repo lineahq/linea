@@ -103,7 +103,8 @@ The root Go module is declared in `go.mod`.
   Inspection and OTTL previews are a host capture (`CaptureInspection`,
   `CaptureOTTL`, no factories) completed by a registry (`CompleteInspection`,
   `CompleteOTTL`). Both results carry `runtime`, the runtime that answered,
-  which the platform sets (`answeredBy`; inspection schema 0.2); `Decode` is the
+  which the platform sets (`answeredBy`; inspection schema 0.2), and the
+  configuration-only recommendations (inspection schema 0.3); `Decode` is the
   strict JSON decoder for reports crossing a process boundary. The engine
   links no Collector: executing, factory-based preparation, completing an
   inspection or preview and the built-in runtime's description go through the
@@ -242,8 +243,13 @@ The root Go module is declared in `go.mod`.
   unfinished runs, suite members and the `Options.RunCache` (default 1,000)
   terminal runs read most recently; `GetRun`, `WatchRun` and every run reader
   load a cold run from the repository (`load`), listing reads pages without
-  caching, and the feed updates cached runs and adopts unfinished ones but skips
-  other terminal runs. Opening and a feed reload read unfinished runs only
+  caching handles, and the feed updates cached runs and adopts unfinished ones but skips
+  other terminal runs. Listing reads a run it does not hold, its evidence and
+  bundle included, only once while it is terminal: `listing_cache.go` keeps the
+  list entry, without the report, of up to four full pages of such runs, used
+  for the same record generation with the record's `Kept`.
+  `GetRunListing` (`GET /runs/{id}/listing`) returns one run as listed. Opening
+  and a feed reload read unfinished runs only
   (`RunQuery.Unfinished`), plus the runs stored before run indexes to index them
   once (`RunQuery.Unindexed`), so startup and memory follow the work in flight,
   not history. A run the platform cannot decode fails the reads that name it
@@ -580,6 +586,9 @@ The root Go module is declared in `go.mod`.
   members. `linea_compare_configs` and `linea_compare_runs` (`tools_compare.go`)
   submit a configuration pair on one input and compare runs, returning the
   comparison and its Markdown; waiting never cancels either run.
+  `linea_verify_recommendation` (`tools_compare.go`) runs one
+  recommendation's change as a candidate and returns its comparison and
+  confidence (`docs/internals/recommendations.md`).
   `linea_list_runtimes`, `linea_build_runtime` (with `sources`) and
   `linea_get_runtime_build` (`tools_runtime.go`) list and build runtimes,
   waiting only to observe, `linea_get_default_runtime` and
@@ -715,10 +724,11 @@ The root Go module is declared in `go.mod`.
   `go.mod`, since it needs `pkg/ottl` v0.160; `manifest.OTTLVariants` lists the
   variants and a test keeps them equal to the directories).
 - `internal/debugger/features/` — the optional analysis features: transform
-  statement replay, count aggregation, routing and tail_sampling explanations,
-  each compiled in only when the manifest has its component. Feature packages
-  (`internal/debugger/ottlreplay`, `internal/debugger/aggregation`,
-  `internal/debugger/routing`, `internal/debugger/sampling`) provide their
+  statement replay, count aggregation, routing, tail_sampling and filter
+  explanations, each compiled in only when the manifest has its component.
+  Feature packages (`internal/debugger/ottlreplay`, `internal/debugger/aggregation`,
+  `internal/debugger/routing`, `internal/debugger/sampling`,
+  `internal/debugger/filterreplay`) provide their
   function in `init`; `internal/debugger/featureset` (generated) imports those
   of the manifest and `engine/local` imports it. A runtime without a feature skips
   that analysis; its hello and reports name it in `missing_features`, and a
@@ -738,8 +748,8 @@ The root Go module is declared in `go.mod`.
   otelcol-contrib `manifest.yaml` unchanged, the dependency set
   `dependencies.mod`/`.sum`, `unsupported.yaml` and the catalog `catalog.json`,
   which records each component's `deprecated_type` alias), embedded: 0.160.0,
-  0.161.0, 0.162.0, 0.163.0 and 0.164.0 (core 0.164.0 with contrib 0.164.1,
-  upstream's release pairing).
+  0.161.0, 0.162.0, 0.163.0, 0.164.0 (core 0.164.0 with contrib 0.164.1,
+  upstream's release pairing) and 0.165.0.
   `scripts/dependency-set.sh --version V [--catalog-only]` (Windows:
   `dependency-set.ps1 -Version V [-CatalogOnly]`) generates a release's set and
   catalog in the pinned Go image (the first run downloads about 5 GB), resolving
@@ -922,7 +932,8 @@ The root Go module is declared in `go.mod`.
   (`environment`, `mocks.files` by path), then the host under the policy, then a
   stand-in string with a reason, never reading what the policy refuses.
   `CaptureSnapshot` captures without component factories, for a runtime that
-  resolves elsewhere. See `docs/internals/config-resolution.md` and
+  resolves elsewhere. `WithOverrides` layers a candidate's `yaml:` overrides
+  after the root (snapshot schema 4; `config-resolution.md`). See `docs/internals/config-resolution.md` and
   `docs/internals/environment-bindings.md`.
 - `internal/debugger/topology/` — static pipeline graph and component execution
   modes derived from a resolved config.
@@ -980,6 +991,17 @@ The root Go module is declared in `go.mod`.
   processor (the real factory) on each trace's evaluated spans, in full to
   verify the recorded decision and per policy, with the evidence each policy
   read (duration, status codes, attribute values).
+- `internal/debugger/filterreplay/` — filter processor explanation: which
+  configured condition removed each item of a recorded input, evaluated
+  with the processor's own function sets (through
+  `internal/debugger/compat/ottl`) and verified against the observed output;
+  the `filter_explanation` feature, written to `report.filtering`
+  (`filtering.md`).
+- `internal/debugger/recommend/` — pure rules over a report's sections
+  (topology, stages, filtering, OTTL, batching, grouping, sampling) that
+  produce `report.recommendations` and, from the topology alone, an
+  inspection's; each rule has a stable ID, a kind, a confidence, evidence
+  refs and an optional suggested change (`recommendations.md`).
 - `internal/debugger/ottldebug/` — the types of per-statement OTTL replay
   reports.
 - `internal/debugger/ottlreplay/` — per-statement OTTL replay of transform
@@ -1020,7 +1042,7 @@ The root Go module is declared in `go.mod`.
 - `internal/debugger/evidence/` — pure projections of a terminal run's report:
   the run summary (with endpoint outputs and component log counts, an
   error-level entry a `component` error) and the query families (stage changes,
-  records, journey, statements, events) cut into byte- and item-bounded pages
+  records, journey, statements, events, recommendations) cut into byte- and item-bounded pages
   with oversize entries and opaque cursors; it reads only the report and its
   recorded snapshots.
 - `internal/debugger/comparison/` — pure comparison of two terminal runs from

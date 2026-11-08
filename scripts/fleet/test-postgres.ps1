@@ -34,9 +34,9 @@ try {
         # The container reaches the host-bound fixture over the Docker network.
         $fleetIP=& docker inspect $fleetTestName --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'
         $env:LINEA_FLEET_TEST_DATABASE_URL="postgres://postgres:$env:POSTGRES_PASSWORD@${fleetIP}:5432/fleet?sslmode=disable"
-        & docker run --rm --cpus 2 --memory 2g --mount "type=bind,source=$fleetTestRoot,target=/src,readonly" --workdir /src --env GOMAXPROCS=2 --env LINEA_FLEET_TEST_DATABASE_URL golang:1.27.3-bookworm@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6669f51d3821baf9ec37c9 go test -mod=readonly -race -p 1 -count 1 -run '^TestPostgres(Lifecycle|Replicas|Inventory|ReapBudget|RemoteConfig|Configs)$' ./internal/fleet/postgres
+        & docker run --rm --cpus 2 --memory 2g --mount "type=bind,source=$fleetTestRoot,target=/src,readonly" --workdir /src --env GOMAXPROCS=2 --env LINEA_FLEET_TEST_DATABASE_URL golang:1.27.3-bookworm@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6669f51d3821baf9ec37c9 go test -mod=readonly -race -p 1 -count 1 -run '^TestPostgres(Lifecycle|Replicas|Inventory|ReapBudget|RemoteConfig|Configs|BootstrapToken)$' ./internal/fleet/postgres
     } else {
-        & go test -p 1 -count 1 -run '^TestPostgres(Lifecycle|Replicas|Inventory|ReapBudget|RemoteConfig|Configs)$' ./internal/fleet/postgres
+        & go test -p 1 -count 1 -run '^TestPostgres(Lifecycle|Replicas|Inventory|ReapBudget|RemoteConfig|Configs|BootstrapToken)$' ./internal/fleet/postgres
     }
     if($LASTEXITCODE -ne 0){throw 'PostgreSQL lifecycle checks failed'}
 } finally {

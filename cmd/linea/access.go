@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/lineahq/linea/internal/debugger/api"
@@ -185,23 +184,29 @@ func writeAccess(stdout, stderr io.Writer, format string, l *api.RoleBindings, r
 		}
 		return exitOK
 	}
-	fmt.Fprintf(stdout, "managed bindings at revision %d\n", l.Revision)
-	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tSOURCE\tSUBJECT\tROLE\tSCOPE\tCREATED")
+	t := newTextOut(stdout)
+	t.line(0, "managed bindings at revision %d", l.Revision)
+	var rows [][]string
 	for _, b := range l.Bindings {
 		created := "-"
 		if b.Created != nil {
 			created = b.Created.Local().Format(time.DateTime) + " by " + b.CreatedBy
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", b.ID, b.Source, bindingSubject(b), b.Role, b.Scope, created)
+		rows = append(rows, []string{b.ID, b.Source, bindingSubject(b), b.Role, b.Scope, created})
 	}
+	if len(rows) == 0 {
+		t.line(1, "no bindings")
+	}
+	t.table(1, []string{"id", "source", "subject", "role", "scope", "created"}, rows)
 	if roles {
-		fmt.Fprintln(tw, "\nROLE\tPERMISSIONS")
+		t.heading("roles")
+		rows = nil
 		for _, r := range l.Roles {
-			fmt.Fprintf(tw, "%s\t%s\n", r.Name, strings.Join(r.Permissions, ", "))
+			rows = append(rows, []string{r.Name, strings.Join(r.Permissions, ", ")})
 		}
+		t.table(1, []string{"role", "permissions"}, rows)
 	}
-	if err := tw.Flush(); err != nil {
+	if err := t.err(); err != nil {
 		return fail(stderr, err)
 	}
 	return exitOK

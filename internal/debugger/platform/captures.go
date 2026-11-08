@@ -653,6 +653,9 @@ func (s *Service) CreateCaptureSession(ctx context.Context, caller Caller, req C
 				return nil, held
 			}
 		}
+		if fleetcapture.StatusOf(err) == 403 && slices.ContainsFunc(targets, func(c Collector) bool { return capturesRaw(sel, c.ID, snap) }) {
+			return nil, &Error{Code: CodeForbidden, Message: "forbidden: fleet's livecapture plugin does not let this server capture raw points; select redacted points, or have the deployment grant raw capture to the server (the plugin's raw_principals)"}
+		}
 		return nil, fleetError(admit, err)
 	}
 	// Sensitivities come from the catalogs of the peers fleet chose.
@@ -875,13 +878,16 @@ func (s *Service) ListCaptureSessions(ctx context.Context, caller Caller, req Co
 	if err := s.begin(ctx, caller, authz.CaptureRead); err != nil {
 		return nil, err
 	}
+	projects, err := s.listIn(caller, authz.CaptureRead)
+	if err != nil {
+		return nil, err
+	}
 	r := s.collectors
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := r.check(); err != nil {
 		return nil, err
 	}
-	projects := s.projects(caller, authz.CaptureRead)
 	items := make([]CaptureSessionSummary, 0, len(r.sessions))
 	for _, c := range r.sessions {
 		if inProjects(projects, c.view.Project) {

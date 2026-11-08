@@ -122,7 +122,7 @@ func inspectConnected(ctx context.Context, c *client.Client, config, scenario, r
 	return exitOK
 }
 
-func runConnected(ctx context.Context, c *client.Client, req api.Request, format string, stdout, stderr io.Writer) int {
+func runConnected(ctx context.Context, c *client.Client, req api.Request, format string, verify bool, stdout, stderr io.Writer) int {
 	var err error
 	if req.ConfigYAML, err = readArg("config", req.ConfigLabel); err != nil {
 		return fail(stderr, err)
@@ -137,16 +137,17 @@ func runConnected(ctx context.Context, c *client.Client, req api.Request, format
 			return fail(stderr, err)
 		}
 	}
-	raw, rep, err := c.Run(ctx, req)
+	id, raw, rep, err := c.RunWithID(ctx, req)
 	if err != nil {
 		return fail(stderr, err)
 	}
-	if format == "json" {
-		_, err = stdout.Write(raw)
-	} else {
-		err = writeText(stdout, rep)
+	var verified []verification
+	if verify {
+		if verified, err = verifyAll(rep, verifyConnected(ctx, c, id)); err != nil {
+			return fail(stderr, err)
+		}
 	}
-	if err != nil {
+	if err := writeRun(stdout, stderr, format, rep, raw, verified); err != nil {
 		return fail(stderr, err)
 	}
 	if rep.Mismatch() {

@@ -1,0 +1,210 @@
+# Five requests through one batch processor, timed so that every reason
+# to send shows up: the size is reached, the timer fires, a burst is split at
+# the maximum size, and the rest leaves when the Collector shuts down. Open
+# the batch processor and its Batches tab to see when each request left.
+version: 1
+name: batch-timeline
+inputs:
+  # Three requests at once: 2 + 1 + 2 logs reach send_batch_size (4), so
+  # they leave together. The request holds three resource blocks for two
+  # services: batching appends requests without merging equal resources.
+  - receiver: otlp
+    file: input.json
+  - receiver: otlp
+    data: |
+      {
+        "resourceLogs": [
+          {
+            "resource": {
+              "attributes": [
+                {
+                  "key": "service.name",
+                  "value": {
+                    "stringValue": "cart"
+                  }
+                }
+              ]
+            },
+            "scopeLogs": [
+              {
+                "logRecords": [
+                  {
+                    "timeUnixNano": "1791626400000000000",
+                    "severityText": "INFO",
+                    "body": {
+                      "stringValue": "cart 77 updated"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+  - receiver: otlp
+    data: |
+      {
+        "resourceLogs": [
+          {
+            "resource": {
+              "attributes": [
+                {
+                  "key": "service.name",
+                  "value": {
+                    "stringValue": "checkout"
+                  }
+                }
+              ]
+            },
+            "scopeLogs": [
+              {
+                "logRecords": [
+                  {
+                    "timeUnixNano": "1791626400000000000",
+                    "severityText": "INFO",
+                    "body": {
+                      "stringValue": "order 1042 placed"
+                    }
+                  },
+                  {
+                    "timeUnixNano": "1791626400000000000",
+                    "severityText": "INFO",
+                    "body": {
+                      "stringValue": "payment accepted order=1042"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+  # One log alone stays below the size, so it waits for the timer. The timer
+  # restarts after every send, so it fires timeout (300ms) after the last
+  # send, not 300ms after this log arrived.
+  - receiver: otlp
+    after: 500ms
+    data: |
+      {
+        "resourceLogs": [
+          {
+            "resource": {
+              "attributes": [
+                {
+                  "key": "service.name",
+                  "value": {
+                    "stringValue": "checkout"
+                  }
+                }
+              ]
+            },
+            "scopeLogs": [
+              {
+                "logRecords": [
+                  {
+                    "timeUnixNano": "1791626400000000000",
+                    "severityText": "INFO",
+                    "body": {
+                      "stringValue": "order 1043 placed"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+  # A burst of 9: send_batch_max_size (6) caps the send, and the 3 left over
+  # stay below the size until the Collector shuts down and sends them.
+  - receiver: otlp
+    after: 500ms
+    data: |
+      {
+        "resourceLogs": [
+          {
+            "resource": {
+              "attributes": [
+                {
+                  "key": "service.name",
+                  "value": {
+                    "stringValue": "checkout"
+                  }
+                }
+              ]
+            },
+            "scopeLogs": [
+              {
+                "logRecords": [
+                  {
+                    "timeUnixNano": "1791626400000000000",
+                    "severityText": "INFO",
+                    "body": {
+                      "stringValue": "inventory sync item=1"
+                    }
+                  },
+                  {
+                    "timeUnixNano": "1791626400000000000",
+                    "severityText": "INFO",
+                    "body": {
+                      "stringValue": "inventory sync item=2"
+                    }
+                  },
+                  {
+                    "timeUnixNano": "1791626400000000000",
+                    "severityText": "INFO",
+                    "body": {
+                      "stringValue": "inventory sync item=3"
+                    }
+                  },
+                  {
+                    "timeUnixNano": "1791626400000000000",
+                    "severityText": "INFO",
+                    "body": {
+                      "stringValue": "inventory sync item=4"
+                    }
+                  },
+                  {
+                    "timeUnixNano": "1791626400000000000",
+                    "severityText": "INFO",
+                    "body": {
+                      "stringValue": "inventory sync item=5"
+                    }
+                  },
+                  {
+                    "timeUnixNano": "1791626400000000000",
+                    "severityText": "INFO",
+                    "body": {
+                      "stringValue": "inventory sync item=6"
+                    }
+                  },
+                  {
+                    "timeUnixNano": "1791626400000000000",
+                    "severityText": "INFO",
+                    "body": {
+                      "stringValue": "inventory sync item=7"
+                    }
+                  },
+                  {
+                    "timeUnixNano": "1791626400000000000",
+                    "severityText": "INFO",
+                    "body": {
+                      "stringValue": "inventory sync item=8"
+                    }
+                  },
+                  {
+                    "timeUnixNano": "1791626400000000000",
+                    "severityText": "INFO",
+                    "body": {
+                      "stringValue": "inventory sync item=9"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+assertions:
+  - name: every log leaves
+    target: {exporter: otlp/backend, signal: logs}
+    count: {equals: 15}

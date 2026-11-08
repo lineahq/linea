@@ -75,7 +75,96 @@ app.kubernetes.io/component: seaweedfs
 {{- end -}}
 
 {{- define "linea.hasFleet" -}}
-{{- if .Values.fleet.url }}true{{ end -}}
+{{- if or .Values.fleet.url .Values.fleet.deploy.enabled }}true{{ end -}}
+{{- end -}}
+
+{{/* Fleet in this release (fleet.deploy.enabled), checked against the values that connect a separate one. */}}
+{{- define "linea.fleetDeployed" -}}
+{{- if .Values.fleet.deploy.enabled -}}
+{{- if or .Values.fleet.url .Values.fleet.token .Values.fleet.existingSecret -}}
+{{- fail "fleet.deploy.enabled connects the server to the release's own fleet: leave fleet.url, fleet.token and fleet.existingSecret empty" -}}
+{{- end -}}
+{{- if not (or .Values.postgresql.enabled .Values.fleet.deploy.database.existingSecret) -}}
+{{- fail "fleet.deploy.enabled needs postgresql.enabled, where the chart creates fleet's databases, or fleet.deploy.database.existingSecret" -}}
+{{- end -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{- define "linea.fleetName" -}}
+{{- printf "%s-fleet" (include "linea.fullname" .) -}}
+{{- end -}}
+
+{{- define "linea.livecaptureName" -}}
+{{- printf "%s-livecapture" (include "linea.fullname" .) -}}
+{{- end -}}
+
+{{- define "linea.fleetSelector" -}}
+app.kubernetes.io/name: {{ .Chart.Name }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: fleet
+{{- end -}}
+
+{{- define "linea.livecaptureSelector" -}}
+app.kubernetes.io/name: {{ .Chart.Name }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: livecapture
+{{- end -}}
+
+{{/* The URL the server reaches fleet's management API at. */}}
+{{- define "linea.fleetURL" -}}
+{{- if include "linea.fleetDeployed" . -}}
+{{- printf "http://%s:%v" (include "linea.fleetName" .) .Values.fleet.deploy.service.managementPort -}}
+{{- else -}}
+{{- .Values.fleet.url -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "linea.fleetAllowHTTP" -}}
+{{- if or .Values.fleet.allowHTTP (include "linea.fleetDeployed" .) }}true{{ end -}}
+{{- end -}}
+
+{{/* The server's fleet admin token, which fleet's bootstrap installs. */}}
+{{- define "linea.fleetToken" -}}
+{{- include "linea.keptSecret" (list . (include "linea.fleetName" .) "token" "" "fleet") -}}
+{{- end -}}
+
+{{/* The Secret with fleet's and the plugin's database URLs. */}}
+{{- define "linea.fleetDatabaseSecret" -}}
+{{- .Values.fleet.deploy.database.existingSecret | default (printf "%s-db" (include "linea.fleetName" .)) -}}
+{{- end -}}
+
+{{/* A database password the chart keeps for fleet's roles. */}}
+{{- define "linea.fleetDatabasePassword" -}}
+{{- include "linea.keptSecret" (list (index . 0) (printf "%s-db" (include "linea.fleetName" (index . 0))) (index . 1) "" "hex") -}}
+{{- end -}}
+
+{{/* A token between fleet and the plugin, kept in the plugin's Secret. */}}
+{{- define "linea.livecaptureToken" -}}
+{{- include "linea.keptSecret" (list (index . 0) (include "linea.livecaptureName" (index . 0)) (index . 1) "" "hex") -}}
+{{- end -}}
+
+{{- define "linea.livecaptureTLSSecret" -}}
+{{- .Values.fleet.deploy.livecapture.tls.secretName | default (printf "%s-tls" (include "linea.livecaptureName" .)) -}}
+{{- end -}}
+
+{{/* The plugin's generated certificate, kept across upgrades: tls.crt and tls.key as YAML. */}}
+{{- define "linea.livecaptureCertificate" -}}
+{{- $name := include "linea.livecaptureTLSSecret" . -}}
+{{- $cache := .Values._generated | default dict -}}
+{{- if not (hasKey $cache $name) -}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $name -}}
+{{- if and $existing $existing.data (hasKey $existing.data "tls.crt") (hasKey $existing.data "tls.key") -}}
+{{- $_ := set $cache $name (dict "tls.crt" (b64dec (index $existing.data "tls.crt")) "tls.key" (b64dec (index $existing.data "tls.key"))) -}}
+{{- else -}}
+{{- $svc := include "linea.livecaptureName" . -}}
+{{- $hosts := concat (list $svc (printf "%s.%s" $svc .Release.Namespace) (printf "%s.%s.svc" $svc .Release.Namespace)) .Values.fleet.deploy.livecapture.tls.extraHosts -}}
+{{- $cert := genSelfSignedCert $svc nil $hosts 825 -}}
+{{- $_ := set $cache $name (dict "tls.crt" $cert.Cert "tls.key" $cert.Key) -}}
+{{- end -}}
+{{- $_ := set .Values "_generated" $cache -}}
+{{- end -}}
+{{- toYaml (index $cache $name) -}}
 {{- end -}}
 
 {{/* The server accepts workers when the chart deploys the pool or a worker, or is given a registration token. */}}
@@ -245,9 +334,10 @@ app.kubernetes.io/component: seaweedfs
 {{- .repository }}:{{ .tag }}{{ with .digest }}@{{ . }}{{ end -}}
 {{- end -}}
 
-{{/* A value from values, else the one kept in an existing Secret, else a new random one. Generated once per render: every template sees the same value. */}}
+{{/* A value from values, else the one kept in an existing Secret, else a new random one: 32 letters and digits, or with a fifth element "hex" 64 lowercase hexadecimal characters, or "fleet" a fleet credential token. Generated once per render: every template sees the same value. */}}
 {{- define "linea.keptSecret" -}}
 {{- $root := index . 0 -}}{{- $secret := index . 1 -}}{{- $key := index . 2 -}}{{- $given := index . 3 -}}
+{{- $kind := "" -}}{{- if gt (len .) 4 }}{{ $kind = index . 4 }}{{ end -}}
 {{- $cache := $root.Values._generated | default dict -}}
 {{- $id := printf "%s/%s" $secret $key -}}
 {{- if not (hasKey $cache $id) -}}
@@ -256,6 +346,10 @@ app.kubernetes.io/component: seaweedfs
 {{- $existing := lookup "v1" "Secret" $root.Release.Namespace $secret -}}
 {{- if and $existing $existing.data (hasKey $existing.data $key) -}}
 {{- $value = b64dec (index $existing.data $key) -}}
+{{- else if eq $kind "hex" -}}
+{{- $value = sha256sum (randAlphaNum 64) -}}
+{{- else if eq $kind "fleet" -}}
+{{- $value = printf "of1_%s_%s" (sha256sum (randAlphaNum 64) | trunc 32) (sha256sum (randAlphaNum 64)) -}}
 {{- else -}}
 {{- $value = randAlphaNum 32 -}}
 {{- end -}}

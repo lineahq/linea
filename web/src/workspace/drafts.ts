@@ -197,20 +197,12 @@ export function openedPatch(ws: WorkspaceState, kind: DraftKind, text: string, l
 }
 
 /**
- * newPatch starts over: the configuration from a template and an empty
- * scenario, neither saved anywhere. Both start clean, so leaving untouched
+ * newPatch starts over: the configuration from a template and a scenario
+ * (empty unless given), neither saved anywhere. Both start clean, so leaving untouched
  * new work does not ask first; the header still says "Not saved".
  */
-export function newPatch(ws: WorkspaceState, configYAML: string): Partial<WorkspaceState> {
-  return loaded(ws, { configYAML, configPath: '', scenarioYAML: '', scenarioPath: '', saved: {}, lastRunId: undefined }, ['config', 'scenario']);
-}
-
-/**
- * newScenarioPatch opens `scenarioYAML` as a new scenario, saved nowhere,
- * beside the open configuration (a scenario made from capture records).
- */
-export function newScenarioPatch(ws: WorkspaceState, scenarioYAML: string): Partial<WorkspaceState> {
-  return loaded(ws, { scenarioYAML, scenarioPath: '', saved: { ...ws.saved, scenario: undefined }, lastRunId: undefined }, ['scenario']);
+export function newPatch(ws: WorkspaceState, configYAML: string, scenarioYAML = ''): Partial<WorkspaceState> {
+  return loaded(ws, { configYAML, configPath: '', scenarioYAML, scenarioPath: '', saved: {}, lastRunId: undefined }, ['config', 'scenario']);
 }
 
 /**

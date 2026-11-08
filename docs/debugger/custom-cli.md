@@ -105,13 +105,18 @@ so it says so; run `linea-mine version` on the target to check it there.
 ```text
 $ ./linea-mine version
 linea 1.2.0
-collector 0.162.0, built with go1.27.3
-schemas: report 0.14, inspection 0.2, events 0.6
-custom build with linea build
-  source example.com/acme/stampprocessor from ../stampprocessor
-components:
-  go.opentelemetry.io/collector/receiver/otlpreceiver v0.162.0
-  example.com/acme/stampprocessor v0.1.0
+  collector: 0.162.0
+  built with: go1.27.3
+  report schema: 0.14
+  inspection schema: 0.2
+  event schema: 0.6
+  build: custom, made with linea build
+  source: example.com/acme/stampprocessor from ../stampprocessor
+
+COMPONENTS
+  MODULE                                               VERSION
+  go.opentelemetry.io/collector/receiver/otlpreceiver  v0.162.0
+  example.com/acme/stampprocessor                      v0.1.0
   ...
 ```
 

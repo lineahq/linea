@@ -117,3 +117,27 @@ func eventually(t *testing.T, ok func() bool) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// TestCaptureRecordsTextListsStreamsNotTelemetry prints each record's
+// sequence and stream under the watermark, and no records in words.
+func TestCaptureRecordsTextListsStreamsNotTelemetry(t *testing.T) {
+	stream := platform.CaptureStream{CollectorID: "c1", Pipeline: "logs", Point: "egress", Signal: "logs"}
+	var out bytes.Buffer
+	page := &platform.CaptureRecordsPage{SessionID: "s1", Watermark: 7, NextCursor: "n",
+		Items: []platform.CaptureRecord{{Sequence: 6, Stream: stream}, {Sequence: 7, Stream: stream, Oversize: true}}}
+	if err := writeCaptureRecords(&out, page); err != nil {
+		t.Fatal(err)
+	}
+	want := "capture s1: 2 records on this page\n  receipt watermark: 7\n\nRECORDS\n  SEQ COLLECTOR PIPELINE/POINT SIGNAL OVERSIZE\n" +
+		"  6 c1 logs/egress logs -\n  7 c1 logs/egress logs yes\n\nnext page: --cursor n\n"
+	if got := squeezed(out.String()); got != want {
+		t.Fatalf("records:\n%s\nwant:\n%s", got, want)
+	}
+	out.Reset()
+	if err := writeCaptureRecords(&out, &platform.CaptureRecordsPage{SessionID: "s1"}); err != nil {
+		t.Fatal(err)
+	}
+	if want := "capture s1: 0 records on this page\n  receipt watermark: 0\n"; out.String() != want {
+		t.Fatalf("no records:\n%s", out.String())
+	}
+}

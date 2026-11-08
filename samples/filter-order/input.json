@@ -1,0 +1,42 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          { "key": "service.name", "value": { "stringValue": "checkout" } }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": { "name": "checkout.log" },
+          "logRecords": [
+            {
+              "timeUnixNano": "1760000000000000000",
+              "severityNumber": 5,
+              "severityText": "debug",
+              "body": { "stringValue": "cart lookup took 3ms" }
+            },
+            {
+              "timeUnixNano": "1760000000100000000",
+              "severityNumber": 9,
+              "severityText": "info",
+              "body": { "stringValue": "order placed" }
+            },
+            {
+              "timeUnixNano": "1760000000200000000",
+              "severityNumber": 5,
+              "severityText": "debug",
+              "body": { "stringValue": "payment retry scheduled" }
+            },
+            {
+              "timeUnixNano": "1760000000300000000",
+              "severityNumber": 17,
+              "severityText": "error",
+              "body": { "stringValue": "payment declined" }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

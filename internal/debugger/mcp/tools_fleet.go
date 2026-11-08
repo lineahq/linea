@@ -116,6 +116,19 @@ func addFleetTools(server *sdk.Server, service *platform.Service) {
 			}
 			return fmt.Sprintf("Fleet: config management %t; %d agents, %d connected.", v.ConfigManagement, v.Total, v.Connected)
 		})
+	fleetTool(server, "linea_check_fleet_connection", "Contact fleet now and report each step: reaching fleet with the server's credential, the livecapture plugin, and config management. Without a fleet connection configured is false.",
+		func(ctx context.Context, _ struct{}) (*platform.FleetConnection, error) {
+			return service.CheckFleetConnection(ctx, callerOf(ctx))
+		}, func(v *platform.FleetConnection) string {
+			if !v.Configured {
+				return "Fleet: not configured; start linea-server with --fleet-url and --fleet-token-file."
+			}
+			text := "Fleet connection:"
+			for _, c := range v.Checks {
+				text += fmt.Sprintf(" %s %s;", c.Name, c.Status)
+			}
+			return text
+		})
 	fleetTool(server, "linea_list_fleet_agents", "List fleet's agents in bounded pages with the Collectors each links to live capture.",
 		func(ctx context.Context, q fleetAgentsInput) (*platform.FleetAgentPage, error) {
 			return service.ListFleetAgents(ctx, callerOf(ctx), platform.FleetAgentQuery{Limit: q.Limit, Cursor: q.Cursor, Connected: q.Connected, Healthy: q.Healthy, Selector: q.Selector, Sort: q.Sort})

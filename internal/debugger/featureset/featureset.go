@@ -7,6 +7,7 @@ package featureset
 
 import (
 	_ "github.com/lineahq/linea/internal/debugger/aggregation"
+	_ "github.com/lineahq/linea/internal/debugger/filterreplay"
 	_ "github.com/lineahq/linea/internal/debugger/ottlreplay"
 	_ "github.com/lineahq/linea/internal/debugger/routing"
 	_ "github.com/lineahq/linea/internal/debugger/sampling"

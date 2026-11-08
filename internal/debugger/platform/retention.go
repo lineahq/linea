@@ -159,6 +159,7 @@ func (s *Service) forgetRunsLocked(ids ...string) {
 	for _, id := range ids {
 		delete(s.runs, id)
 		s.deletedRuns.add(id, time.Now())
+		s.listings.drop(id)
 		gone[id] = true
 	}
 	s.order = slices.DeleteFunc(s.order, func(id string) bool { return gone[id] })

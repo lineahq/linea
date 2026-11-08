@@ -104,7 +104,7 @@ func TestTeamServerAuthenticatesEveryRequest(t *testing.T) {
 
 	t.Setenv(serverTokenEnv, created.Secret)
 	code, out, stderr := runCLI(t, "token", "list", "--server", server)
-	if code != exitOK || !strings.Contains(out, created.Token.ID) || !strings.Contains(out, "active") {
+	if code != exitOK || !strings.Contains(out, created.Token.ID) || !strings.Contains(out, "ACTIVE") {
 		t.Fatalf("token list: exit %d, %s%s", code, out, stderr)
 	}
 	if code, _, stderr := runCLI(t, "runs", "--server", server); code != exitOK {

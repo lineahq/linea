@@ -158,15 +158,19 @@ interface Group {
   after: Set<string>;
 }
 
-/** changeGroups: a stage's changes grouped by operation, path and level, largest first. */
-export function changeGroups(changes: Change[]): Group[] {
+/**
+ * changeGroups: a stage's changes grouped by operation, path and level,
+ * largest first. An entity is a position within its own input, so a change
+ * names its input to count the same position in two inputs as two records.
+ */
+export function changeGroups(changes: (Change & { input?: number })[]): Group[] {
   const groups = new Map<string, Group>();
   for (const c of changes) {
     const level = levelOf(c.entity);
     const key = `${c.op}|${c.path}|${level}`;
     let g = groups.get(key);
     if (!g) groups.set(key, (g = { op: c.op, path: c.path, level, entities: new Set(), before: new Set(), after: new Set() }));
-    g.entities.add(c.entity);
+    g.entities.add(`${c.input ?? ''}|${c.entity}`);
     if (c.op !== 'added') g.before.add(JSON.stringify(c.before));
     if (c.op !== 'removed') g.after.add(JSON.stringify(c.after));
   }
@@ -178,7 +182,7 @@ const VERB: Record<string, [string, string]> = { changed: [' changed ', ' on '],
 function changeFindings(report: Report): Finding[] {
   const out: Finding[] = [];
   for (const s of report.stages ?? []) {
-    const changes = (s.inputs ?? []).flatMap((i) => i.diff?.changes ?? []);
+    const changes = (s.inputs ?? []).flatMap((i) => (i.diff?.changes ?? []).map((c) => ({ ...c, input: i.seq })));
     const top = changeGroups(changes)[0];
     if (!top) continue;
     const [verb, prep] = VERB[top.op] ?? [` ${top.op} `, ' on '];

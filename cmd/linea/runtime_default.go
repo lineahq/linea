@@ -61,17 +61,15 @@ func runtimeDefaultCmd(ctx context.Context, args []string, stdout, stderr io.Wri
 // before a choice it is the built-in runtime or the one the server started
 // with.
 func writeRuntimeDefault(w io.Writer, d *api.RuntimeDefault) error {
-	if _, err := fmt.Fprintf(w, "default runtime: %s\n", d.Name); err != nil {
-		return err
-	}
-	var err error
+	t := newTextOut(w)
+	t.line(0, "default runtime: %s", d.Name)
 	switch {
 	case d.Set != nil:
-		_, err = fmt.Fprintf(w, "chosen by %s at %s\n", d.SetBy, d.Set.UTC().Format(time.RFC3339))
+		t.line(1, "chosen by %s at %s", d.SetBy, d.Set.UTC().Format(time.RFC3339))
 	case d.Name == platform.BuiltInRuntime:
-		_, err = fmt.Fprintf(w, "none was chosen: requests that name no runtime run on the built-in runtime\n")
+		t.line(1, "none was chosen: requests that name no runtime run on the built-in runtime")
 	default:
-		_, err = fmt.Fprintf(w, "none was chosen: the server started with it\n")
+		t.line(1, "none was chosen: the server started with it")
 	}
-	return err
+	return t.err()
 }

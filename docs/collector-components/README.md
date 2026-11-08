@@ -44,7 +44,7 @@ flowchart LR
 
 | Item | Requirement |
 | --- | --- |
-| Collector | 0.162.0 or newer. Tested with 0.162.0, 0.163.0 and 0.164.0. |
+| Collector | 0.162.0 or newer. Tested with 0.162.0, 0.163.0, 0.164.0 and 0.165.0. |
 | OCB | The same release as your Collector modules. |
 | Go | 1.26 or newer. |
 
@@ -62,7 +62,7 @@ not pins: your manifest's release wins.
 
   ```yaml
   replaces:
-    - go.opentelemetry.io/collector => go.opentelemetry.io/collector v0.164.0
+    - go.opentelemetry.io/collector => go.opentelemetry.io/collector v0.165.0
   ```
 
 This is unrelated to the debugger's runtime builder, which builds the

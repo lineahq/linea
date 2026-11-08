@@ -32,6 +32,10 @@ type (
 	ComparisonError      = comparison.ErrorCount
 	ComparisonAssertion  = comparison.Assertion
 	ComparisonIgnoreRule = comparison.Ignored
+	// ComparisonRecommendations pairs the runs' recommendations.
+	ComparisonRecommendations    = comparison.Recommendations
+	ComparisonRecommendation     = comparison.RecommendationDiff
+	ComparisonRecommendationSide = comparison.RecommendationSide
 )
 
 // Comparison outcomes and the reason codes of an inconclusive one.
@@ -46,6 +50,10 @@ const (
 	ComparisonAfterTruncated   = comparison.ReasonAfterTruncated
 	ComparisonBuildsDiffer     = comparison.ReasonBuildsDiffer
 	ComparisonInputsDiffer     = comparison.ReasonInputsDiffer
+
+	ComparisonRecommendationResolved = comparison.RecommendationResolved
+	ComparisonRecommendationNew      = comparison.RecommendationNew
+	ComparisonRecommendationPersists = comparison.RecommendationPersists
 )
 
 // CompareRequest names two runs to compare. Ignore lists OTTL paths

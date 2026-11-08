@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"text/tabwriter"
+	"strings"
 	"time"
 
 	"github.com/lineahq/linea/internal/debugger/api"
@@ -63,10 +63,7 @@ func runsCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if *format == "json" {
 		err = writeIndented(stdout, page)
 	} else {
-		err = writeRuns(stdout, page.Runs)
-		if err == nil && page.NextCursor != "" {
-			fmt.Fprintf(stderr, "more runs match: pass --cursor %s, or --all\n", page.NextCursor)
-		}
+		err = writeRuns(stdout, page.Runs, page.NextCursor)
 	}
 	if err != nil {
 		return fail(stderr, err)
@@ -116,14 +113,20 @@ func runsLogCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 }
 
 // writeRuns prints one row per run: how execution ended, how many inputs were
-// injected and the assertion counts, or "-" where the run has no report.
-func writeRuns(w io.Writer, runs []api.Run) error {
-	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "RUN\tCREATED\tSCENARIO\tRUNTIME\tRESULT\tINPUTS\tASSERTIONS")
+// injected and the assertion counts, or "-" where the run has no report. A
+// next page, when there is one, is named under the table.
+func writeRuns(w io.Writer, runs []api.Run, nextCursor string) error {
+	t := newTextOut(w)
+	if len(runs) == 0 {
+		t.none("runs")
+		t.nextPage(nextCursor)
+		return t.err()
+	}
+	rows := make([][]string, 0, len(runs))
 	for _, r := range runs {
-		scenario, rt, result, inputs, assertions := "-", "-", string(r.State), "-", "-"
+		scenario, rt, result, inputs, assertions := "-", "-", strings.ToUpper(string(r.State)), "-", "-"
 		if s := r.Summary; s != nil {
-			result = string(s.Status)
+			result = strings.ToUpper(string(s.Status))
 			if s.Truncated {
 				result += " (truncated)"
 			}
@@ -135,10 +138,12 @@ func writeRuns(w io.Writer, runs []api.Run) error {
 			}
 			inputs = fmt.Sprintf("%d of %d", s.Injected, s.Inputs)
 			if a := s.Assertions; a != nil {
-				assertions = fmt.Sprintf("%s (%d pass, %d fail, %d inconclusive, %d error)", a.Outcome, a.Pass, a.Fail, a.Inconclusive, a.Error)
+				assertions = fmt.Sprintf("%s (%d pass, %d fail, %d inconclusive, %d error)", strings.ToUpper(string(a.Outcome)), a.Pass, a.Fail, a.Inconclusive, a.Error)
 			}
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", r.ID, r.Created.Local().Format(time.DateTime), scenario, rt, result, inputs, assertions)
+		rows = append(rows, []string{r.ID, result, r.Created.Local().Format(time.DateTime), scenario, rt, inputs, assertions})
 	}
-	return tw.Flush()
+	t.table(0, []string{"id", "status", "created", "scenario", "runtime", "inputs", "assertions"}, rows)
+	t.nextPage(nextCursor)
+	return t.err()
 }

@@ -177,28 +177,51 @@ func (c *Client) Inspect(ctx context.Context, req api.InspectRequest) ([]byte, *
 // bytes, which are what local run prints, and the decoded report. An
 // interrupted wait cancels the run.
 func (c *Client) Run(ctx context.Context, req api.Request) ([]byte, *platform.Report, error) {
+	_, raw, rep, err := c.RunWithID(ctx, req)
+	return raw, rep, err
+}
+
+// RunWithID is Run that also returns the run's ID.
+func (c *Client) RunWithID(ctx context.Context, req api.Request) (string, []byte, *platform.Report, error) {
 	raw, err := c.do(ctx, http.MethodPost, "/api/v1/runs", req, http.StatusAccepted)
 	if err != nil {
-		return nil, nil, err
+		return "", nil, nil, err
 	}
 	var run api.Run
 	if err := json.Unmarshal(raw, &run); err != nil {
-		return nil, nil, c.malformed(err)
+		return "", nil, nil, c.malformed(err)
 	}
 	raw, err = c.awaited(ctx, "/api/v1/runs/"+url.PathEscape(run.ID)+"/report?wait=true")
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, nil, c.interrupted(ctx, []string{run.ID})
+			return "", nil, nil, c.interrupted(ctx, []string{run.ID})
 		}
-		return nil, nil, err
+		return "", nil, nil, err
 	}
 	var rep platform.Report
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	if err := dec.Decode(&rep); err != nil {
-		return nil, nil, c.malformed(err)
+		return "", nil, nil, c.malformed(err)
 	}
-	return raw, &rep, nil
+	return run.ID, raw, &rep, nil
+}
+
+// VerifyRecommendation runs recommendation n of a finished run as a
+// candidate and waits for its comparison; ending ctx cancels the candidate
+// on the server.
+func (c *Client) VerifyRecommendation(ctx context.Context, runID string, n int) (*api.RecommendationVerification, error) {
+	raw, err := c.do(ctx, http.MethodPost, "/api/v1/runs/"+url.PathEscape(runID)+"/recommendations/"+strconv.Itoa(n)+"/verify", struct{}{}, http.StatusOK)
+	if err != nil {
+		return nil, err
+	}
+	var v api.RecommendationVerification
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&v); err != nil {
+		return nil, c.malformed(err)
+	}
+	return &v, nil
 }
 
 // Export returns a run as a reviewable scenario file; the caller writes it.

@@ -111,6 +111,11 @@ type InputResult struct {
 	Mock string `json:"mock,omitempty"`
 	// ClientAddress is the sender address the input was injected with.
 	ClientAddress string `json:"client_address,omitempty"`
+	// Headers names the request headers the input declared; their values
+	// are never recorded. HeadersDropped: the receiver has no
+	// include_metadata: true, so no component saw them.
+	Headers        []string `json:"headers,omitempty"`
+	HeadersDropped bool     `json:"headers_dropped,omitempty"`
 	// After is the wait before the input was injected.
 	After string `json:"after,omitempty"`
 }

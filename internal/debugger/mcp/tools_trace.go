@@ -11,9 +11,9 @@ import (
 
 type traceInput struct {
 	RunID     string `json:"run_id" jsonschema:"Plain run ID of a finished run."`
-	Family    string `json:"family" jsonschema:"Evidence family: stage_changes, records, journey, statements or events."`
-	Pipeline  string `json:"pipeline,omitempty" jsonschema:"Pipeline ID for stage_changes and records (empty for a connector); optional filter for statements."`
-	Component string `json:"component,omitempty" jsonschema:"Component ID: the stage for stage_changes and records, the transform processor for statements, an optional filter for events."`
+	Family    string `json:"family" jsonschema:"Evidence family: stage_changes, records, journey, statements, events or recommendations."`
+	Pipeline  string `json:"pipeline,omitempty" jsonschema:"Pipeline ID for stage_changes and records (empty for a connector); optional filter for statements and recommendations."`
+	Component string `json:"component,omitempty" jsonschema:"Component ID: the stage for stage_changes and records, the transform processor for statements, an optional filter for events and recommendations (one the recommendation names)."`
 	Signal    string `json:"signal,omitempty" jsonschema:"Signal of a connector stage that has several, for stage_changes and records."`
 	Side      string `json:"side,omitempty" jsonschema:"For records: before (received) or after (emitted)."`
 	Entity    string `json:"entity,omitempty" jsonschema:"For journey: a record ID from lineage or a records item ref."`

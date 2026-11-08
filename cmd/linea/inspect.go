@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -69,48 +68,55 @@ func inspectCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	return exitOK
 }
 
+// writeInspection prints the verdict, the diagnostics, the pipelines and
+// how each component runs.
 func writeInspection(w io.Writer, ins *platform.Inspection) error {
-	var errs []error
-	printf := func(format string, a ...any) {
-		_, err := fmt.Fprintf(w, format, a...)
-		errs = append(errs, err)
-	}
+	t := newTextOut(w)
 	status := "valid"
 	if !ins.Valid {
-		status = "INVALID"
+		status = "invalid"
 	}
-	printf("config %s (sha256 %.12s): %s\n", ins.Config.Path, ins.Config.SHA256, status)
-	for _, d := range ins.Diagnostics {
-		printf("  %s %s", d.Severity, d.Code)
-		if d.Component != "" {
-			printf(" [%s]", d.Component)
-		}
-		printf(": %s\n", d.Message)
-		if d.Hint != "" {
-			printf("    hint: %s\n", d.Hint)
+	t.line(0, "%s  config %s", t.status(status, 0), ins.Config.Path)
+	t.field(1, "sha256", fmt.Sprintf("%.12s", ins.Config.SHA256))
+	if len(ins.Diagnostics) > 0 {
+		t.heading("diagnostics")
+		for _, d := range ins.Diagnostics {
+			where := ""
+			if d.Component != "" {
+				where = " [" + d.Component + "]"
+			}
+			t.line(1, "%s %s%s: %s", t.status(string(d.Severity), 0), d.Code, where, d.Message)
+			t.field(2, "hint", d.Hint)
 		}
 	}
 	if g := ins.Topology; g != nil {
-		printf("\npipelines:\n")
+		t.heading("pipelines")
+		var rows [][]string
 		for _, p := range g.Pipelines {
-			printf("  %s: %s -> %s -> %s\n", p.ID, list(p.Receivers), list(p.Processors), list(p.Exporters))
+			rows = append(rows, []string{p.ID, list(p.Receivers) + " -> " + list(p.Processors) + " -> " + list(p.Exporters)})
 		}
-		printf("\ncomponents:\n")
+		t.table(1, nil, rows)
+		t.heading("components")
+		rows = nil
 		for _, c := range g.Components {
-			printf("  %-28s %-17s", c.Ref, c.Mode)
+			var notes []string
 			if len(c.Pipelines) > 1 {
-				printf(" shared by %s", strings.Join(c.Pipelines, ", "))
+				notes = append(notes, "shared by "+strings.Join(c.Pipelines, ", "))
 			}
 			if c.Note != "" {
-				printf(" (%s)", c.Note)
+				notes = append(notes, c.Note)
 			}
-			printf("\n")
+			rows = append(rows, []string{c.Ref, string(c.Mode), strings.Join(notes, "; ")})
 		}
+		t.table(1, []string{"component", "mode", "note"}, rows)
 		if len(g.Unused) > 0 {
-			printf("\nunused (not built by the Collector): %s\n", strings.Join(g.Unused, ", "))
+			t.heading("unused (not built by the Collector)")
+			for _, u := range g.Unused {
+				t.line(1, "%s", u)
+			}
 		}
 	}
-	return errors.Join(errs...)
+	return t.err()
 }
 
 func list(ids []string) string {

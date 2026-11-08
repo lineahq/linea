@@ -30,7 +30,7 @@ func TestRuntimeBuildToolsQueueListAndCancel(t *testing.T) {
 	r, first := callTool(t, ctx, session, "linea_build_runtime", map[string]any{"name": "edge", "manifest_yaml": plainBuildManifest, "wait_seconds": 0})
 	text := textOf(t, r)
 	if r.IsError || first["state"] != "queued" || first["reused"] != false || first["verified"] != true || first["build_id"] == "" ||
-		text != "Runtime build: state queued, not finished within the wait; verified true; 4 manifest warnings; 0 log lines returned of 0." || strings.Contains(text, "edge") {
+		text != "Runtime build: state queued, not finished within the wait; verified true; 5 manifest warnings; 0 log lines returned of 0." || strings.Contains(text, "edge") {
 		t.Fatalf("build = %s, %+v", text, first)
 	}
 	r, got := callTool(t, ctx, session, "linea_get_runtime_build", map[string]any{"build_id": first["build_id"], "log_from": 0})
@@ -38,7 +38,7 @@ func TestRuntimeBuildToolsQueueListAndCancel(t *testing.T) {
 		t.Fatalf("get = %+v", got)
 	}
 	r, cancelled := callTool(t, ctx, session, "linea_cancel_runtime_build", map[string]any{"build_id": first["build_id"]})
-	if r.IsError || cancelled["state"] != "cancelled" || textOf(t, r) != "Runtime build: state cancelled; verified true; 4 manifest warnings; 0 log lines returned of 0." {
+	if r.IsError || cancelled["state"] != "cancelled" || textOf(t, r) != "Runtime build: state cancelled; verified true; 5 manifest warnings; 0 log lines returned of 0." {
 		t.Fatalf("cancel = %s, %+v", textOf(t, r), cancelled)
 	}
 	r, second := callTool(t, ctx, session, "linea_build_runtime", map[string]any{"name": "other", "manifest": map[string]any{"text": plainBuildManifest}, "wait_seconds": 0})

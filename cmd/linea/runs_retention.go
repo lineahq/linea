@@ -179,13 +179,14 @@ func writeStorageUsage(w io.Writer, raw []byte) error {
 	if u.Limit > 0 {
 		used += " of " + humanBytes(u.Limit)
 	}
-	fmt.Fprintf(w, "storage: %s\n", used)
-	fmt.Fprintf(w, "runs: %d, %d kept\n", u.Runs, u.KeptRuns)
+	t := newTextOut(w)
+	t.field(0, "storage", used)
+	t.field(0, "runs", fmt.Sprintf("%d, %d kept", u.Runs, u.KeptRuns))
 	if u.OldestRun != nil {
-		fmt.Fprintf(w, "oldest run: %s\n", u.OldestRun.Local().Format(time.DateTime))
+		t.field(0, "oldest run", u.OldestRun.Local().Format(time.DateTime))
 	}
-	_, err := fmt.Fprintf(w, "retention: %s\n", policyText(u.Retention))
-	return err
+	t.field(0, "retention", policyText(u.Retention))
+	return t.err()
 }
 
 // policyText says what a retention policy bounds; whole days read as days.

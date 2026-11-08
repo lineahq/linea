@@ -432,7 +432,7 @@ func mustJSON(v any) []byte {
 func (s *Store) ManagedCredentials(ctx context.Context) (map[string]map[string]string, error) {
 	ctx, cancel := bounded(ctx)
 	defer cancel()
-	rows, err := s.pool.Query(ctx, "SELECT id,labels FROM fleet.credentials WHERE role='agent' AND remote_config AND revoked_at IS NULL AND expires_at>clock_timestamp()")
+	rows, err := s.pool.Query(ctx, "SELECT id,labels FROM fleet.credentials WHERE role='agent' AND remote_config AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>clock_timestamp())")
 	if err != nil {
 		return nil, normalize(err)
 	}

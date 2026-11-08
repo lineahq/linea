@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"text/tabwriter"
+	"strings"
 	"time"
 
 	"github.com/lineahq/linea/internal/debugger/api"
@@ -42,12 +42,16 @@ func suiteListCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	} else {
 		var suites []api.Suite
 		if err = json.Unmarshal(raw, &suites); err == nil {
-			tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "SUITE\tCREATED\tCONFIG\tMEMBERS")
-			for _, s := range suites {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%d\n", s.ID, s.Created.Local().Format(time.DateTime), s.Config, len(s.Members))
+			t := newTextOut(stdout)
+			if len(suites) == 0 {
+				t.none("suites")
 			}
-			err = tw.Flush()
+			rows := make([][]string, 0, len(suites))
+			for _, s := range suites {
+				rows = append(rows, []string{s.ID, s.Created.Local().Format(time.DateTime), s.Config, fmt.Sprint(len(s.Members))})
+			}
+			t.table(0, []string{"id", "created", "config", "members"}, rows)
+			err = t.err()
 		}
 	}
 	if err != nil {
@@ -86,13 +90,19 @@ func suiteShowCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 			if s.Outcome != "" {
 				outcome = string(s.Outcome)
 			}
-			fmt.Fprintf(stdout, "suite %s on %s: done %t, outcome %s\n", s.ID, s.Config, s.Done, outcome)
-			tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "MEMBER\tRUN\tSTATE\tOUTCOME")
-			for _, m := range s.Members {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", m.Label, dash(m.RunID), dash(string(m.State)), dash(string(m.Outcome)))
+			t := newTextOut(stdout)
+			t.line(0, "%s  suite %s", t.status(outcome, 0), s.ID)
+			t.field(1, "config", s.Config)
+			t.field(1, "done", fmt.Sprint(s.Done))
+			if len(s.Members) > 0 {
+				t.heading("members")
+				rows := make([][]string, 0, len(s.Members))
+				for _, m := range s.Members {
+					rows = append(rows, []string{m.Label, dash(m.RunID), dash(string(m.State)), strings.ToUpper(dash(string(m.Outcome)))})
+				}
+				t.table(1, []string{"member", "run", "state", "outcome"}, rows)
 			}
-			err = tw.Flush()
+			err = t.err()
 		}
 	}
 	if err != nil {

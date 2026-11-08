@@ -190,6 +190,30 @@ func TestBusyCollectorNamesItsHolder(t *testing.T) {
 	}
 }
 
+// TestFleetRawRefusalNamesTheGrant: fleet refusing a raw selection says the
+// plugin does not grant this server raw capture; a refusal of redacted
+// points keeps fleet's message.
+func TestFleetRawRefusalNamesTheGrant(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		point CapturePoint
+		want  string
+	}{
+		{"raw", logsRaw, "raw_principals"},
+		{"redacted", CapturePoint{Pipeline: "logs", Point: "egress", Signal: "logs", Sensitivity: "redacted"}, "fleet: capture access denied"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFleetFixture(t, nil, fakePeer(0, tc.point))
+			f.fleet.fail("CreateCapture", &fleetcapture.Error{Status: 403, Message: "capture access denied"})
+			_, err := f.s.CreateCaptureSession(context.Background(), testCaller, f.req)
+			wantCode(t, err, CodeForbidden)
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("refusal = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
 // TestFleetBusyCollectorIsAConflict: a Collector another debugger or client
 // holds is refused by fleet as collector_busy.
 func TestFleetBusyCollectorIsAConflict(t *testing.T) {

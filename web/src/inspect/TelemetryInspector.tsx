@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import type { Aggregation, Event, OTTLReport, RecordLineage, Routing, Stage, StageInput } from '../api/types';
+import type { Aggregation, Event, Filtering, OTTLReport, RecordLineage, Routing, Stage, StageInput } from '../api/types';
 import type { WorkspaceSearch } from '../router';
 import type { LayoutNode } from '../graph/layout';
 import { eventNodeKey, stageNodeKey } from '../runs/annotations';
@@ -12,12 +12,14 @@ import { VERIFICATION } from './aggregation';
 import { AggregationList } from './AggregationList';
 import { RoutingList } from './RoutingList';
 import { explained } from './routing';
+import { removedBy, removedByText } from './filtering';
 import { RecordChanges } from './RecordChanges';
 import { JsonTree } from './JsonTree';
 import { OTTLPanel } from '../ottl/OTTLPanel';
 import { SignalExplorer } from './SignalExplorer';
 import { RawJSONDiff } from './RawJSONDiff';
 import { capOptions } from './pages';
+import { payloadGroups, payloadOption, payloadSummary } from './payloads';
 
 interface Props {
   runId: string;
@@ -32,6 +34,8 @@ interface Props {
   aggregations?: Aggregation[];
   /** Which rule of a routing connector sent each record where. */
   routing?: Routing[];
+  /** Which condition of a filter processor removed each record. */
+  filtering?: Filtering[];
   live: boolean;
   search: WorkspaceSearch;
   setSearch(patch: Partial<WorkspaceSearch>): void;
@@ -164,7 +168,7 @@ function RecordPicker({
   );
 }
 
-function StageView({ runId, node, events, stages, ottl, lineage, live, search, setSearch }: Props) {
+function StageView({ runId, node, events, stages, ottl, filtering, lineage, live, search, setSearch }: Props) {
   const stage = stages?.find((s) => stageNodeKey(s) === node.key);
   const bySeq = useMemo(() => new Map(events.map((e) => [e.seq, e])), [events]);
   const liveInputs = useMemo(
@@ -203,6 +207,7 @@ function StageView({ runId, node, events, stages, ottl, lineage, live, search, s
           events={events}
           bySeq={bySeq}
           ottl={ottl?.find((r) => r.processor === stage.component && r.input === selected.seq)}
+          filtering={filtering?.find((f) => f.processor === stage.component && f.pipeline === node.pipeline && f.input === selected.seq)}
           lineage={lineage}
           search={search}
           setSearch={setSearch}
@@ -259,10 +264,10 @@ function DeferredView({ runId, stage, window, bySeq, lineage, search, setSearch 
 }
 
 function StageInputView({
-  runId, input, bySeq, ottl, lineage, search, setSearch,
+  runId, input, bySeq, ottl, filtering, lineage, search, setSearch,
 }: {
   runId: string; input: StageInput; stage: Stage; events: Event[];
-  bySeq: Map<number, Event>; ottl?: OTTLReport; lineage?: RecordLineage[];
+  bySeq: Map<number, Event>; ottl?: OTTLReport; filtering?: Filtering; lineage?: RecordLineage[];
   search: WorkspaceSearch; setSearch: Props['setSearch'];
 }) {
   const before = useSnapshot(runId, bySeq.get(input.seq)?.snapshot);
@@ -277,13 +282,14 @@ function StageInputView({
     </select></label>}
     {error ? <p className="error">{error.message}</p> : before.isLoading || after.isLoading ? <p className="muted">Loading recorded data…</p> :
       search.view === 'ottl' ? <><OTTLPanel report={ottl} input={before.data} observed={after.data}
-        onRecord={(record) => setSearch({ record })}
+        onRecord={(record) => setSearch({ record, tab: 'changes', view: undefined })}
         onRerun={(run) => setSearch({ run, input: undefined, record: undefined })}
         runId={runId} onCompare={(compare) => setSearch({ compare })} />
         <RawJSONDiff before={before.data} after={after.data} afterMissingReason={input.outcome === 'emitted' ? undefined : OUTCOME_NOTES[input.outcome]} /></> :
       <RecordChanges diff={output === input.outputs?.[0] ? input.diff : undefined} before={before.data} after={after.data}
         record={search.record} onClearRecord={() => setSearch({ record: undefined })}
         afterMissingReason={input.outcome === 'emitted' ? undefined : OUTCOME_NOTES[input.outcome]}
+        removedBy={filtering && output === input.outputs?.[0] ? (entity) => removedByText(removedBy(filtering, entity)) : undefined}
         report={output === input.outputs?.[0] ? ottl : undefined} onOpenStatements={ottl ? () => setSearch({ tab: 'ottl', view: undefined }) : undefined}
         onFollow={(entity, side) => {
           const seq = side === 'before' ? input.seq : output;
@@ -298,10 +304,13 @@ function PayloadView({ runId, node, events, lineage, search, setSearch }: Props)
   const list = useMemo(() => events.filter((e) => e.kind === kind && eventNodeKey(e) === node.key), [events, kind, node.key]);
   const selected = list.find((e) => e.seq === search.input) ?? list[0];
   const snap = useSnapshot(runId, selected?.snapshot);
+  const all = useSnapshots(runId, list.map((e) => e.snapshot));
+  const groups = useMemo(() => payloadGroups(list), [list]);
   const records = useMemo(() => listRecords(snap.data), [snap.data]);
   const record = records.find((r) => r.entity === search.record);
   const value = record ? record.value : snap.data;
   const view = PAYLOAD_VIEWS.some(([k]) => k === search.view) ? search.view! : 'explore';
+  const label = kind === 'input.injected' ? 'Received telemetry' : kind === 'endpoint.received' ? 'Sent telemetry' : 'Exported telemetry';
   if (!selected) {
     return (
       <div className="placeholder">
@@ -316,46 +325,49 @@ function PayloadView({ runId, node, events, lineage, search, setSearch }: Props)
     <div className="details telemetry">
       <div className="stage-head">
         <span className="muted">{kind === 'input.injected' ? 'injected' : kind === 'endpoint.received' ? `sent to ${selected.endpoint}` : 'captured'}</span>
-        {list.length > 1 && (
+        {view !== 'explore' && list.length > 1 && (
           <select aria-label="Payload" value={selected.seq} onChange={(e) => setSearch({ input: Number(e.target.value), record: undefined })}>
-            {list.map((e) => (
-              <option key={e.seq} value={e.seq}>
-                #{e.seq}{e.endpoint ? ` · ${e.endpoint}` : ''} · {e.signal} · {e.counts?.items ?? '?'} items{e.pipeline ? ` · ${e.pipeline}` : ''}
-              </option>
-            ))}
+            {list.map((e, i) => <option key={e.seq} value={e.seq}>{payloadOption(list, i)}</option>)}
           </select>
         )}
-        <span className="muted">
-          {selected.signal} · {selected.counts?.items ?? '?'} items
-        </span>
+        {view !== 'explore' && <span className="muted">{payloadSummary(list, selected)}</span>}
         {view !== 'explore' && <RecordPicker records={records} record={search.record} onRecord={(r) => setSearch({ record: r })} />}
         {view !== 'explore' && <><FollowButton lineage={lineage} seq={selected.seq} record={search.record} setSearch={setSearch} />
         <StepButtons prev={prev} next={next} setSearch={setSearch} /></>}
       </div>
       {selected.error && <p className="error">Error: {selected.error}</p>}
       {view !== 'explore' && <TechnicalDetails views={PAYLOAD_VIEWS} view={view} set={(v) => setSearch({ view: v })} />}
-      {snap.error && <p className="error">{snap.error.message}</p>}
-      {snap.isLoading ? (
+      {view === 'explore' ? (
+        all.error ? <p className="error">{all.error.message}</p>
+        : all.isLoading || !all.data ? <p className="muted">Loading payloads…</p>
+        : groups.map((g) => (
+          <SignalExplorer
+            simple
+            key={g.signal}
+            payload={undefined}
+            requests={g.indexes.map((i) => all.data![i])}
+            recordRequest={g.indexes.indexOf(list.indexOf(selected)) + 1 || undefined}
+            label={label}
+            record={g.indexes.includes(list.indexOf(selected)) ? search.record : undefined}
+            onClearRecord={() => setSearch({ record: undefined })}
+            onFollow={(entity, request) => {
+              const e = list[g.indexes[(request ?? 1) - 1]];
+              const l = e && findLineage(lineage, e.seq, entity);
+              return l && (() => setSearch({ trace: l.id, tab: 'journey', view: undefined }));
+            }}
+          />
+        ))
+      ) : snap.error ? <p className="error">{snap.error.message}</p>
+      : snap.isLoading ? (
         <p className="muted">Loading payload…</p>
-      ) : view === 'explore' ? (
-        <SignalExplorer
-          simple
-          key={selected.seq}
-          payload={snap.data}
-          label={kind === 'input.injected' ? 'Received telemetry' : kind === 'endpoint.received' ? 'Sent telemetry' : 'Exported telemetry'}
-          record={search.record}
-          onClearRecord={() => setSearch({ record: undefined })}
-          onFollow={(entity) => {
-            const l = findLineage(lineage, selected.seq, entity);
-            return l && (() => setSearch({ trace: l.id, tab: 'journey', view: undefined }));
-          }}
-        />
       ) : view === 'tree' ? (
         <JsonTree value={value} />
       ) : (
         <pre className="code raw">{pretty(value)}</pre>
       )}
-      {view === 'explore' && <details><summary>Raw OTLP JSON</summary><pre className="code">{pretty(snap.data)}</pre></details>}
+      {view === 'explore' && all.data && all.data.map((d, i) => (
+        <details key={list[i].seq}><summary>Raw OTLP JSON{list.length > 1 ? ` · request ${i + 1}` : ''}</summary><pre className="code">{pretty(d)}</pre></details>
+      ))}
     </div>
   );
 }

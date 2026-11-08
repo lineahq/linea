@@ -41,3 +41,6 @@ internal/debugger/workersrc/static/*.tar.gz
 
 # Local docs that are never committed (ADRs)
 /.docs/
+
+# Local Claude Code settings
+.claude/

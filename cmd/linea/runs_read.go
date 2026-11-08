@@ -92,23 +92,24 @@ type runState struct {
 	} `json:"report"`
 }
 
+// writeRunState prints a run's title and its state, and what its report and
+// error say when it has them.
 func writeRunState(w io.Writer, raw []byte) error {
 	var r runState
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return err
 	}
-	line := fmt.Sprintf("run %s: state %s", r.ID, r.State)
+	t := newTextOut(w)
+	t.line(0, "run %s", r.ID)
+	t.field(1, "state", r.State)
 	if r.Report != nil && r.Report.Result != nil {
-		line += ", execution " + r.Report.Result.Status
+		t.field(1, "execution", r.Report.Result.Status)
 	}
 	if r.Report != nil && r.Report.Assertions != nil {
-		line += ", assertions " + r.Report.Assertions.Outcome
+		t.field(1, "assertions", r.Report.Assertions.Outcome)
 	}
-	if r.Error != "" {
-		line += ": " + r.Error
-	}
-	_, err := fmt.Fprintln(w, line)
-	return err
+	t.field(1, "error", r.Error)
+	return t.err()
 }
 
 func runsShowCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -166,11 +167,16 @@ func runsAssertCmd(ctx context.Context, args []string, stdout, stderr io.Writer)
 			if err := json.Unmarshal(raw, &rep); err != nil {
 				return err
 			}
-			fmt.Fprintf(w, "assertions: %s\n", rep.Outcome)
+			t := newTextOut(w)
+			t.line(0, "%s  assertions", t.status(rep.Outcome, 0))
+			width := 0
 			for _, r := range rep.Results {
-				fmt.Fprintf(w, "  %s: %s\n", r.Name, r.Outcome)
+				width = max(width, len(r.Outcome))
 			}
-			return nil
+			for _, r := range rep.Results {
+				t.line(1, "%s  %s", t.status(r.Outcome, width), r.Name)
+			}
+			return t.err()
 		})
 }
 
@@ -189,11 +195,18 @@ func runsDiffsCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 			if err := json.Unmarshal(raw, &d); err != nil {
 				return err
 			}
-			fmt.Fprintf(w, "%d stages, %d OTTL reports; --format json prints the changes\n", len(d.Stages), len(d.OTTL))
-			for _, s := range d.Stages {
-				fmt.Fprintf(w, "  %s in %s (%s)\n", s.Component, s.Pipeline, s.Signal)
+			t := newTextOut(w)
+			t.line(0, "diffs: %s, %s", plural(len(d.Stages), "stage"), plural(len(d.OTTL), "OTTL report"))
+			t.field(1, "more", "--format json prints the changes")
+			if len(d.Stages) > 0 {
+				t.heading("stages")
+				rows := make([][]string, 0, len(d.Stages))
+				for _, s := range d.Stages {
+					rows = append(rows, []string{s.Component, s.Pipeline, s.Signal})
+				}
+				t.table(1, []string{"component", "pipeline", "signal"}, rows)
 			}
-			return nil
+			return t.err()
 		})
 }
 
@@ -248,7 +261,10 @@ func runsInputsCmd(ctx context.Context, args []string, stdout, stderr io.Writer)
 			if err := json.Unmarshal(raw, &in); err != nil {
 				return err
 			}
-			fmt.Fprintf(w, "%s run; --format json prints the texts\n", in.Mode)
+			t := newTextOut(w)
+			t.line(0, "inputs of a %s run", in.Mode)
+			t.field(1, "more", "--format json prints the texts")
+			var rows [][]string
 			for _, s := range []struct {
 				name string
 				src  *inputSource
@@ -258,15 +274,22 @@ func runsInputsCmd(ctx context.Context, args []string, stdout, stderr io.Writer)
 					if label == "" {
 						label = "(inline)"
 					}
-					fmt.Fprintf(w, "  %-10s %s (sha256 %.12s)\n", s.name, label, s.src.SHA256)
+					rows = append(rows, []string{s.name, label, s.src.SHA256})
 				}
 			}
-			if len(in.Files) > 0 {
-				fmt.Fprintf(w, "  files      %s\n", strings.Join(in.Files, ", "))
+			if len(rows) > 0 {
+				t.heading("sources")
+				t.table(1, []string{"source", "label", "sha256"}, rows)
 			}
-			if len(in.RequiredEnvironment) > 0 {
-				fmt.Fprintf(w, "  needs environment %s\n", strings.Join(in.RequiredEnvironment, ", "))
+			if len(in.Files) > 0 || len(in.RequiredEnvironment) > 0 {
+				t.heading("needs")
+				if len(in.Files) > 0 {
+					t.field(1, "files", strings.Join(in.Files, ", "))
+				}
+				if len(in.RequiredEnvironment) > 0 {
+					t.field(1, "environment", strings.Join(in.RequiredEnvironment, ", "))
+				}
 			}
-			return nil
+			return t.err()
 		})
 }

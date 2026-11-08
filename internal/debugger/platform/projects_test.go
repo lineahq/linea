@@ -83,6 +83,33 @@ func TestProjectScopesFilterAndRefuse(t *testing.T) {
 	if _, err := s.GetRun(ctx, alice, run.ID); err != nil {
 		t.Errorf("refusals changed the run: %v", err)
 	}
+
+	// A caller who may read every project sees all of them without a
+	// project named, and only the named project's work with one.
+	for _, c := range []struct {
+		project string
+		want    int
+	}{{"", 1}, {artifact.DefaultProject, 1}, {"other", 0}} {
+		admin := testCaller
+		admin.Project = c.project
+		if runs, err := allRuns(ctx, s, admin, RunFilter{}); err != nil || len(runs) != c.want {
+			t.Errorf("admin in %q: runs = %d, %v; want %d", c.project, len(runs), err, c.want)
+		}
+		if page, err := s.ListArtifacts(ctx, admin, ListArtifactsRequest{}); err != nil || len(page.Items) != c.want {
+			t.Errorf("admin in %q: artifacts = %+v, %v; want %d", c.project, page, err, c.want)
+		}
+		if suites, err := s.ListSuites(ctx, admin); err != nil || len(suites) != 0 {
+			t.Errorf("admin in %q: suites = %d, %v", c.project, len(suites), err)
+		}
+		if page, err := s.ListCaptureSessions(ctx, admin, CollectorPageRequest{}); err != nil || len(page.Items) != 0 {
+			t.Errorf("admin in %q: captures = %+v, %v", c.project, page, err)
+		}
+	}
+	// Naming a project the caller holds nothing in is refused, not empty.
+	bob.Project = artifact.DefaultProject
+	if _, err := allRuns(ctx, s, bob, RunFilter{}); codeOf(err) != CodeForbidden {
+		t.Errorf("bob runs in default: %v, want forbidden", err)
+	}
 }
 
 func workspaceID(t *testing.T, s *Service) string {

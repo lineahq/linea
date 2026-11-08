@@ -21,3 +21,17 @@ export const different: RunComparison = {
   },
   routes: [], errors: [], assertions: [], ignored: [],
 };
+
+/** The comparison's recommendations section: one resolved, one new and one persisting (its benefit fell). */
+export const recommendationDiffs: NonNullable<RunComparison['recommendations']> = {
+  resolved: 1, new: 1, persists: 1,
+  items: [
+    { rule: 'ottl.statement_never_matched', status: 'resolved', pipeline: 'logs', components: ['processor/transform'], subject: 'set(log.attributes["a"], "b") where false',
+      before: { index: 0, kind: 'redundancy', confidence: 'observed', summary: 'Statement 0 never matched in this run.' } },
+    { rule: 'ottl.statement_no_change', status: 'persists', pipeline: 'logs', components: ['processor/transform'], subject: 'set(log.attributes["c"], "d")',
+      before: { index: 1, kind: 'redundancy', confidence: 'observed', summary: 'Statement 1 changed nothing in 12 evaluations.', benefit: { metric: 'evaluations_without_effect', count: 12 } },
+      after: { index: 0, kind: 'redundancy', confidence: 'observed', summary: 'Statement 1 changed nothing in 3 evaluations.', benefit: { metric: 'evaluations_without_effect', count: 3 } } },
+    { rule: 'sampling.policy_shadowed', status: 'new', pipeline: 'traces', components: ['processor/tail_sampling'], subject: 'slow',
+      after: { index: 1, kind: 'inefficiency', confidence: 'observed', summary: 'Policy slow is shadowed by an earlier policy.' } },
+  ],
+};

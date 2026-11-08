@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lineahq/linea/internal/debugger/api"
 )
@@ -70,5 +71,24 @@ func TestRuntimeTableMarksTheDefault(t *testing.T) {
 	if len(lines) != 3 || strings.Join(strings.Fields(lines[1]), " ") != "built-in 0.162.0 true -" ||
 		strings.Join(strings.Fields(lines[2]), " ") != "edge (default) 0.162.0 true -" {
 		t.Fatalf("table:\n%s", out.String())
+	}
+}
+
+// TestRuntimeDefaultTextNamesTheRuntimeThenWhoChoseIt puts the runtime on
+// the first line and the choice, or its absence, under it.
+func TestRuntimeDefaultTextNamesTheRuntimeThenWhoChoseIt(t *testing.T) {
+	set := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	for _, tc := range []struct {
+		d    api.RuntimeDefault
+		want string
+	}{
+		{api.RuntimeDefault{Name: "edge", SetBy: "alice", Set: &set}, "default runtime: edge\n  chosen by alice at 2026-01-02T03:04:05Z\n"},
+		{api.RuntimeDefault{Name: "built-in"}, "default runtime: built-in\n  none was chosen: requests that name no runtime run on the built-in runtime\n"},
+		{api.RuntimeDefault{Name: "edge"}, "default runtime: edge\n  none was chosen: the server started with it\n"},
+	} {
+		var out bytes.Buffer
+		if err := writeRuntimeDefault(&out, &tc.d); err != nil || out.String() != tc.want {
+			t.Errorf("default %+v:\n%s\nwant:\n%s", tc.d, out.String(), tc.want)
+		}
 	}
 }

@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/lineahq/linea/internal/debugger/api"
@@ -159,10 +158,7 @@ func runtimeBuildsCmd(ctx context.Context, args []string, stdout, stderr io.Writ
 	if *format == "json" {
 		err = writeIndented(stdout, page)
 	} else {
-		err = writeBuilds(stdout, page.Builds)
-		if err == nil && page.NextCursor != "" {
-			fmt.Fprintf(stderr, "more builds: pass --cursor %s, or --all\n", page.NextCursor)
-		}
+		err = writeBuilds(stdout, page.Builds, page.NextCursor)
 	}
 	if err != nil {
 		return fail(stderr, err)
@@ -170,17 +166,24 @@ func runtimeBuildsCmd(ctx context.Context, args []string, stdout, stderr io.Writ
 	return exitOK
 }
 
-func writeBuilds(w io.Writer, list []api.RuntimeBuild) error {
-	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "BUILD\tNAME\tSTATE\tCOLLECTOR\tREUSED\tCREATED")
+// writeBuilds prints a server's builds, newest first, and how to read the
+// next page.
+func writeBuilds(w io.Writer, list []api.RuntimeBuild, nextCursor string) error {
+	t := newTextOut(w)
+	if len(list) == 0 {
+		t.none("builds")
+	}
+	var rows [][]string
 	for _, b := range list {
 		reused := "-"
 		if b.Reused {
 			reused = "yes"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", b.ID, b.Name, b.State, b.CollectorVersion, reused, b.Created.Local().Format(time.DateTime))
+		rows = append(rows, []string{b.ID, b.Name, string(b.State), b.CollectorVersion, reused, b.Created.Local().Format(time.DateTime)})
 	}
-	return tw.Flush()
+	t.table(0, []string{"build", "name", "state", "collector", "reused", "created"}, rows)
+	t.nextPage(nextCursor)
+	return t.err()
 }
 
 func runtimeCatalogCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -211,14 +214,16 @@ func runtimeCatalogCmd(ctx context.Context, args []string, stdout, stderr io.Wri
 	return exitOK
 }
 
+// writeCatalog prints a release's components under a line naming it.
 func writeCatalog(w io.Writer, cat *platform.CollectorCatalog) error {
-	fmt.Fprintf(w, "Collector %s: %d components\n\n", cat.CollectorVersion, len(cat.Components))
-	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "KIND\tTYPE\tMODULE")
+	t := newTextOut(w)
+	t.line(0, "Collector %s: %s", cat.CollectorVersion, plural(len(cat.Components), "component"))
+	var rows [][]string
 	for _, c := range cat.Components {
-		fmt.Fprintf(tw, "%s\t%s\t%s\n", c.Kind, c.Type, c.GoMod)
+		rows = append(rows, []string{c.Kind, c.Type, c.GoMod})
 	}
-	return tw.Flush()
+	t.table(1, []string{"kind", "type", "module"}, rows)
+	return t.err()
 }
 
 func (r connectedRuntimes) Catalog(ctx context.Context, version string) (*platform.CollectorCatalog, error) {

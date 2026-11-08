@@ -51,7 +51,7 @@ func TestArtifactsCommandsListExportAndImport(t *testing.T) {
 	revised := save(api.SaveRequest{ArtifactID: scenario.Artifact.ID, ExpectedGeneration: scenario.Artifact.Generation, ExpectedHead: scenario.Artifact.Head, Kind: artifact.Scenario, Content: []byte("version: 1\nname: second\n")})
 
 	code, out, stderr := runCLI(t, "artifacts", "revisions", "--server", server, "--artifact", scenario.Artifact.ID, "--limit", "1")
-	if code != exitOK || !strings.Contains(out, revised.Revision.Ref.RevisionID+" (head)") || strings.Contains(out, scenario.Revision.Ref.RevisionID) || !strings.Contains(out, "more: --cursor ") {
+	if code != exitOK || !strings.Contains(out, revised.Revision.Ref.RevisionID+" (head)") || strings.Contains(out, scenario.Revision.Ref.RevisionID) || !strings.Contains(out, "next page: --cursor ") {
 		t.Fatalf("revisions: exit %d, %s%s", code, out, stderr)
 	}
 	cursor := strings.TrimSpace(out[strings.LastIndex(out, "--cursor ")+len("--cursor "):])

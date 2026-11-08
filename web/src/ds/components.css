@@ -70,7 +70,7 @@
 .od-radio-card input { margin: 3px 0 0; accent-color: var(--accent); }
 
 /* ---------- Tabs and segmented controls ---------- */
-.od-tabs { display: flex; align-items: stretch; gap: 2px; border-bottom: 1px solid var(--border-subtle); padding: 0 8px; min-height: 36px; }
+.od-tabs { display: flex; align-items: stretch; gap: 2px; border-bottom: 1px solid var(--border-subtle); padding: 0 8px; min-height: 36px; overflow-x: auto; scrollbar-width: thin; }
 .od-tab { position: relative; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 0; background: transparent; color: var(--fg-muted); font: 500 13px/1 var(--font-sans); cursor: pointer; white-space: nowrap; }
 .od-tab:hover { color: var(--fg); }
 .od-tab[aria-selected="true"] { color: var(--fg); }
@@ -111,6 +111,15 @@
 .od-prov--inferred { color: var(--inferred); font-style: italic; text-decoration: underline dotted; text-underline-offset: 3px; }
 .od-prov--preview { color: var(--warn); }
 .od-prov--verified { color: var(--pass); }
+
+/* What a suggested change does to the exported data */
+.od-effect--pass { color: var(--pass); }
+.od-effect--warn { color: var(--warn); }
+.od-measured { border-collapse: collapse; margin-top: 6px; font-size: 12px; }
+.od-measured th { text-align: left; font-weight: 500; color: var(--fg-muted); padding: 0 12px 2px 0; }
+.od-measured td { padding: 1px 12px 1px 0; font-variant-numeric: tabular-nums; }
+.od-measured td:nth-child(n+2), .od-measured th:nth-child(n+2) { text-align: right; }
+.od-measured td:last-child { font-weight: 500; }
 
 .od-signal { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 6px 0 4px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--fg-muted); font: 500 11.5px/1 var(--font-sans); background: var(--bg-surface); }
 

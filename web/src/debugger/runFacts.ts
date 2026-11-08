@@ -328,3 +328,9 @@ export function comparedAssertions(info: ComparedRun, outcomes: string[]): Fact 
   if (!info.assertions) return { text: 'No assertions', tone: 'neutral', icon: 'circle-minus' };
   return assertionsFact(info.assertions, outcomes);
 }
+
+/** elapsedText is a wait in seconds, or minutes and seconds from one minute on: "4 s", "1 min 15 s". */
+export function elapsedText(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`;
+}

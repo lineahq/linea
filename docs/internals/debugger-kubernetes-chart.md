@@ -76,10 +76,11 @@ roots, and a public identity provider would then fail verification.
   egress rule to the bundled gateway (port 8333).
 - A NetworkPolicy matches addresses, not names. The default
   `builderEgress` (`0.0.0.0/0`) also matches pod and node addresses.
-- Bundled PostgreSQL admits only the server on its port. Bundled SeaweedFS
-  admits the server, pool, worker and builder pods on the S3 port, the bucket
-  Job on the master and filer ports, and itself (the pod reaches its own
-  master and filer through the Service).
+- Bundled PostgreSQL admits only the server on its port, and with
+  `fleet.deploy.enabled` also fleet, the plugin and the database Job.
+  Bundled SeaweedFS admits the server, pool, worker and builder pods on the
+  S3 port, the bucket Job on the master and filer ports, and itself (the pod
+  reaches its own master and filer through the Service).
 
 ## Builder autoscaling
 
@@ -123,3 +124,30 @@ roots, and a public identity provider would then fail verification.
   exits when the bucket exists, and otherwise creates it. It fails if the
   bucket cannot be created. The pod advertises its own IP (`-ip`) so the
   shell can reach the filer.
+
+## Fleet
+
+`templates/fleet.yaml` renders fleet and the live-capture plugin for
+`fleet.deploy.enabled`; `linea.fleetDeployed` checks the values.
+
+- **Tokens.** `linea.keptSecret` takes a format: `fleet` gives an
+  `of1_<32 hex>_<64 hex>` admin token, `hex` 64 lowercase hex characters for
+  the plugin's host, service and metrics tokens (`pluginsdk.ValidToken`).
+  Fleet's `bootstrap` installs the admin token from
+  `LINEA_FLEET_BOOTSTRAP_TOKEN_FILE`, so the chart never reads a token back
+  from fleet.
+- **One pod each, `Recreate`.** The plugin holds an advisory lock on its
+  database while it runs and its migration takes the same lock; fleet's
+  migration expects no running instance either. Migrations run as init
+  containers.
+- **Readiness cycle.** The plugin is ready only once fleet's host session
+  answers, and fleet answers only after it has fetched the plugin's manifest.
+  A Service routes only to ready pods, so fleet reaches the plugin through
+  `<livecapture>-plugin`, which sets `publishNotReadyAddresses`; Collectors use
+  the ready-gated `<livecapture>` Service.
+- **Database Job.** Runs on the bundled PostgreSQL image as user 999 with the
+  same psql script as the Compose overlay, and resets the four role passwords
+  from `<fleet>-db` on every revision.
+- **Certificate.** `genSelfSignedCert` for 825 days when no
+  `tls.secretName` is given, kept through `lookup` like the other generated
+  values.

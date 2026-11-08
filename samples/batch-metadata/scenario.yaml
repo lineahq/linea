@@ -1,0 +1,140 @@
+# Four requests from two tenants and one client that sends no tenant
+# header. Without metadata_keys the first two requests would fill one batch
+# of 4 together; with them, each tenant fills its own. Open the batch
+# processor and its Batches tab to compare the batchers.
+version: 1
+name: batch-metadata
+defaults:
+  # Every input sends these headers unless it declares its own. The batch
+  # processor reads only the keys in metadata_keys; other headers never
+  # appear in the report.
+  headers:
+    user-agent: sample-client/1.0
+inputs:
+  # acme's first 2 logs wait in acme's batcher.
+  - receiver: otlp
+    headers:
+      tenant: acme
+    file: input.json
+  # globex's 2 logs start a second batcher instead of filling acme's.
+  - receiver: otlp
+    headers:
+      tenant: globex
+    data: |
+      {
+        "resourceLogs": [
+          {
+            "resource": {
+              "attributes": [
+                {
+                  "key": "service.name",
+                  "value": {
+                    "stringValue": "cart"
+                  }
+                }
+              ]
+            },
+            "scopeLogs": [
+              {
+                "logRecords": [
+                  {
+                    "timeUnixNano": "1791626400000000000",
+                    "severityText": "INFO",
+                    "body": {
+                      "stringValue": "cart 77 updated"
+                    }
+                  },
+                  {
+                    "timeUnixNano": "1791626400000000000",
+                    "severityText": "INFO",
+                    "body": {
+                      "stringValue": "cart 77 checked out"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+  # acme reaches send_batch_size (4) on its own and is sent.
+  - receiver: otlp
+    headers:
+      tenant: acme
+    data: |
+      {
+        "resourceLogs": [
+          {
+            "resource": {
+              "attributes": [
+                {
+                  "key": "service.name",
+                  "value": {
+                    "stringValue": "checkout"
+                  }
+                }
+              ]
+            },
+            "scopeLogs": [
+              {
+                "logRecords": [
+                  {
+                    "timeUnixNano": "1791626400000000000",
+                    "severityText": "INFO",
+                    "body": {
+                      "stringValue": "order 1043 placed"
+                    }
+                  },
+                  {
+                    "timeUnixNano": "1791626400000000000",
+                    "severityText": "INFO",
+                    "body": {
+                      "stringValue": "payment accepted order=1043"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+  # No tenant header: a third batcher, for requests without the key.
+  - receiver: otlp
+    data: |
+      {
+        "resourceLogs": [
+          {
+            "resource": {
+              "attributes": [
+                {
+                  "key": "service.name",
+                  "value": {
+                    "stringValue": "inventory"
+                  }
+                }
+              ]
+            },
+            "scopeLogs": [
+              {
+                "logRecords": [
+                  {
+                    "timeUnixNano": "1791626400000000000",
+                    "severityText": "INFO",
+                    "body": {
+                      "stringValue": "inventory sync item=1"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+execution:
+  # Wait after the last input so the globex and no-tenant batchers' timers
+  # fire before the Collector shuts down.
+  settle: 600ms
+assertions:
+  - name: every log leaves
+    target: {exporter: otlp/backend, signal: logs}
+    count: {equals: 7}

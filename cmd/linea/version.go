@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"io"
+	"strings"
 
 	"github.com/lineahq/linea/internal/debugger/platform"
 )
@@ -49,38 +49,35 @@ func versionCmd(_ context.Context, args []string, stdout, stderr io.Writer) int 
 		}
 		return exitOK
 	}
-	_, err := fmt.Fprintf(stdout, "linea %s\ncollector %s, built with %s\nschemas: report %s, inspection %s, events %s\n",
-		v.Product, v.Collector, v.Go, v.ReportSchema, v.InspectionSchema, v.EventSchema)
-	if err == nil && customBuild != nil {
-		_, err = io.WriteString(stdout, customBuildLine(customBuild))
-	}
-	if err == nil {
-		_, err = io.WriteString(stdout, "components:\n")
-	}
-	for _, m := range v.Modules {
-		if err == nil {
-			_, err = fmt.Fprintf(stdout, "  %s\n", m)
+	t := newTextOut(stdout)
+	t.line(0, "linea %s", v.Product)
+	t.field(1, "collector", v.Collector)
+	t.field(1, "built with", v.Go)
+	t.field(1, "report schema", v.ReportSchema)
+	t.field(1, "inspection schema", v.InspectionSchema)
+	t.field(1, "event schema", v.EventSchema)
+	if b := customBuild; b != nil {
+		t.field(1, "build", "custom, made with linea build")
+		if !b.Verified {
+			t.field(1, "collector release", "unverified")
+		}
+		for _, m := range b.Modules {
+			source := m.Module + " from " + m.Source
+			if m.Commit != "" {
+				source += " at " + m.Commit
+			}
+			t.field(1, "source", source)
 		}
 	}
-	if err != nil {
+	t.heading("components")
+	var rows [][]string
+	for _, m := range v.Modules {
+		module, version, _ := strings.Cut(m, " ")
+		rows = append(rows, []string{module, version})
+	}
+	t.table(1, []string{"module", "version"}, rows)
+	if err := t.err(); err != nil {
 		return fail(stderr, err)
 	}
 	return exitOK
-}
-
-// customBuildLine describes a custom build in version's text.
-func customBuildLine(b *buildStamp) string {
-	s := "custom build with linea build"
-	if !b.Verified {
-		s += ", unverified Collector release"
-	}
-	s += "\n"
-	for _, m := range b.Modules {
-		s += "  source " + m.Module + " from " + m.Source
-		if m.Commit != "" {
-			s += " at " + m.Commit
-		}
-		s += "\n"
-	}
-	return s
 }

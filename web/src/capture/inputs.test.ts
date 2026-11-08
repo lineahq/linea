@@ -26,3 +26,12 @@ it('appends a multi-stream batch together with exact fixture bytes and prior ass
   const doc = parse(next); expect(doc.inputs.map((input: {data: string}) => input.data)).toEqual([fixture.fixture_json, metric.fixture_json]);
   expect(doc.capture_origins).toHaveLength(2); expect(next).toContain('# retained'); expect(doc.assertions).toEqual([]);
 });
+
+it('makes one input per signal from several streams and keeps every origin', () => {
+  const second = {...fixture, fixture_json: '{"resourceLogs":[{"r":2}]}', derivation: {...fixture.derivation, digest: 'e'.repeat(64)}};
+  const first = {...fixture, fixture_json: '{"resourceLogs":[{"r":1}]}'};
+  const doc = parse(appendCaptureInputs('', [first, second]));
+  expect(doc.inputs).toHaveLength(1);
+  expect(JSON.parse(doc.inputs[0].data)).toEqual({resourceLogs: [{r: 1}, {r: 2}]});
+  expect(doc.capture_origins).toHaveLength(2);
+});

@@ -212,13 +212,9 @@ func (s *Service) ListArtifacts(ctx context.Context, caller Caller, req ListArti
 	if err != nil {
 		return nil, err
 	}
-	projects := s.projects(caller, authz.ArtifactRead)
-	if caller.Project != "" {
-		// A project narrows the list to its own artifacts.
-		if err := s.authorizeIn(caller, authz.ArtifactRead, caller.Project); err != nil {
-			return nil, err
-		}
-		projects = []string{caller.Project}
+	projects, err := s.listIn(caller, authz.ArtifactRead)
+	if err != nil {
+		return nil, err
 	}
 	page, err := repository.List(ctx, artifact.ListRequest{Kind: req.Kind, Projects: projects, Limit: req.Limit, Cursor: req.Cursor})
 	return page, artifactError(err)

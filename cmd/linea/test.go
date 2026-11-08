@@ -147,46 +147,65 @@ func writeReportFile(path, ext string, rep *platform.SuiteReport) (err error) {
 	return rep.WriteJUnit(f)
 }
 
+// writeTestText prints the suite's verdict and counts first, then each
+// scenario with its assertions and the checks that did not pass.
 func writeTestText(w io.Writer, rep *platform.SuiteReport) error {
-	var errs []error
-	printf := func(format string, a ...any) {
-		_, err := fmt.Fprintf(w, format, a...)
-		errs = append(errs, err)
-	}
+	t := newTextOut(w)
 	counts := map[assertion.Outcome]int{}
 	for _, s := range rep.Scenarios {
 		counts[s.Outcome]++
+	}
+	t.line(0, "%s  %s: %d passed, %d failed, %d inconclusive, %d errors", t.status(string(rep.Outcome), 0),
+		plural(len(rep.Scenarios), "scenario"), counts[assertion.Pass], counts[assertion.Fail], counts[assertion.Inconclusive], counts[assertion.Error])
+	if len(rep.Scenarios) == 0 {
+		return t.err()
+	}
+	t.heading("scenarios")
+	width := 0
+	for _, s := range rep.Scenarios {
+		width = max(width, len(s.Outcome))
+	}
+	for _, s := range rep.Scenarios {
 		name := s.Name
 		if name == "" {
 			name = s.Path
 		}
-		printf("%-12s %s (%s)\n", label(s.Outcome), name, s.Path)
+		t.line(1, "%s  %s  (%s)", t.status(string(s.Outcome), width), name, s.Path)
 		if s.Error != "" {
-			printf("    %s\n", s.Error)
+			t.field(2, "error", s.Error)
 			continue
 		}
 		if s.Assertions.RunStatus != "completed" {
-			printf("    run status: %s\n", s.Assertions.RunStatus)
+			t.field(2, "run status", string(s.Assertions.RunStatus))
 		}
-		for _, r := range s.Assertions.Results {
-			printf("  %-12s %s: %s\n", label(r.Outcome), r.Name, r.Target)
-			for _, c := range r.Checks {
-				if c.Outcome == assertion.Pass {
-					continue
-				}
-				printf("      %s\n", c.Line())
-				if c.Message != "" && c.Expected != "" {
-					printf("        %s\n", c.Message)
-				}
-				for _, v := range c.Violations {
-					printf("        at %s: %s\n", v.Location, v.Observed)
-				}
+		writeAssertionResults(t, 2, s.Assertions.Results, true)
+	}
+	return t.err()
+}
+
+// writeAssertionResults prints each assertion's outcome and target, and
+// under it the checks that did not pass; detail adds their messages and
+// violations.
+func writeAssertionResults(t *textOut, depth int, results []assertion.Result, detail bool) {
+	width := statusWidth(results, func(r assertion.Result) string { return string(r.Outcome) })
+	for _, r := range results {
+		t.line(depth, "%s  %s: %s", t.status(string(r.Outcome), width), r.Name, r.Target)
+		for _, c := range r.Checks {
+			if c.Outcome == assertion.Pass {
+				continue
+			}
+			t.line(depth+2, "%s", c.Line())
+			if !detail {
+				continue
+			}
+			if c.Message != "" && c.Expected != "" {
+				t.line(depth+3, "%s", c.Message)
+			}
+			for _, v := range c.Violations {
+				t.line(depth+3, "at %s: %s", v.Location, v.Observed)
 			}
 		}
 	}
-	printf("\n%s: %d passed, %d failed, %d inconclusive, %d errors\n", label(rep.Outcome),
-		counts[assertion.Pass], counts[assertion.Fail], counts[assertion.Inconclusive], counts[assertion.Error])
-	return errors.Join(errs...)
 }
 
 func label(o assertion.Outcome) string { return strings.ToUpper(string(o)) }

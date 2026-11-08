@@ -65,6 +65,11 @@ export function listRecords(payload: unknown): RecordEntry[] {
   return out;
 }
 
+/** recordNames names every record of a payload by its entity: a log record by its body, a span or metric by its name. Unnamed records are left out. */
+export function recordNames(payload: unknown): Map<string, string> {
+  return new Map(listRecords(payload).filter((r) => r.label).map((r) => [r.entity, r.label]));
+}
+
 /**
  * counterpart finds the record in after that corresponds to a record of
  * before. Spans keep their IDs. Log records and metrics are named by their
