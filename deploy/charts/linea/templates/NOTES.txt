@@ -35,6 +35,12 @@ For another Collector release or components, build a runtime from a checkout of 
   linea runtime default mine --server {{ $url }}
 {{- end }}
 {{- end }}
+{{- if .Values.fleet.deploy.enabled }}
+
+Fleet and live capture run in this release and the server is connected to them. Collectors connect OpAMP to ws://{{ include "linea.fleetName" . }}:{{ .Values.fleet.deploy.service.agentPort }}/v1/opamp and their livecapture extension to {{ include "linea.livecaptureName" . }}:{{ .Values.fleet.deploy.livecapture.service.controlPort }} (control) and :{{ .Values.fleet.deploy.livecapture.service.deliveryPort }} (delivery), trusting the plugin's certificate:
+
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "linea.livecaptureTLSSecret" . }} -o jsonpath='{.data.tls\.crt}' | base64 -d
+{{- end }}
 {{- if include "linea.acceptsWorkers" . }}
 
 More workers join with the registration token:

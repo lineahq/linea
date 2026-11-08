@@ -97,7 +97,7 @@ linea-server --config config.yaml --mcp --fleet-url https://fleet.example:8080 -
 
 | Topic | Detail |
 | --- | --- |
-| Helm chart | Sets these flags from `fleet.url` and `fleet.existingSecret` (a Secret with the key `token`). |
+| Helm chart | Sets these flags from `fleet.url` and `fleet.existingSecret` (a Secret with the key `token`); with `fleet.deploy.enabled` it runs fleet and the plugin in the release and connects them on its own ([Fleet and live capture](deploy-kubernetes.md#fleet-and-live-capture)). |
 | Compose stack | Has no fleet connection; the overlay `compose.fleet.yaml` adds fleet and the plugin on the stack's PostgreSQL and sets these flags ([Fleet and live capture](deploy-compose.md#fleet-and-live-capture)). |
 | Token file | One fleet API token, at most 4 KiB, surrounding whitespace trimmed. Read once at startup; never accepted as an argument, logged or returned in errors. |
 | Credential | Needs fleet admin permission to create captures and channels; a reader credential can only discover. |

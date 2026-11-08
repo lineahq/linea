@@ -35,6 +35,12 @@ change APIs, report schemas and persisted formats; the release notes say how.
   debugger's Compose overlay (`compose.fleet.yaml`) generates
   `linea-server`'s fleet token in its setup volume and installs it this way;
   existing stacks keep their token.
+- The Helm chart runs fleet and the live-capture plugin with
+  `fleet.deploy.enabled` and connects the server to them: databases and
+  roles in the bundled PostgreSQL (or your own, named in a Secret),
+  migrations in init containers, a generated server token installed as
+  fleet's first admin, generated plugin tokens and a self-signed plugin
+  certificate, all kept across upgrades.
 
 - Collector 0.165.0 joins the runtime support table. The debugger explains
   the new `queue_batch` processor like the batch processor (sends, triggers,

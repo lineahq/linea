@@ -131,7 +131,8 @@ spec:
             storage: {{ $p.persistence.size }}
 {{- if .Values.networkPolicy.enabled }}
 ---
-# Only the server reaches PostgreSQL.
+# Only the server reaches PostgreSQL, and with fleet.deploy fleet, the plugin
+# and the Job that creates their databases.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -148,6 +149,19 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "linea.serverSelector" . | nindent 14 }}
+        {{- if include "linea.fleetDeployed" . }}
+        - podSelector:
+            matchLabels:
+              {{- include "linea.fleetSelector" . | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              {{- include "linea.livecaptureSelector" . | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ .Chart.Name }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: fleet-db
+        {{- end }}
       ports:
         - port: postgresql
 {{- end }}
