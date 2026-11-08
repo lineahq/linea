@@ -7,7 +7,10 @@ machines. It runs the same platform as the CLI, web client and MCP, so every
 capability works the same way in all three.
 
 Run it on one machine with the [Docker Compose stack](deploy-compose.md), or on
-a cluster with the [Kubernetes chart](deploy-kubernetes.md). The mechanisms
+a cluster with the [Kubernetes chart](deploy-kubernetes.md). Both run the same
+server with the same config: sign-in, roles, storage and limits do not depend
+on which you choose. Compose writes the config from `.env`, the chart from its
+values. The mechanisms
 behind this page are in [team server
 mechanisms](../internals/debugger-team-server.md).
 
@@ -416,8 +419,8 @@ instance. One instance at a time does housekeeping and run retention.
 | CLI waits | The connected CLI retries a report wait that gets a lost connection, or a 502, 503 or 504 without an operation error code, for up to 30 s of such failures, so it reaches another instance. |
 | Builder autoscaling | `--metrics-listen ADDR` serves the build queue's counts at `GET /metrics` on its own listener, without credentials ([scaling builders](deploy-kubernetes.md#scaling-builders)). |
 
-[Docker Compose](deploy-compose.md) runs two instances behind HAProxy for a
-local multi-instance stack; the [Kubernetes chart](deploy-kubernetes.md) runs
+[Docker Compose](deploy-compose.md) runs two instances behind HAProxy on one
+machine; the [Kubernetes chart](deploy-kubernetes.md) runs
 `server.replicas` instances.
 
 ## Limits

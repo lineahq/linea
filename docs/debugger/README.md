@@ -8,7 +8,7 @@ through a CLI, a web client, an HTTP API and an MCP server for AI assistants.
 | Interface | Runs | Needs |
 | --- | --- | --- |
 | Direct CLI commands (`inspect`, `run`, `test`, `diff`) | On your machine, in the CLI's process | The `linea` binary and a Collector configuration |
-| Web client, HTTP API, MCP, `linea --server` | On a [team server](team-server.md), on Kubernetes or locally with Docker Compose | A running team server |
+| Web client, HTTP API, MCP, `linea --server` | On a [team server](team-server.md), run with Docker Compose or Kubernetes | A running team server |
 
 ```mermaid
 flowchart LR
@@ -34,7 +34,7 @@ page](https://github.com/lineahq/linea/releases) or build it as below;
 
 | Add | For |
 | --- | --- |
-| Docker | The local team server (Docker Compose), and building runtimes for other Collector releases or custom components |
+| Docker | A team server with Docker Compose, and building runtimes for other Collector releases or custom components |
 | Git, Go 1.27 or later, Node.js with pnpm | Building from source only. Use a POSIX shell (sh or bash) on Linux and macOS, or PowerShell 5.1 or later on Windows. Every developer script has a `.sh` and a `.ps1` form. |
 
 The built-in runtime pins the OpenTelemetry Collector release line to
@@ -272,19 +272,23 @@ linea run --config traces-redact/config.yaml \
 ## Web client, HTTP API and MCP
 
 These belong to the team server. `linea-server` always serves one, composed by a
-server config (`--config`); there is no single-process local mode. On one
-machine, run the Docker Compose stack: two instances behind a load balancer,
-PostgreSQL, object storage, a pool worker that runs the built-in runtime, and a
-runtime builder. Nothing needs registering.
+server config (`--config`); there is no single-process mode. The config, not
+where the server runs, decides how people sign in, where it listens and what it
+keeps. The Docker Compose stack runs it on one machine: two instances behind a
+load balancer, PostgreSQL, object storage, a pool worker that runs the built-in
+runtime, and a runtime builder. Nothing needs registering.
 
 The stack is one file, `deploy/compose/linea/compose.yaml`, and a `.env`
-beside it with five random values. In a directory holding the file from a
-release's tag:
+beside it with five random values and the sign-in mode. `LINEA_AUTH=local`
+is one admin on `127.0.0.1` with no sign-in; `oidc` and `proxy` serve a team
+([sign-in](deploy-compose.md#sign-in)). In a directory holding the file from
+a release's tag:
 
 ```sh
 for name in POSTGRES_PASSWORD S3_ACCESS_KEY S3_SECRET_KEY WORKER_TOKEN BUILDER_TOKEN; do
   echo "LINEA_$name=$(openssl rand -hex 32)"
 done > .env
+echo LINEA_AUTH=local >> .env
 docker compose up -d
 ```
 
@@ -299,8 +303,9 @@ from its root.
 | MCP | `http://127.0.0.1:7070/mcp` |
 | CLI | `--server http://127.0.0.1:7070` |
 
-See [deploy-compose.md](deploy-compose.md). For a shared deployment use the
-[Kubernetes chart](deploy-kubernetes.md). Each instance serves, on one listener
+These are the defaults; `.env` sets another address, port and TLS. See
+[deploy-compose.md](deploy-compose.md), or the [Kubernetes
+chart](deploy-kubernetes.md) to run it on a cluster. Each instance serves, on one listener
 and one platform:
 
 - the web client: an editor, the pipeline graph, record changes, journeys and
@@ -392,7 +397,7 @@ CI](ci.md) and [`examples/ci/github-actions.yml`](../../examples/ci/github-actio
 | --- | --- |
 | [Glossary](glossary.md) | The words the interfaces show |
 | [Running a team server](team-server.md) | The server config, role bindings, projects and the library, sign-in, API tokens and what a team server refuses |
-| [Docker Compose](deploy-compose.md) | A team server with two instances, PostgreSQL, object storage and a worker on one machine |
+| [Docker Compose](deploy-compose.md) | A team server with two instances, PostgreSQL, object storage and a worker on one machine, configured by `.env` |
 | [Kubernetes](deploy-kubernetes.md) | The server image and the Helm chart |
 | [Collector checks in CI](ci.md) | `test` and `diff` in a pipeline, with their exit codes and the GitHub Actions example in `examples/ci/` |
 | [Building debug Collectors](runtime-builds.md) | Runtimes for another verified release or your own component modules: supported releases, manifests from the catalog, module sources; `upgrade-check` compares one configuration on two runtimes |

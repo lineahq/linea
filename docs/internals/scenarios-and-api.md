@@ -248,9 +248,9 @@ The API must not be usable from web pages the browser visits:
 - Every request to `linea-server` is authenticated (API token, OIDC session or trusted
   headers from a configured proxy) and authorized by the server config's bindings.
   `linea-server` accepts any `Host` (`Options.RemoteAccess`); authentication, not a
-  loopback Host check, keeps the API private. The Compose stack's proxy signs
-  every request in as one local admin, so it refuses other `Host` names
-  (`docs/debugger/deploy-compose.md`, Identity). Requests name no host
+  loopback Host check, keeps the API private. With `LINEA_AUTH=local` the
+  Compose stack's proxy signs every request in as one local admin, so it
+  refuses other `Host` names (`docs/debugger/deploy-compose.md`, Sign-in). Requests name no host
   file.
 - An API handler built without `RemoteAccess` (tests, in-process adapters)
   answers 403 for a `Host` that is not `localhost` or a loopback IP.

@@ -7,6 +7,23 @@ change APIs, report schemas and persisted formats; the release notes say how.
 
 ## Unreleased
 
+- The Docker Compose team server is configured by `.env` for any use, not
+  only one person on loopback: `LINEA_AUTH` chooses sign-in (`local`, `oidc`
+  through an identity provider, or `proxy` behind an authenticating proxy),
+  and `LINEA_BIND`, `LINEA_PORT`, `LINEA_TLS_CERT_FILE` / `LINEA_TLS_KEY_FILE`,
+  the role groups, storage and run limits, retention, the queue limit and
+  image export are settings too. The setup service writes the server and
+  HAProxy configs from them and stops with the variable's name on a bad
+  value. **Existing stacks:** add `LINEA_AUTH=local` to `.env` to keep the
+  previous behavior; without it the stack does not start. Workers and the
+  builder now reach the server through HAProxy's own internal frontend.
+- `linea login` against a server with no CLI sign-in says so; when the
+  server already signs requests in (the Compose stack's `local` mode), it
+  says no sign-in is needed and exits 0.
+- CLI text output is structured into headed sections and aligned tables,
+  and `linea completion bash|zsh|fish|powershell` completes commands, flags
+  and values.
+
 - Collector 0.165.0 joins the runtime support table. The debugger explains
   the new `queue_batch` processor like the batch processor (sends, triggers,
   partitions, client context, verification against its metrics), and the

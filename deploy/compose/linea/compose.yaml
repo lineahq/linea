@@ -13,8 +13,22 @@
 # makes one); the two tokens must differ. Keep .env as long as the volumes:
 # PostgreSQL takes its password when its volume is created.
 #
+# .env also says how people sign in, which the stack does not guess:
+#   LINEA_AUTH=local   one admin for everyone who reaches 127.0.0.1
+#   LINEA_AUTH=oidc    an identity provider: LINEA_PUBLIC_URL,
+#                      LINEA_OIDC_ISSUER, LINEA_OIDC_CLIENT_ID,
+#                      LINEA_OIDC_CLIENT_SECRET, LINEA_ADMIN_GROUP
+#   LINEA_AUTH=proxy   an authenticating proxy in front: LINEA_TRUSTED_PROXIES,
+#                      LINEA_USER_HEADER, LINEA_GROUPS_HEADER, LINEA_ADMIN_GROUP
+# The setup service writes the server config from these; every setting is in
+# docs/debugger/deploy-compose.md.
+#
 # Optional settings, in the same .env or the shell:
-#   LINEA_VERSION (this file's release), LINEA_PORT (7070)
+#   LINEA_VERSION (this file's release), LINEA_BIND (127.0.0.1), LINEA_PORT (7070)
+#   LINEA_TLS_CERT_FILE, LINEA_TLS_KEY_FILE (PEM files; the port serves HTTPS)
+#   LINEA_ENGINEER_GROUP, LINEA_VIEWER_GROUP, LINEA_STORAGE_LIMIT (4GiB),
+#   LINEA_RUN_LIMIT (32MiB), LINEA_RETENTION_RUNS, LINEA_RETENTION_AGE,
+#   LINEA_QUEUE_LIMIT, LINEA_BUILD_EXPORT
 #   Resources, which are limits, not reservations; a CPU limit above the
 #   host's CPU count makes Docker refuse the container:
 #   LINEA_REPLICAS (2), LINEA_SERVER_CPUS (2), LINEA_SERVER_MEMORY (1g),
@@ -39,45 +53,268 @@ x-hardened: &hardened
       max-file: "3"
 
 services:
-  # One-shot: writes each service's secrets and configuration into its own
-  # folder of the setup volume, from .env and the configs below, and checks
-  # the .env values first. It runs again on every up; recreate the stack
-  # (up -d --force-recreate) after editing a config. It is the only service
-  # that sees every secret; the others mount only their own folder,
-  # read-only. It has no network.
+  # One-shot: checks .env, then writes the server config, the load
+  # balancer's configuration and each service's secrets into its own folder
+  # of the setup volume. It runs again on every up; recreate the stack
+  # (up -d --force-recreate) after editing .env. It is the only service that
+  # sees every secret; the others mount only their own folder, read-only. It
+  # has no network.
   setup:
     image: chrislusf/seaweedfs:4.51@sha256:f7a49e3f3972ebed5be2ed4befa4a0c68eb7bdddba6e692d42729ceb545134b8
     entrypoint: [sh, -c]
     command:
       - |
         set -eu
+        fail() { printf '%s\n' "$$*" >&2; exit 1; }
+
+        # The five random values.
         for name in postgres_password s3_access_key s3_secret_key worker_token builder_token; do
           value=$$(cat "/run/secrets/$$name")
           var=LINEA_$$(echo "$$name" | tr a-z A-Z)
           case $$value in
-            *[!A-Za-z0-9._~-]*) echo "$$var in .env: use only letters, digits and . _ ~ - (openssl rand -hex 32)" >&2; exit 1 ;;
+            *[!A-Za-z0-9._~-]*) fail "$$var in .env: use only letters, digits and . _ ~ - (openssl rand -hex 32)" ;;
           esac
-          if [ $${#value} -lt 16 ]; then echo "$$var in .env: set it to at least 16 characters (openssl rand -hex 32)" >&2; exit 1; fi
+          [ $${#value} -ge 16 ] || fail "$$var in .env: set it to at least 16 characters (openssl rand -hex 32)"
         done
         if cmp -s /run/secrets/worker_token /run/secrets/builder_token; then
-          echo 'LINEA_WORKER_TOKEN and LINEA_BUILDER_TOKEN in .env must differ' >&2; exit 1
+          fail 'LINEA_WORKER_TOKEN and LINEA_BUILDER_TOKEN in .env must differ'
         fi
+
+        # The settings go into YAML and HAProxy's configuration, so each takes only
+        # the characters it needs: check NAME VALUE.
+        word() {
+          case $$2 in *[!A-Za-z0-9._~-]*) fail "$$1 in .env: use only letters, digits and . _ ~ -" ;; esac
+        }
+        words() {
+          case $$2 in *[!A-Za-z0-9._~,-]*) fail "$$1 in .env: a comma-separated list of letters, digits and . _ ~ -" ;; esac
+        }
+        url() {
+          case $$2 in
+            '') ;;
+            http://*|https://*) case $$2 in *[!A-Za-z0-9._~:/%@+=-]*) fail "$$1 in .env: a URL without spaces, quotes, query or fragment" ;; esac ;;
+            *) fail "$$1 in .env: give an https:// URL" ;;
+          esac
+        }
+        text() {
+          case $$2 in *'"'*|*\\*) fail "$$1 in .env: no quotes or backslashes" ;; esac
+          [ "$$(printf '%s' "$$2" | tr -d '[:cntrl:]')" = "$$2" ] || fail "$$1 in .env: no control characters"
+        }
+        header() {
+          case $$2 in *[!A-Za-z0-9-]*) fail "$$1 in .env: a header name: letters, digits and -" ;; esac
+        }
+        addresses() {
+          case $$2 in *[!0-9A-Fa-f.:/,]*) fail "$$1 in .env: comma-separated addresses or CIDR prefixes, such as 172.17.0.1,10.0.0.0/8" ;; esac
+        }
+        need() {
+          [ -n "$$2" ] || fail "$$1 in .env: required with LINEA_AUTH=$$LINEA_AUTH (see docs/debugger/deploy-compose.md)"
+        }
+        quoted() { printf '"%s"' "$$1"; }
+        list() { printf '%s' "$$1" | sed 's/[^,][^,]*/"&"/g; s/,/, /g'; }
+
+        for v in LINEA_STORAGE_LIMIT LINEA_RUN_LIMIT LINEA_RETENTION_RUNS LINEA_RETENTION_AGE LINEA_QUEUE_LIMIT \
+          LINEA_OIDC_CLIENT_ID LINEA_OIDC_CLI_CLIENT_ID LINEA_OIDC_GROUPS_CLAIM LINEA_PROXY_ISSUER; do
+          eval "word $$v \"\$${$$v}\""
+        done
+        words LINEA_OIDC_SCOPES "$$LINEA_OIDC_SCOPES"
+        url LINEA_PUBLIC_URL "$$LINEA_PUBLIC_URL"
+        url LINEA_OIDC_ISSUER "$$LINEA_OIDC_ISSUER"
+        for v in LINEA_ADMIN_GROUP LINEA_ENGINEER_GROUP LINEA_VIEWER_GROUP LINEA_BUILD_EXPORT; do
+          eval "text $$v \"\$${$$v}\""
+        done
+        for v in LINEA_USER_HEADER LINEA_GROUPS_HEADER LINEA_NAME_HEADER; do
+          eval "header $$v \"\$${$$v}\""
+        done
+        addresses LINEA_TRUSTED_PROXIES "$$LINEA_TRUSTED_PROXIES"
+        oidc_secret=$$(cut -c2- /run/configs/oidc_client_secret)
+
+        case $$LINEA_AUTH in
+          local)
+            case $$LINEA_BIND in
+              127.0.0.1|'[::1]') ;;
+              *) fail "LINEA_BIND=$$LINEA_BIND in .env: LINEA_AUTH=local signs everyone who reaches the port in as admin, so it listens on 127.0.0.1 only. Choose LINEA_AUTH=oidc or proxy to listen elsewhere." ;;
+            esac ;;
+          oidc)
+            need LINEA_PUBLIC_URL "$$LINEA_PUBLIC_URL"
+            need LINEA_OIDC_ISSUER "$$LINEA_OIDC_ISSUER"
+            need LINEA_OIDC_CLIENT_ID "$$LINEA_OIDC_CLIENT_ID"
+            need LINEA_OIDC_CLIENT_SECRET "$$oidc_secret"
+            need LINEA_ADMIN_GROUP "$$LINEA_ADMIN_GROUP" ;;
+          proxy)
+            need LINEA_TRUSTED_PROXIES "$$LINEA_TRUSTED_PROXIES"
+            need LINEA_USER_HEADER "$$LINEA_USER_HEADER"
+            need LINEA_GROUPS_HEADER "$$LINEA_GROUPS_HEADER"
+            need LINEA_ADMIN_GROUP "$$LINEA_ADMIN_GROUP" ;;
+          '') fail 'LINEA_AUTH in .env: choose how people sign in: local (one admin, on 127.0.0.1 only), oidc (an identity provider) or proxy (an authenticating proxy in front of the stack). See docs/debugger/deploy-compose.md.' ;;
+          *) fail "LINEA_AUTH=$$LINEA_AUTH in .env: choose local, oidc or proxy" ;;
+        esac
+        case $$LINEA_TLS in
+          ''|certkey) ;;
+          *) fail 'LINEA_TLS_CERT_FILE and LINEA_TLS_KEY_FILE in .env: set both, or neither' ;;
+        esac
+
         umask 022
         mkdir -p /setup/postgres /setup/seaweedfs /setup/linea /setup/proxy /setup/pool /setup/builder
         cp /run/secrets/postgres_password /setup/postgres/
         printf '{"identities":[{"name":"linea","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","Write","List","Tagging"]}]}' \
           "$$(cat /run/secrets/s3_access_key)" "$$(cat /run/secrets/s3_secret_key)" > /setup/seaweedfs/s3_config
         printf 'postgres://linea:%s@postgres:5432/linea?sslmode=disable' "$$(cat /run/secrets/postgres_password)" > /setup/linea/database_url
-        cp /run/secrets/s3_access_key /run/secrets/s3_secret_key /run/secrets/worker_token /run/secrets/builder_token /run/configs/config.yaml /setup/linea/
-        cp /run/configs/haproxy.cfg /setup/proxy/
+        cp /run/secrets/s3_access_key /run/secrets/s3_secret_key /run/secrets/worker_token /run/secrets/builder_token /setup/linea/
         cp /run/secrets/worker_token /setup/pool/
         cp /run/secrets/builder_token /setup/builder/
+        # Earlier releases copied read-only files here, which setup, without
+        # capabilities, cannot overwrite; replace them.
+        rm -f /setup/linea/config.yaml /setup/proxy/haproxy.cfg /setup/linea/oidc_client_secret /setup/proxy/tls.pem
+        if [ "$$LINEA_AUTH" = oidc ]; then
+          printf '%s' "$$oidc_secret" > /setup/linea/oidc_client_secret
+        fi
+
+        # The server config (docs/debugger/team-server.md).
+        {
+          echo '# Written by the setup service from .env on every up; edit .env, not this file.'
+          echo 'version: 1'
+          echo 'store:'
+          echo '  database_url_file: /run/secrets/database_url'
+          echo '  objects:'
+          echo '    endpoint: http://seaweedfs:8333'
+          echo '    bucket: linea'
+          echo '    path_style: true'
+          echo '    access_key_file: /run/secrets/s3_access_key'
+          echo '    secret_key_file: /run/secrets/s3_secret_key'
+          echo "  storage_limit: $${LINEA_STORAGE_LIMIT:-4GiB}"
+          echo "  run_limit: $${LINEA_RUN_LIMIT:-32MiB}"
+          if [ -n "$$LINEA_RETENTION_RUNS$$LINEA_RETENTION_AGE" ]; then
+            echo 'retention:'
+            [ -z "$$LINEA_RETENTION_RUNS" ] || echo "  runs: $$LINEA_RETENTION_RUNS"
+            [ -z "$$LINEA_RETENTION_AGE" ] || echo "  age: $$LINEA_RETENTION_AGE"
+          fi
+          if [ -n "$$LINEA_QUEUE_LIMIT" ]; then
+            echo 'limits:'
+            echo "  queue: $$LINEA_QUEUE_LIMIT"
+          fi
+          echo 'worker_token_file: /run/secrets/worker_token'
+          echo 'builds:'
+          echo '  token_file: /run/secrets/builder_token'
+          if [ -n "$$LINEA_BUILD_EXPORT" ]; then
+            echo '  export:'
+            echo "    repository: $$(quoted "$$LINEA_BUILD_EXPORT")"
+          fi
+          echo 'authentication:'
+          case $$LINEA_AUTH in
+            local)
+              # The load balancer signs every request in as the one local user; the
+              # server trusts the headers from its fixed address only.
+              echo '  trusted_headers:'
+              echo '    proxies: [10.207.70.10]'
+              echo '    issuer: linea-compose'
+              echo '    user: X-Linea-User'
+              echo '    groups: X-Linea-Groups' ;;
+            oidc)
+              echo '  oidc:'
+              echo "    issuer: $$(quoted "$$LINEA_OIDC_ISSUER")"
+              echo "    client_id: $$(quoted "$$LINEA_OIDC_CLIENT_ID")"
+              echo '    client_secret_file: /run/secrets/oidc_client_secret'
+              echo "    redirect_url: $$(quoted "$${LINEA_PUBLIC_URL%/}/auth/callback")"
+              [ -z "$$LINEA_OIDC_CLI_CLIENT_ID" ] || echo "    cli_client_id: $$(quoted "$$LINEA_OIDC_CLI_CLIENT_ID")"
+              [ -z "$$LINEA_OIDC_GROUPS_CLAIM" ] || echo "    groups_claim: $$(quoted "$$LINEA_OIDC_GROUPS_CLAIM")"
+              [ -z "$$LINEA_OIDC_SCOPES" ] || echo "    scopes: [$$(list "$$LINEA_OIDC_SCOPES")]" ;;
+            proxy)
+              # The load balancer passes the identity headers on only from
+              # LINEA_TRUSTED_PROXIES; the server trusts them from its address.
+              echo '  trusted_headers:'
+              echo '    proxies: [10.207.70.10]'
+              echo "    issuer: $$(quoted "$${LINEA_PROXY_ISSUER:-proxy}")"
+              echo "    user: $$LINEA_USER_HEADER"
+              echo "    groups: $$LINEA_GROUPS_HEADER"
+              [ -z "$$LINEA_NAME_HEADER" ] || echo "    name: $$LINEA_NAME_HEADER" ;;
+          esac
+          echo 'bindings:'
+          if [ "$$LINEA_AUTH" = local ]; then
+            echo '  - {group: local-admins, role: admin, scope: "*"}'
+          else
+            echo "  - {group: $$(quoted "$$LINEA_ADMIN_GROUP"), role: admin, scope: \"*\"}"
+            [ -z "$$LINEA_ENGINEER_GROUP" ] || echo "  - {group: $$(quoted "$$LINEA_ENGINEER_GROUP"), role: engineer, scope: \"*\"}"
+            [ -z "$$LINEA_VIEWER_GROUP" ] || echo "  - {group: $$(quoted "$$LINEA_VIEWER_GROUP"), role: viewer, scope: \"*\"}"
+          fi
+        } > /setup/linea/config.yaml
+
+        # The load balancer's configuration.
+        identity="X-Linea-User X-Linea-Groups $$LINEA_USER_HEADER $$LINEA_GROUPS_HEADER $$LINEA_NAME_HEADER"
+        bind='bind :7071'
+        if [ -n "$$LINEA_TLS" ]; then
+          grep -q 'BEGIN CERTIFICATE' /run/configs/tls_cert || fail 'LINEA_TLS_CERT_FILE in .env: not a PEM certificate'
+          grep -q 'PRIVATE KEY' /run/configs/tls_key || fail 'LINEA_TLS_KEY_FILE in .env: not a PEM private key'
+          cat /run/configs/tls_cert /run/configs/tls_key > /setup/proxy/tls.pem
+          bind='bind :7071 ssl crt /usr/local/etc/haproxy/tls.pem'
+        fi
+        {
+          cat /run/configs/haproxy.cfg
+          echo
+          echo 'frontend workers'
+          echo '    # Workers and the builder, on the internal edge network (http://proxy:7070).'
+          echo '    # Their tokens sign them in; no identity header passes.'
+          echo '    bind :7070'
+          for h in $$identity; do echo "    http-request del-header $$h"; done
+          echo '    default_backend linea'
+          echo
+          echo 'frontend debugger'
+          echo "    # The published port (LINEA_BIND:LINEA_PORT), LINEA_AUTH=$$LINEA_AUTH."
+          echo "    $$bind"
+          case $$LINEA_AUTH in
+            local)
+              echo '    # Only loopback names reach the signed-in user: a page whose own name'
+              echo '    # was rebound to 127.0.0.1 is refused.'
+              echo '    acl allowed_host req.hdr(host) -m reg -i ^(127\.0\.0\.1|localhost|\[::1\])(:[0-9]+)?$$'
+              echo '    http-request deny deny_status 421 unless allowed_host'
+              for h in $$identity; do echo "    http-request del-header $$h"; done
+              echo '    http-request set-header X-Linea-User local'
+              echo '    http-request set-header X-Linea-Groups local-admins' ;;
+            oidc)
+              for h in $$identity; do echo "    http-request del-header $$h"; done ;;
+            proxy)
+              echo "    acl trusted_proxy src $$(printf '%s' "$$LINEA_TRUSTED_PROXIES" | tr ',' ' ')"
+              echo '    http-request del-header X-Linea-User'
+              echo '    http-request del-header X-Linea-Groups'
+              for h in $$LINEA_USER_HEADER $$LINEA_GROUPS_HEADER $$LINEA_NAME_HEADER; do
+                echo "    http-request del-header $$h unless trusted_proxy"
+              done ;;
+          esac
+          echo '    default_backend linea'
+        } > /setup/proxy/haproxy.cfg
     secrets: [postgres_password, s3_access_key, s3_secret_key, worker_token, builder_token]
+    environment:
+      LINEA_BIND: ${LINEA_BIND:-127.0.0.1}
+      LINEA_AUTH: ${LINEA_AUTH:-}
+      LINEA_PUBLIC_URL: ${LINEA_PUBLIC_URL:-}
+      LINEA_OIDC_ISSUER: ${LINEA_OIDC_ISSUER:-}
+      LINEA_OIDC_CLIENT_ID: ${LINEA_OIDC_CLIENT_ID:-}
+      LINEA_OIDC_CLI_CLIENT_ID: ${LINEA_OIDC_CLI_CLIENT_ID:-}
+      LINEA_OIDC_GROUPS_CLAIM: ${LINEA_OIDC_GROUPS_CLAIM:-}
+      LINEA_OIDC_SCOPES: ${LINEA_OIDC_SCOPES:-}
+      LINEA_TRUSTED_PROXIES: ${LINEA_TRUSTED_PROXIES:-}
+      LINEA_PROXY_ISSUER: ${LINEA_PROXY_ISSUER:-}
+      LINEA_USER_HEADER: ${LINEA_USER_HEADER:-}
+      LINEA_GROUPS_HEADER: ${LINEA_GROUPS_HEADER:-}
+      LINEA_NAME_HEADER: ${LINEA_NAME_HEADER:-}
+      LINEA_ADMIN_GROUP: ${LINEA_ADMIN_GROUP:-}
+      LINEA_ENGINEER_GROUP: ${LINEA_ENGINEER_GROUP:-}
+      LINEA_VIEWER_GROUP: ${LINEA_VIEWER_GROUP:-}
+      LINEA_STORAGE_LIMIT: ${LINEA_STORAGE_LIMIT:-}
+      LINEA_RUN_LIMIT: ${LINEA_RUN_LIMIT:-}
+      LINEA_RETENTION_RUNS: ${LINEA_RETENTION_RUNS:-}
+      LINEA_RETENTION_AGE: ${LINEA_RETENTION_AGE:-}
+      LINEA_QUEUE_LIMIT: ${LINEA_QUEUE_LIMIT:-}
+      LINEA_BUILD_EXPORT: ${LINEA_BUILD_EXPORT:-}
+      # "certkey" when both TLS files are set.
+      LINEA_TLS: ${LINEA_TLS_CERT_FILE:+cert}${LINEA_TLS_KEY_FILE:+key}
     configs:
-      - source: server_config
-        target: /run/configs/config.yaml
       - source: haproxy_config
         target: /run/configs/haproxy.cfg
+      - source: oidc_client_secret
+        target: /run/configs/oidc_client_secret
+      - source: tls_cert
+        target: /run/configs/tls_cert
+      - source: tls_key
+        target: /run/configs/tls_key
     volumes:
       - setup:/setup
     network_mode: none
@@ -191,7 +428,9 @@ services:
       setup:
         condition: service_completed_successfully
 
-  # The only way in: 127.0.0.1:7070 on the host.
+  # The only way in: LINEA_BIND:LINEA_PORT (127.0.0.1:7070) on the host,
+  # its "debugger" frontend. Workers and the builder use its "workers"
+  # frontend on the internal edge network.
   proxy:
     image: haproxy:3.2-alpine@sha256:5893840576071e6217cd52ebdcc14f454c6f7a631056fa6f4e0f40d3cac4215b
     <<: *hardened
@@ -203,10 +442,10 @@ services:
         read_only: true
         volume: {subpath: proxy}
     ports:
-      - "127.0.0.1:${LINEA_PORT:-7070}:7070"
+      - "${LINEA_BIND:-127.0.0.1}:${LINEA_PORT:-7070}:7071"
     networks:
       edge:
-        ipv4_address: 10.207.70.10 # the server config's trusted proxy
+        ipv4_address: 10.207.70.10 # the server config's trusted proxy (setup)
       ingress: {}
     cpus: 1 # keep equal to nbthread in haproxy_config below
     mem_limit: 128m
@@ -293,57 +532,15 @@ secrets:
   builder_token:
     environment: LINEA_BUILDER_TOKEN
 
-# Edit these here; setup writes them for the services.
+# Read by the setup service only.
 configs:
-  server_config:
-    content: |
-      # The server config. The setup service writes it, with the secrets it
-      # names, to each instance's /run/secrets.
-      version: 1
-      store:
-        database_url_file: /run/secrets/database_url
-        objects:
-          endpoint: http://seaweedfs:8333
-          bucket: linea
-          path_style: true
-          access_key_file: /run/secrets/s3_access_key
-          secret_key_file: /run/secrets/s3_secret_key
-        # Runtime binaries (about 85 MiB each for the default manifest) count
-        # toward the limit.
-        storage_limit: 4GiB
-        run_limit: 32MiB
-      worker_token_file: /run/secrets/worker_token
-      # The builder service dials with this token and compiles the
-      # runtimes that web, CLI and MCP builds ask for. It differs from
-      # the workers' token.
-      builds:
-        token_file: /run/secrets/builder_token
-        # Optional: the builder also pushes each built runtime's image here,
-        # tagged with the build's name. Give the builder the registry's
-        # credentials (the builder service).
-        # export:
-        #   repository: registry.example.com/team/linea-runtimes
-      authentication:
-        # The load balancer signs every browser and CLI request in as one local
-        # user. It is the only trusted proxy: its fixed address on the edge network,
-        # which no published port reaches directly.
-        trusted_headers:
-          proxies: [10.207.70.10]
-          issuer: linea-compose
-          user: X-Linea-User
-          groups: X-Linea-Groups
-      bindings:
-        - group: local-admins
-          role: admin
-          scope: "*"
+  # The load balancer's fixed part; setup adds the frontends for LINEA_AUTH.
   haproxy_config:
     content: |
-      # The load balancer in front of the debugger instances. Any
-      # instance serves any request, so there is no affinity.
+      # The load balancer in front of the debugger instances, written by the
+      # setup service from .env on every up. Any instance serves any request,
+      # so there is no affinity.
       #
-      # - It signs every request in as the stack's one local user: it drops the
-      #   identity headers a client sent and sets its own. The server config trusts
-      #   these headers from this proxy's address only.
       # - Workers dial through it too: their WebSocket (/v1/workers/connect) is a
       #   tunnel, kept open past the server's 30 s pings.
       # - Docker DNS resolves the scaled "linea" service to every instance; up to
@@ -370,22 +567,20 @@ configs:
           nameserver dns 127.0.0.11:53
           hold valid 5s
 
-      frontend debugger
-          bind :7070
-          # Only loopback names and the workers' "proxy" reach the signed-in user:
-          # a page whose own name was rebound to 127.0.0.1 is refused.
-          acl allowed_host req.hdr(host) -m reg -i ^(127\.0\.0\.1|localhost|proxy)(:[0-9]+)?$$
-          http-request deny deny_status 421 unless allowed_host
-          http-request del-header X-Linea-User
-          http-request del-header X-Linea-Groups
-          http-request set-header X-Linea-User local
-          http-request set-header X-Linea-Groups local-admins
-          default_backend linea
-
       backend linea
           balance roundrobin
           default-server check inter 2s fall 2 rise 2 resolvers docker init-addr none
           server-template linea 4 linea:7070
+  # LINEA_OIDC_CLIENT_SECRET, behind one character: Compose refuses a secret
+  # whose variable is unset and mounts empty content as a directory.
+  oidc_client_secret:
+    content: "-${LINEA_OIDC_CLIENT_SECRET:-}"
+  # The proxy's certificate and key. Without them this file stands in;
+  # setup reads them only when both are set.
+  tls_cert:
+    file: ${LINEA_TLS_CERT_FILE:-compose.yaml}
+  tls_key:
+    file: ${LINEA_TLS_KEY_FILE:-compose.yaml}
 
 volumes:
   # Each service's secrets and configuration, written by setup.

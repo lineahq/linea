@@ -2,7 +2,7 @@
 
 The Helm chart in `deploy/charts/linea` installs a [team server](team-server.md),
 a worker pool that runs the runtimes the server builds, and a builder that
-compiles them. For the same stack on one machine, see
+compiles them. For the same server on one machine, see
 [Docker Compose](deploy-compose.md).
 
 - The server runs as identical instances (`server.replicas`, default 2).

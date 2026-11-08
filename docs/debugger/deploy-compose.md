@@ -1,45 +1,49 @@
-# Running the shared platform with Docker Compose
+# Running a team server with Docker Compose
 
-`deploy/compose/linea` runs a [team server](team-server.md) on one machine. It
-is the shared platform at small scale, and the stack the instance behavior was
-checked on. It is also the local way to run the debugger's web client, HTTP API
-and MCP: `linea-server` needs a server config and has no in-memory or
-loopback-only mode. The CLI's direct commands (`run`, `test`, `diff`, `inspect`
+`deploy/compose/linea` runs a [team server](team-server.md) on one machine:
+for one person on their own computer, or for a team behind its identity
+provider. Where it runs does not decide what it is; `.env` does: how people
+sign in, the address and port it listens on, TLS, retention and limits
+([settings](#settings)). It is the same server as on
+[Kubernetes](deploy-kubernetes.md), and the stack the instance behavior was
+checked on. The CLI's direct commands (`run`, `test`, `diff`, `inspect`
 without `--server`) need no server.
 
 | Service | What it is |
 | --- | --- |
 | `postgres` | PostgreSQL 17: runs, queue, change feed, sessions, sign-ins, catalog |
 | `seaweedfs` | S3-compatible object storage for bundles, reports and evidence, bucket `linea` |
-| `setup` | One-shot: checks `.env` and writes each service's secrets and configuration ([secrets and configuration](#secrets-and-configuration)) |
+| `setup` | One-shot: checks `.env` and writes the server config, HAProxy's and each service's secrets ([secrets and configuration](#secrets-and-configuration)) |
 | `bucket` | One-shot: creates the bucket, keeps an existing one |
 | `linea` | `linea-server --config`, two instances (`LINEA_REPLICAS`) |
-| `proxy` | HAProxy on `127.0.0.1:7070`, the only published port |
+| `proxy` | HAProxy on `LINEA_BIND:LINEA_PORT` (`127.0.0.1:7070`), the only published port |
 | `pool` | `linea-worker --connect --pool`: runs the built-in runtime and the runtimes the builder makes, capacity `LINEA_POOL_CAPACITY` (4) ([pool worker](#the-pool-worker)) |
 | `builder` | `linea-builder --connect`: compiles the runtimes that server builds ask for ([builder](#the-builder)) |
 
 ## Starting it
 
-The stack is one file, `compose.yaml`, which holds the server config and the
-load balancer's config too, and it takes its secrets from a `.env` file beside
+The stack is one file, `compose.yaml`, configured by a `.env` file beside
 it. It needs Docker Engine 26 or later with Compose v2.30 or later, for the
 volume subpaths the services mount their secrets from.
 
-Put five random values in `.env`. Each needs at least 16 letters, digits or
-`. _ ~ -`, and the two tokens must differ:
+Put five random values in `.env`, and choose how people sign in
+(`LINEA_AUTH`, [sign-in](#sign-in)). Each value needs at least 16 letters,
+digits or `. _ ~ -`, and the two tokens must differ:
 
 ```sh
 for name in POSTGRES_PASSWORD S3_ACCESS_KEY S3_SECRET_KEY WORKER_TOKEN BUILDER_TOKEN; do
   echo "LINEA_$name=$(openssl rand -hex 32)"
 done > .env
+echo LINEA_AUTH=local >> .env
 ```
 
 ```powershell
 $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
-'POSTGRES_PASSWORD','S3_ACCESS_KEY','S3_SECRET_KEY','WORKER_TOKEN','BUILDER_TOKEN' | ForEach-Object {
+$values = 'POSTGRES_PASSWORD','S3_ACCESS_KEY','S3_SECRET_KEY','WORKER_TOKEN','BUILDER_TOKEN' | ForEach-Object {
   $b = [byte[]]::new(32); $rng.GetBytes($b)
   "LINEA_$_=" + -join ($b | ForEach-Object { $_.ToString('x2') })
-} | Set-Content -Encoding ascii .env
+}
+$values + 'LINEA_AUTH=local' | Set-Content -Encoding ascii .env
 ```
 
 | Value | Used for |
@@ -48,6 +52,7 @@ $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
 | `LINEA_S3_ACCESS_KEY`, `LINEA_S3_SECRET_KEY` | The SeaweedFS identity the server uses |
 | `LINEA_WORKER_TOKEN` | The pool worker's token |
 | `LINEA_BUILDER_TOKEN` | The builder's token, which must differ from the worker's |
+| `LINEA_AUTH` | `local`, `oidc` or `proxy`; the stack does not choose one for you |
 
 Then start the stack, from the published images or from source:
 
@@ -68,7 +73,9 @@ runtime.
 
 Then use it as any team server: the web client at `http://127.0.0.1:7070`,
 `--server http://127.0.0.1:7070` on CLI commands, and MCP at
-`http://127.0.0.1:7070/mcp`.
+`http://127.0.0.1:7070/mcp` (with your own address, port and `https` when you
+set them). With `LINEA_AUTH=local` nobody signs in: `linea login` says so and
+every command takes `--server` as it is.
 
 ```sh
 linea samples get logs-cleanup
@@ -76,25 +83,120 @@ linea test --server http://127.0.0.1:7070 \
   --config logs-cleanup/config.yaml --scenario logs-cleanup/scenario.yaml
 ```
 
-Settings, all optional, in `.env` or the shell:
+## Settings
+
+Everything else is optional, in `.env` or the shell. After changing `.env`,
+run `docker compose up -d --force-recreate`, so `setup` writes the configs
+again and the services read them.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `LINEA_PORT` | `7070` | The host port on `127.0.0.1` |
 | `LINEA_VERSION` | the file's release | The image tag of `linea-server`, `linea-worker` and `linea-builder` |
+| `LINEA_BIND` | `127.0.0.1` | The host address the port is published on, such as `0.0.0.0`. `LINEA_AUTH=local` refuses any but `127.0.0.1` and `[::1]`. |
+| `LINEA_PORT` | `7070` | The host port |
+| `LINEA_TLS_CERT_FILE`, `LINEA_TLS_KEY_FILE` | none | PEM certificate (chain) and key; set both and the port serves HTTPS only ([TLS](#tls)) |
+| `LINEA_ADMIN_GROUP`, `LINEA_ENGINEER_GROUP`, `LINEA_VIEWER_GROUP` | none | The groups bound to the `admin`, `engineer` and `viewer` roles with `oidc` or `proxy` ([roles](team-server.md#roles)); admin is required |
+| `LINEA_STORAGE_LIMIT` | `4GiB` | The server config's `storage_limit` |
+| `LINEA_RUN_LIMIT` | `32MiB` | The server config's `run_limit` |
+| `LINEA_RETENTION_RUNS`, `LINEA_RETENTION_AGE` | none | `retention.runs` and `retention.age`, such as `500` and `30d` |
+| `LINEA_QUEUE_LIMIT` | the server's | `limits.queue` |
+| `LINEA_BUILD_EXPORT` | none | `builds.export.repository` ([image export](#image-export-optional)) |
+
+Values go into YAML and HAProxy's configuration, so `setup` checks their
+characters and stops with the variable's name when one does not fit. The
+[server config](team-server.md#the-server-config) has more settings than
+these; to set one, edit the script of the `setup` service in `compose.yaml`
+that writes it.
 
 ### Secrets and configuration
 
 The one-shot `setup` service runs before the others on every `up`. It checks
-the `.env` values, then writes each service's secrets, and the server and
-HAProxy configs from the file's `configs:` section, into that service's own
-folder of the `setup` volume. Each service mounts only its folder, read-only,
-at `/run/secrets` (HAProxy at `/usr/local/etc/haproxy`), so the hardened,
-read-only services never see the other services' secrets. `setup` itself has
-no network.
+`.env`, then writes the server config, HAProxy's configuration and each
+service's secrets into that service's own folder of the `setup` volume. Each
+service mounts only its folder, read-only, at `/run/secrets` (HAProxy at
+`/usr/local/etc/haproxy`), so the hardened, read-only services never see the
+other services' secrets. `setup` itself has no network. The OIDC client
+secret and the TLS key reach it as Compose configs, not as environment
+variables, so `docker inspect` does not show them.
 
-To change the server config or HAProxy's, edit them in `compose.yaml` and run
-`docker compose up -d --force-recreate`, so the services read the new files.
+## Sign-in
+
+`LINEA_AUTH` is required; an empty or unknown value stops `setup` with the
+choices.
+
+| `LINEA_AUTH` | Who signs in | Required with it |
+| --- | --- | --- |
+| `local` | Nobody: HAProxy signs every request in as the admin `local` | `LINEA_BIND` of `127.0.0.1` (the default) or `[::1]` |
+| `oidc` | People, through your identity provider; the CLI through `linea login` | `LINEA_PUBLIC_URL`, `LINEA_OIDC_ISSUER`, `LINEA_OIDC_CLIENT_ID`, `LINEA_OIDC_CLIENT_SECRET`, `LINEA_ADMIN_GROUP` |
+| `proxy` | An authenticating proxy in front of the stack names the user | `LINEA_TRUSTED_PROXIES`, `LINEA_USER_HEADER`, `LINEA_GROUPS_HEADER`, `LINEA_ADMIN_GROUP` |
+
+In every mode workers and the builder reach the server through HAProxy's
+internal `workers` frontend (`http://proxy:7070`), which has no published
+port and removes every identity header; they present their tokens. API
+tokens ([`linea token`](team-server.md#api-tokens)) work in every mode.
+
+### local
+
+For one person on their own machine.
+
+- HAProxy drops any `X-Linea-User` and `X-Linea-Groups` header a client sent and
+  sets `local` in the group `local-admins`, which the server config binds to
+  `admin`.
+- The server config trusts these headers only from HAProxy's fixed address
+  `10.207.70.10` on the internal `edge` network, and no published port reaches an
+  instance directly.
+- Anyone who can reach the port on the machine is that admin, so `setup`
+  refuses any `LINEA_BIND` but loopback.
+- HAProxy refuses with 421 a request whose `Host` is not `127.0.0.1`,
+  `localhost` or `[::1]`, with any port. A web page whose own hostname was
+  rebound to 127.0.0.1 therefore cannot reach the API as that admin.
+
+### oidc
+
+For a team: the server's own OIDC sign-in ([the server
+config](team-server.md#the-server-config)).
+
+| Variable | Effect |
+| --- | --- |
+| `LINEA_PUBLIC_URL` | The URL people open, such as `https://linea.example.com`. The callback is `LINEA_PUBLIC_URL/auth/callback`; register it with the provider. Use `https`, or `http` on loopback only. |
+| `LINEA_OIDC_ISSUER` | The provider's issuer URL |
+| `LINEA_OIDC_CLIENT_ID`, `LINEA_OIDC_CLIENT_SECRET` | The web client's confidential client |
+| `LINEA_OIDC_CLI_CLIENT_ID` | Optional: a public client for `linea login` |
+| `LINEA_OIDC_GROUPS_CLAIM` | Optional: the claim that lists groups, `groups` by default |
+| `LINEA_OIDC_SCOPES` | Optional: extra scopes, comma-separated, such as `groups,offline_access` |
+
+The server's session cookies are `Secure`, so browsers send them only over
+HTTPS (or to `localhost`): set `LINEA_TLS_CERT_FILE` and `LINEA_TLS_KEY_FILE`,
+or put a TLS-terminating proxy in front and point `LINEA_PUBLIC_URL` at it.
+
+### proxy
+
+For a team behind a proxy that authenticates people already, such as
+oauth2-proxy or a company gateway. HAProxy passes the proxy's identity headers
+to the server only from the addresses in `LINEA_TRUSTED_PROXIES` and removes
+them from every other request.
+
+| Variable | Effect |
+| --- | --- |
+| `LINEA_TRUSTED_PROXIES` | Comma-separated addresses or CIDR prefixes of your proxy, as HAProxy sees them |
+| `LINEA_USER_HEADER`, `LINEA_GROUPS_HEADER` | The headers that carry the user and their comma-separated groups, such as `X-Forwarded-User` and `X-Forwarded-Groups` |
+| `LINEA_NAME_HEADER` | Optional: a header with a display name |
+| `LINEA_PROXY_ISSUER` | Optional: the issuer principals are recorded under, `proxy` by default; changing it gives everyone new principal IDs |
+
+HAProxy sees the source address as Docker delivers it. On Linux with the
+default bridge that is the client's own address; Docker Desktop and some
+userland-proxy setups show a gateway address instead, which every client on
+the host shares. Check what arrives before trusting a prefix, and keep
+`LINEA_BIND` on an address only your proxy reaches.
+
+## TLS
+
+With `LINEA_TLS_CERT_FILE` and `LINEA_TLS_KEY_FILE` (paths relative to
+`compose.yaml`, or absolute), HAProxy serves HTTPS on the published port and
+plain HTTP not at all. The certificate file holds the certificate and any
+intermediates, PEM-encoded; the key is a PEM key without a passphrase.
+Replacing the files takes `up -d --force-recreate`. The `workers` frontend
+stays plain HTTP inside the internal `edge` network.
 
 ### Resources
 
@@ -134,25 +236,6 @@ PostgreSQL, SeaweedFS and HAProxy keep fixed limits of 1 CPU each.
 Scaled pools (`--scale pool=N`) share the `pool-cache` volume, which is safe only
 while they run nothing but the built-in runtime. For more pools that run built runtimes, add services with a volume each.
 
-## Identity
-
-The stack has one user.
-
-- HAProxy drops any `X-Linea-User` and `X-Linea-Groups` header a client sent and
-  sets `local` in the group `local-admins`, which the server config binds to
-  `admin`.
-- The server config trusts these headers only from HAProxy's fixed address
-  `10.207.70.10` on the internal `edge` network, and no published port reaches an
-  instance directly.
-- Anyone who can reach `127.0.0.1:7070` on the machine is that admin. Keep the
-  port on loopback, or replace `trusted_headers` with `oidc` ([the server
-  config](team-server.md#the-server-config)) before exposing it.
-- HAProxy refuses with 421 a request whose `Host` is not `127.0.0.1`,
-  `localhost` or `proxy` (the workers' name for it), with any port. A web page
-  whose own hostname was rebound to 127.0.0.1 therefore cannot reach the API as
-  that admin. To reach the stack under another name, add that name to the
-  `allowed_host` rule in the `haproxy_config` of `compose.yaml`.
-
 ## Networks
 
 | Network | Members | Internal |
@@ -163,7 +246,8 @@ The stack has one user.
 | `ingress` | proxy | no (publishes the port) |
 | `egress` | builder | no (the only way out of the stack: the module proxy) |
 
-Workers dial the load balancer (`http://proxy:7070`), and read and write
+Workers dial the load balancer's `workers` frontend (`http://proxy:7070`),
+which has no published port, and read and write
 payloads over 1 MiB directly in SeaweedFS through presigned URLs, which name
 `http://seaweedfs:8333`.
 
@@ -179,8 +263,8 @@ networks:
   ingress: {ipam: {config: [{subnet: 10.207.73.0/24}]}}
 ```
 
-If `10.207.70.0/24` itself is taken, change the `edge` subnet, HAProxy's address
-and the server config's `proxies` together.
+If `10.207.70.0/24` itself is taken, change the `edge` subnet, HAProxy's
+address and the trusted proxy `10.207.70.10` in the `setup` script together.
 
 ## Instances, stops and upgrades
 
@@ -226,7 +310,7 @@ SeaweedFS URLs. It holds no database or bucket credentials.
 
 ### Image export (optional)
 
-With `builds.export.repository` in the server config, the builder also pushes
+With `LINEA_BUILD_EXPORT` (`builds.export.repository` in the server config), the builder also pushes
 each runtime it builds as an image, `FROM scratch` like `linea runtime build`
 makes, tagged with the build's name, to that repository over `egress`. The
 build records the image by digest; a failed push is recorded as the build's

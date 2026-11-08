@@ -3,7 +3,7 @@
 | You want | Install |
 | --- | --- |
 | To debug and test configurations on your machine | [The CLI](#the-cli) |
-| The web client, HTTP API or MCP | [A team server](#a-team-server): Docker Compose on one machine, or Kubernetes |
+| The web client, HTTP API or MCP | [A team server](#a-team-server), with Docker Compose or Kubernetes |
 | To manage a fleet of Collectors over OpAMP | [The fleet server](fleet/README.md#deploy-with-docker) |
 | To capture telemetry from running Collectors | [The Collector components](collector-components/README.md#build-a-collector-with-the-components) in your own Collector build |
 
@@ -33,21 +33,34 @@ refuses. [Build it from source](#from-source) instead.
 ## A team server
 
 The web client, the HTTP API and MCP run on a team server: `linea-server` with
-PostgreSQL, object storage, and workers that run the Collector.
+PostgreSQL, object storage, and workers that run the Collector. It is the
+same server however you run it, for yourself or for a team; its
+configuration, not the platform, decides how people sign in, where it listens
+and what it keeps ([the server config](debugger/team-server.md#the-server-config)).
 
-### On one machine, with Docker Compose
+| Run it with | Configured by | Guide |
+| --- | --- | --- |
+| Docker Compose, on one machine | `.env` beside `compose.yaml` | [Docker Compose](debugger/deploy-compose.md) |
+| Kubernetes | The Helm chart's values | [Kubernetes](debugger/deploy-kubernetes.md) |
+
+### With Docker Compose
 
 Docker Compose starts all of it from one file. It needs Docker Engine 26 or
 later with Compose v2.30 or later.
 
 In an empty directory, fetch the file from a release's tag, put five random
-values in a `.env` beside it, and start it:
+values and the sign-in mode in a `.env` beside it, and start it.
+`LINEA_AUTH=local` is for you alone: everyone who reaches `127.0.0.1` is
+the admin, and nobody signs in. For a team, choose `oidc` or `proxy` and set
+the address, port and TLS in the same file
+([sign-in](debugger/deploy-compose.md#sign-in)).
 
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/lineahq/linea/vX.Y.Z/deploy/compose/linea/compose.yaml
 for name in POSTGRES_PASSWORD S3_ACCESS_KEY S3_SECRET_KEY WORKER_TOKEN BUILDER_TOKEN; do
   echo "LINEA_$name=$(openssl rand -hex 32)"
 done > .env
+echo LINEA_AUTH=local >> .env
 docker compose up -d
 ```
 
@@ -56,10 +69,11 @@ On Windows, in PowerShell:
 ```powershell
 Invoke-WebRequest https://raw.githubusercontent.com/lineahq/linea/vX.Y.Z/deploy/compose/linea/compose.yaml -OutFile compose.yaml
 $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
-'POSTGRES_PASSWORD','S3_ACCESS_KEY','S3_SECRET_KEY','WORKER_TOKEN','BUILDER_TOKEN' | ForEach-Object {
+$values = 'POSTGRES_PASSWORD','S3_ACCESS_KEY','S3_SECRET_KEY','WORKER_TOKEN','BUILDER_TOKEN' | ForEach-Object {
   $b = [byte[]]::new(32); $rng.GetBytes($b)
   "LINEA_$_=" + -join ($b | ForEach-Object { $_.ToString('x2') })
-} | Set-Content -Encoding ascii .env
+}
+$values + 'LINEA_AUTH=local' | Set-Content -Encoding ascii .env
 docker compose up -d
 ```
 
@@ -95,10 +109,9 @@ fewer than 4 CPUs add lower limits to `.env`, for example
 Stop it with `docker compose down`; add `-v` to remove the data too.
 [Running with Docker Compose](debugger/deploy-compose.md) has every setting.
 
-### Shared, on Kubernetes
+### With Kubernetes
 
-Each release attaches the Helm chart to its GitHub release. For a team, with
-sign-in through your identity provider, see
+Each release attaches the Helm chart to its GitHub release. See
 [Kubernetes](debugger/deploy-kubernetes.md) and the
 [team server](debugger/team-server.md) guide.
 

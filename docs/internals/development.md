@@ -288,14 +288,14 @@ and embedded web client of a team server.
 - `.linea/` is ignored for optional local state; do not put source code or
   fixtures there.
 
-On one machine the server is the shared-platform stack: two `linea-server --config`
+On one machine the server is the Compose stack: two `linea-server --config`
 instances behind HAProxy, PostgreSQL, SeaweedFS, a pool worker that runs the
 built-in runtime, and a builder; nothing to register. Details are in
 `docs/debugger/deploy-compose.md`. It is the only way to run the web client,
 HTTP API and MCP on one machine (`pnpm dev` in `web/` proxies to it):
 
 ```sh
-# once: .env in deploy/compose/linea/ (docs/debugger/deploy-compose.md#starting-it)
+# once: .env in deploy/compose/linea/ with LINEA_AUTH=local (docs/debugger/deploy-compose.md#starting-it)
 LINEA_VERSION=dev docker compose -f deploy/compose/linea/compose.yaml up -d --build
 docker compose -f deploy/compose/linea/compose.yaml down -v   # remove it and its data
 ```
