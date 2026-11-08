@@ -81,10 +81,10 @@ elif [ "$race" = 1 ]; then
     docker run --rm --cpus 2 --memory 2g --mount "type=bind,source=$root,target=/src,readonly" \
         --workdir /src --env GOMAXPROCS=2 --env LINEA_FLEET_TEST_DATABASE_URL "$go_image" \
         go test -mod=readonly -race -p 1 -count 1 \
-        -run '^TestPostgres(Lifecycle|Replicas|Inventory|ReapBudget|RemoteConfig|Configs)$' ./internal/fleet/postgres \
+        -run '^TestPostgres(Lifecycle|Replicas|Inventory|ReapBudget|RemoteConfig|Configs|BootstrapToken)$' ./internal/fleet/postgres \
         || die 'PostgreSQL lifecycle checks failed'
 else
     go test -p 1 -count 1 \
-        -run '^TestPostgres(Lifecycle|Replicas|Inventory|ReapBudget|RemoteConfig|Configs)$' ./internal/fleet/postgres \
+        -run '^TestPostgres(Lifecycle|Replicas|Inventory|ReapBudget|RemoteConfig|Configs|BootstrapToken)$' ./internal/fleet/postgres \
         || die 'PostgreSQL lifecycle checks failed'
 fi

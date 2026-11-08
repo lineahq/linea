@@ -30,6 +30,11 @@ change APIs, report schemas and persisted formats; the release notes say how.
   `bootstrap` issues its admin without expiry, so a team server connected
   with it no longer loses fleet after 90 days. Fleet schema version 11:
   **run `migrate` before starting the new release.**
+- Fleet `bootstrap` installs a token the deployment generated, given in
+  `LINEA_FLEET_BOOTSTRAP_TOKEN` (or `_FILE`), and is then safe to repeat. The
+  debugger's Compose overlay (`compose.fleet.yaml`) generates
+  `linea-server`'s fleet token in its setup volume and installs it this way;
+  existing stacks keep their token.
 
 - Collector 0.165.0 joins the runtime support table. The debugger explains
   the new `queue_batch` processor like the batch processor (sends, triggers,

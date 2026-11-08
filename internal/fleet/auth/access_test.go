@@ -156,3 +156,31 @@ func TestCredentialsWithoutExpiry(t *testing.T) {
 		t.Fatal("expiry not applied")
 	}
 }
+
+func TestInstallTakesTheDeploymentToken(t *testing.T) {
+	id, secret := strings.Repeat("ab", 16), strings.Repeat("cd", 32)
+	for name, token := range map[string]string{
+		"short":             "of1_" + id,
+		"wrong prefix":      "of2_" + id + "_" + secret,
+		"uppercase id":      "of1_" + strings.ToUpper(id) + "_" + secret,
+		"uppercase secret":  "of1_" + id + "_" + strings.ToUpper(secret),
+		"non-hex secret":    "of1_" + id + "_" + strings.Repeat("zz", 32),
+		"missing separator": "of1_" + id + "x" + secret,
+	} {
+		if _, err := Install(CredentialRequest{Name: "linea-server", Role: "admin"}, token, time.Now()); !errors.Is(err, fleet.ErrInvalid) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	token := "of1_" + id + "_" + secret
+	issued, err := Install(CredentialRequest{Name: "linea-server", Role: "admin"}, token, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256.Sum256([]byte(token))
+	if issued.Credential.ID != id || string(issued.Credential.Hash) != string(hash[:]) || issued.Token != token || issued.Credential.ExpiresAt != nil {
+		t.Fatalf("installed credential %+v", issued.Credential)
+	}
+	if _, err := Install(CredentialRequest{Name: "agent", Role: "agent"}, token, time.Now()); !errors.Is(err, fleet.ErrInvalid) {
+		t.Fatalf("agent without expiry installed: %v", err)
+	}
+}

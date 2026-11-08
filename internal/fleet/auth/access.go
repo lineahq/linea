@@ -174,6 +174,43 @@ func Generate(req CredentialRequest, now time.Time) (Issued, error) {
 	return Issued{Credential: c, Token: token}, nil
 }
 
+// TokenRule describes a credential token a deployment generates itself.
+const TokenRule = "token must be of1_, 32 lowercase hexadecimal characters, _ and 64 lowercase hexadecimal characters"
+
+// TokenID returns the credential ID a well-formed token names.
+func TokenID(token string) (string, bool) {
+	if len(token) != 101 || !strings.HasPrefix(token, "of1_") || token[36] != '_' {
+		return "", false
+	}
+	id, secret := token[4:36], token[37:]
+	if !fleet.ValidID(id) {
+		return "", false
+	}
+	b, err := hex.DecodeString(secret)
+	if err != nil || len(b) != 32 || hex.EncodeToString(b) != secret {
+		return "", false
+	}
+	return id, true
+}
+
+// Install is Generate for a token the deployment generated instead of fleet,
+// so the deployment can hand the same token to its clients (bootstrap).
+func Install(req CredentialRequest, token string, now time.Time) (Issued, error) {
+	id, ok := TokenID(token)
+	if !ok {
+		return Issued{}, fleet.Invalid(TokenRule)
+	}
+	req.ID = id
+	i, err := Generate(req, now)
+	if err != nil {
+		return Issued{}, err
+	}
+	hash := sha256.Sum256([]byte(token))
+	i.Credential.Hash = hash[:]
+	i.Token = token
+	return i, nil
+}
+
 func (s *Service) Issue(ctx context.Context, actor string, req CredentialRequest) (Issued, error) {
 	i, err := Generate(req, time.Now())
 	if err != nil {

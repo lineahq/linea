@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -34,16 +35,45 @@ func requireAgent(ctx context.Context, tx pgx.Tx, id string) error {
 }
 
 func Bootstrap(ctx context.Context, url, serverID, name string) (auth.Issued, error) {
-	if !auth.SafeName(serverID) {
-		return auth.Issued{}, fleet.ErrInvalid
-	}
-	now := time.Now()
-	issued, err := auth.Generate(auth.CredentialRequest{ID: randomID(), Name: name, Role: "admin"}, now)
+	issued, err := auth.Generate(auth.CredentialRequest{ID: randomID(), Name: name, Role: "admin"}, time.Now())
 	if err != nil {
 		return auth.Issued{}, err
 	}
+	if _, err := bootstrap(ctx, url, serverID, issued.Credential); err != nil {
+		return auth.Issued{}, err
+	}
+	return issued, nil
+}
+
+// BootstrapToken installs the first admin with a token the deployment
+// generated, so the deployment can hand the same token to linea-server. It is
+// safe to repeat: when that token's admin is already active it changes
+// nothing and reports created false. It conflicts when another admin is
+// active or the token's credential was revoked or is not an active admin.
+func BootstrapToken(ctx context.Context, url, serverID, name, token string) (created bool, err error) {
+	issued, err := auth.Install(auth.CredentialRequest{Name: name, Role: "admin"}, token, time.Now())
+	if err != nil {
+		return false, err
+	}
+	return bootstrap(ctx, url, serverID, issued.Credential)
+}
+
+func bootstrap(ctx context.Context, url, serverID string, c auth.Credential) (created bool, err error) {
+	if !auth.SafeName(serverID) {
+		return false, fleet.ErrInvalid
+	}
 	err = adminTx(ctx, url, func(ctx context.Context, tx pgx.Tx) error {
 		if err := identity(ctx, tx, serverID); err != nil {
+			return err
+		}
+		var current bool
+		err := tx.QueryRow(ctx, "SELECT token_hash=$2 AND role='admin' AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>clock_timestamp()) FROM fleet.credentials WHERE id=$1", c.ID, c.Hash).Scan(&current)
+		switch {
+		case err == nil && current:
+			return nil
+		case err == nil:
+			return fleet.ErrConflict
+		case !errors.Is(err, pgx.ErrNoRows):
 			return err
 		}
 		var count int
@@ -53,15 +83,13 @@ func Bootstrap(ctx context.Context, url, serverID, name string) (auth.Issued, er
 		if count > 0 {
 			return fleet.ErrConflict
 		}
-		if err := insertCredential(ctx, tx, issued.Credential); err != nil {
+		if err := insertCredential(ctx, tx, c); err != nil {
 			return err
 		}
-		return appendEvent(ctx, tx, "credential.created", issued.Credential.ID, "bootstrap", nil)
+		created = true
+		return appendEvent(ctx, tx, "credential.created", c.ID, "bootstrap", nil)
 	})
-	if err != nil {
-		return auth.Issued{}, err
-	}
-	return issued, nil
+	return created, err
 }
 
 const credentialColumns = "id,name,role,labels,remote_config,created_at,expires_at,revoked_at"

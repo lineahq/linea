@@ -64,6 +64,7 @@ Secrets:
 | Protection | File-based Compose secrets are plaintext host files. Protect the directory and its backups; never commit or print them |
 | Admin token | Valid until revoked; it does not expire. `admin.json` is an operator copy of the one-time disclosure: store it in your secret manager |
 | Admin expiry | Startup requires an active admin. If all admins are revoked or expired, stop fleet and run offline bootstrap again. Bootstrap refuses while an active admin exists. Admins issued before schema version 11 keep their 90-day expiry |
+| Deployment token | With `LINEA_FLEET_BOOTSTRAP_TOKEN` (or `_FILE`), bootstrap installs a token the deployment generated (`of1_`, 32 and then 64 lowercase hexadecimal characters, joined by `_`) instead of generating one, and prints only `fleet admin created` or `fleet admin is current`. Repeating it changes nothing while that admin is active; it refuses when another admin is active or that token's credential was revoked. The debugger's Compose overlay and Helm chart use it to connect `linea-server` |
 | Rotation | Changing secret files does not rotate passwords in an existing database. Coordinate database password changes with connection-file updates |
 
 Storage and roles:

@@ -286,8 +286,9 @@ The script is safe to repeat. It:
    passwords from the setup volume;
 2. stops fleet and the plugin and migrates both schemas (the plugin refuses
    to migrate while it runs);
-3. bootstraps the first fleet admin, once, into `linea-server`'s fleet token
-   file (the token is never printed);
+3. installs `linea-server`'s fleet token as the first fleet admin. The setup
+   volume generates the token once and nothing prints it; the admin does not
+   expire, and a repeated run changes nothing while it is active;
 4. starts the stack with both files.
 
 After that, pass both files to every `docker compose` command:

@@ -5,8 +5,8 @@
 #   1. creates the fleet and livecapture databases and roles (idempotent);
 #   2. stops fleet and the plugin and migrates both schemas (migrations stay
 #      explicit, and the plugin refuses to migrate while it runs);
-#   3. bootstraps the first fleet admin, once, into linea-server's fleet token
-#      file (the token is never printed);
+#   3. installs linea-server's fleet token, generated once and never printed,
+#      as the first fleet admin (no change once it is);
 #   4. starts the whole stack.
 # --build builds the fleet and plugin images first. Set LINEA_VERSION as for
 # the stack itself (dev with --build to build from source).
@@ -28,12 +28,8 @@ compose stop livecapture-plugin fleet >/dev/null 2>&1 || true
 compose run --rm -T fleet-migrate
 compose run --rm -T capture-migrate
 
-if compose run --rm -T -e FLEET_TOKEN_CHECK=1 fleet-token; then
-  echo '== fleet admin: keeping the existing linea-server token'
-else
-  echo '== fleet admin: bootstrapping the linea-server token'
-  compose run --rm -T fleet-bootstrap | compose run --rm -T fleet-token
-fi
+echo '== fleet admin'
+compose run --rm -T fleet-bootstrap
 
 echo '== stack'
 compose up -d
