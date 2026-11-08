@@ -653,6 +653,9 @@ func (s *Service) CreateCaptureSession(ctx context.Context, caller Caller, req C
 				return nil, held
 			}
 		}
+		if fleetcapture.StatusOf(err) == 403 && slices.ContainsFunc(targets, func(c Collector) bool { return capturesRaw(sel, c.ID, snap) }) {
+			return nil, &Error{Code: CodeForbidden, Message: "forbidden: fleet's livecapture plugin does not let this server capture raw points; select redacted points, or have the deployment grant raw capture to the server (the plugin's raw_principals)"}
+		}
 		return nil, fleetError(admit, err)
 	}
 	// Sensitivities come from the catalogs of the peers fleet chose.

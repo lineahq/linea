@@ -89,6 +89,10 @@ fleet:
     tolerations: []
     affinity: {}
     livecapture:
+      # Lets the server's fleet credential capture points a Collector marks
+      # raw (the plugin's raw_principals). Who may then capture raw is the
+      # debugger's capture.raw permission. Off: only redacted points.
+      rawCapture: false
       image:
         repository: ghcr.io/lineahq/linea-fleet-livecapture
         # Defaults to the chart's appVersion.

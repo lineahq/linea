@@ -479,6 +479,7 @@ fleet:
 | Migrations | An init container in each pod migrates its schema before the pod starts. Each runs one pod, replaced rather than rolled, so a migration never overlaps a running instance. |
 | Server token | Generated once, kept in a Secret across upgrades and never printed. Fleet's `bootstrap` init container installs it as the first admin, without expiry; on later starts it changes nothing. |
 | Config management | Off: fleet only reports. `fleet.deploy.configManagement: true` starts it with `--config-management` for config versions, assignments and rollouts ([config management](../fleet/config-management.md)). |
+| Raw capture | Off: captures select only points a Collector marks redacted. `fleet.deploy.livecapture.rawCapture: true` puts the server's fleet credential into the plugin's `raw_principals`; who may capture raw is still the debugger's `capture.raw` permission ([raw capture](livecapture.md#raw-capture-and-permissions)). |
 | Plugin | Registered with fleet with generated host and service tokens. Its control and delivery endpoints serve TLS with `fleet.deploy.livecapture.tls.secretName`, or a self-signed certificate the chart generates once for the Service names and `tls.extraHosts`. |
 
 Install fails with `fleet.url`, `fleet.token` or `fleet.existingSecret` set

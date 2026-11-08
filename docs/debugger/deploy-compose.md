@@ -301,6 +301,7 @@ After that, pass both files to every `docker compose` command:
 | `LINEA_FLEET_AGENT_PORT` | `4320`, OpAMP for Collectors (`ws://<host>:4320/v1/opamp`) |
 | `LINEA_CAPTURE_CONTROL_PORT`, `LINEA_CAPTURE_DELIVERY_PORT` | `4340`, `4341`, the live-capture extension's control and delivery endpoints (TLS with the plugin's self-signed certificate) |
 | `LINEA_FLEET_BIND` | `127.0.0.1` for all four |
+| `LINEA_CAPTURE_RAW` | `false`: captures select only points a Collector marks redacted. `true` lets `linea-server`'s fleet credential capture raw points (the plugin's `raw_principals`); who may is still the debugger's `capture.raw` permission ([raw capture](livecapture.md#raw-capture-and-permissions)) |
 | `LINEA_FLEET_CONFIG_MANAGEMENT` | `false`, fleet only reports. `true` starts it with `--config-management`: config versions, assignments and rollouts for supervised Collectors ([config management](../fleet/config-management.md)) |
 
 Fleet serves plain HTTP and OpAMP over `ws://`, and `linea-server` reaches it
@@ -311,8 +312,8 @@ Collectors on the same host can join the external networks
 `linea_fleet-agents` and `linea_capture-ingress` and use the service names
 `fleet` and `livecapture-plugin`.
 
-Fleet only reports unless `LINEA_FLEET_CONFIG_MANAGEMENT=true`; recreate fleet
-after changing it (`compose-fleet.sh`). **Fleet → Connection** in the web
+Fleet only reports unless `LINEA_FLEET_CONFIG_MANAGEMENT=true`. After changing
+it or `LINEA_CAPTURE_RAW`, run `compose-fleet.sh` again. **Fleet → Connection** in the web
 client shows whether it is on. To keep
 fleet on a PostgreSQL of its own, use `deploy/compose/fleet` instead and start
 `linea-server` with `--fleet-url` ([Connecting to

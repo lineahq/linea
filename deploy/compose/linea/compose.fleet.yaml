@@ -42,6 +42,8 @@ services:
     <<: *postgres-tool
     user: "0:0"
     cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]
+    environment:
+      LINEA_CAPTURE_RAW: ${LINEA_CAPTURE_RAW:-false}
     command:
       - |
         set -eu
@@ -72,12 +74,20 @@ services:
             -addext 'subjectAltName=DNS:livecapture-plugin,DNS:localhost,IP:127.0.0.1' \
             -addext 'basicConstraints=critical,CA:TRUE' 2>/dev/null
         fi
-        cat > livecapture/config.json <<'JSON'
+        # LINEA_CAPTURE_RAW=true lets linea-server's credential capture raw
+        # points; its credential ID is the token's second field.
+        raw='[]'
+        case "$${LINEA_CAPTURE_RAW:-false}" in
+          true) raw="[\"$$(cut -d_ -f2 linea/fleet_token)\"]" ;;
+          false) ;;
+          *) echo "LINEA_CAPTURE_RAW must be true or false" >&2; exit 1 ;;
+        esac
+        cat > livecapture/config.json <<JSON
         {"id":"livecapture","version":"0.4.0","host_endpoint":"http://fleet:8081","allow_insecure_host":true,
          "host_token_file":"/run/secrets/host_token","service_token_file":"/run/secrets/service_token",
          "http_listen":"0.0.0.0:8090","control_listen":"0.0.0.0:4340","delivery_listen":"0.0.0.0:4341",
          "tls_cert_file":"/run/secrets/tls_cert.pem","tls_key_file":"/run/secrets/tls_key.pem","test_insecure":false,
-         "capture_label":"capture","raw_principals":[],"max_peers":256,"metrics_token_file":"/run/secrets/metrics_token"}
+         "capture_label":"capture","raw_principals":$$raw,"max_peers":256,"metrics_token_file":"/run/secrets/metrics_token"}
         JSON
         cat > fleet/plugins.json <<'JSON'
         {"plugins":[{"id":"livecapture","version":"0.4.0","api_version":"2","endpoint":"http://livecapture-plugin:8090",
