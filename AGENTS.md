@@ -240,6 +240,7 @@ go run ./cmd/linea test --config samples/<id>/config.yaml --scenario samples/<id
 # Compose stack (docs/debugger/deploy-compose.md). `linea-server` refuses to
 # start without --config.
 LINEA_VERSION=dev docker compose -f deploy/compose/linea/compose.yaml up -d --build   # after a .env in deploy/compose/linea/ with LINEA_AUTH (docs/debugger/deploy-compose.md)
+scripts/debugger/compose-fleet.sh             # the same stack plus fleet and live capture on its PostgreSQL (compose.fleet.yaml)
 go generate ./internal/debugger/registry      # after an OCB manifest change
 go generate ./internal/debugger/workersrc     # before building a binary that builds runtimes
 ./scripts/build-web.sh               # web tests and build, embedded by go build

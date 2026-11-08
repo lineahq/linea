@@ -265,6 +265,55 @@ networks:
 If `10.207.70.0/24` itself is taken, change the `edge` subnet, HAProxy's
 address and the trusted proxy `10.207.70.10` in the `setup` script together.
 
+## Fleet and live capture
+
+`compose.fleet.yaml` adds the [fleet server](../fleet/README.md) and its
+[live-capture plugin](../fleet/livecapture.md) to the stack and connects
+`linea-server` to fleet, so [live capture](livecapture.md) works in the web
+client, CLI and MCP. All three use the stack's one PostgreSQL server with a
+database each (`linea`, `fleet`, `livecapture`). Fleet and the plugin get their
+own migration and runtime roles, which can reach only their own database.
+
+Start it, from the repository root, the first time and after every upgrade:
+
+```sh
+scripts/debugger/compose-fleet.sh            # add --build with LINEA_VERSION=dev
+```
+
+The script is safe to repeat. It:
+
+1. creates the databases and roles, and on every run resets the role
+   passwords from the setup volume;
+2. stops fleet and the plugin and migrates both schemas (the plugin refuses
+   to migrate while it runs);
+3. bootstraps the first fleet admin, once, into `linea-server`'s fleet token
+   file (the token is never printed);
+4. starts the stack with both files.
+
+After that, pass both files to every `docker compose` command:
+`-f compose.yaml -f compose.fleet.yaml`.
+
+| Setting (in `.env`) | Default |
+| --- | --- |
+| `LINEA_FLEET_SERVER_ID` | `linea-fleet`. Bootstrap records it; changing it later stops fleet from opening its database |
+| `LINEA_FLEET_PORT` | `8080`, the fleet management API (`/api/v1`) |
+| `LINEA_FLEET_AGENT_PORT` | `4320`, OpAMP for Collectors (`ws://<host>:4320/v1/opamp`) |
+| `LINEA_CAPTURE_CONTROL_PORT`, `LINEA_CAPTURE_DELIVERY_PORT` | `4340`, `4341`, the live-capture extension's control and delivery endpoints (TLS with the plugin's self-signed certificate) |
+| `LINEA_FLEET_BIND` | `127.0.0.1` for all four |
+
+Fleet serves plain HTTP and OpAMP over `ws://`, and `linea-server` reaches it
+with `--fleet-allow-http` on the internal `fleet` network. Put TLS in front
+before binding these ports beyond loopback. The plugin's certificate is in the
+setup volume at `livecapture/tls_cert.pem`; Collectors need it as their CA.
+Collectors on the same host can join the external networks
+`linea_fleet-agents` and `linea_capture-ingress` and use the service names
+`fleet` and `livecapture-plugin`.
+
+Fleet starts without `--config-management`, so it only reports. To keep
+fleet on a PostgreSQL of its own, use `deploy/compose/fleet` instead and start
+`linea-server` with `--fleet-url` ([Connecting to
+fleet](livecapture.md#connecting-to-fleet)).
+
 ## Instances, stops and upgrades
 
 The stack runs one instance; set `LINEA_REPLICAS=2` or more to keep it
