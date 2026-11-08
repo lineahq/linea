@@ -1305,8 +1305,13 @@ version or removal starts a rollout too), Rollouts and a rollout's page
 (waves, policy, targets by outcome, and only the controls the state allows;
 roll back and cancel ask first), Events (a feed that reads from fleet's last
 cursor every 5 seconds while visible, newest first, at most 500) and Config
-bisect. `FleetGate` explains a missing fleet connection or config
-management. The view model `fleetView.ts` (names, chips, group and rollout
+bisect, and Connection (`/fleet/connection`: `GET /api/v1/fleet/connection`
+as a checks table with a verdict, "Test connection" to run it again, which also
+refreshes the overview, and without a fleet a setup view naming the Helm
+value, the Compose script and the server flags; the connection is deployment
+configuration, so the page sets nothing). `FleetGate` explains a missing fleet
+connection or config management and links to Connection. `connection.ts`
+(step titles, chips, verdict) is pure and tested. The view model `fleetView.ts` (names, chips, group and rollout
 forms, tallies, event words, refusal hints) is pure and tested; the pages are
 tested in `fleet/pages/FleetPages.test.ts`. Writes need the server's fleet
 credential to have fleet's admin role; fleet's own check is the only gate.

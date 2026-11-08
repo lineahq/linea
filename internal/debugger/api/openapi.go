@@ -49,7 +49,7 @@ var schemaRoots = []any{
 	CollectorSupport{}, ManifestRequest{}, ComposedManifest{}, platform.CollectorCatalog{},
 	UpgradeCheckRequest{}, platform.UpgradeCheck{}, ManifestRetargetRequest{}, RetargetedManifest{},
 	ConfigBisectRequest{}, platform.Bisection{},
-	platform.FleetOverview{}, platform.FleetAgentPage{}, platform.FleetAgentDetail{}, platform.FleetAgentConfig{}, platform.FleetEventPage{},
+	platform.FleetOverview{}, platform.FleetConnection{}, platform.FleetCheck{}, platform.FleetAgentPage{}, platform.FleetAgentDetail{}, platform.FleetAgentConfig{}, platform.FleetEventPage{},
 	platform.CollectorGroupSave{}, FleetDeleted{}, platform.FleetConfig{}, platform.FleetConfigPage{}, platform.FleetConfigCreate{}, platform.FleetConfigUpdate{},
 	platform.FleetConfigVersion{}, platform.FleetConfigVersionPage{}, platform.FleetConfigVersionCreate{},
 	platform.FleetAssignment{}, platform.FleetAssignmentPage{}, platform.FleetAssignmentCreate{}, platform.FleetAssignmentPreviewPage{},

@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { Link } from '@tanstack/react-router';
 import { api } from '../../api/client';
 import { chipClass } from '../../capture/phase';
 import { Icon } from '../../ui/Icon';
@@ -27,6 +28,7 @@ export function FleetHead({ actions }: { actions?: ReactNode }) {
     { to: '/fleet/rollouts', label: 'Rollouts' },
     { to: '/fleet/events', label: 'Events' },
     { to: '/fleet/bisect', label: 'Config bisect' },
+    { to: '/fleet/connection', label: 'Connection' },
   ];
   return <PageHead title="Fleet" nav={nav} actions={actions} />;
 }
@@ -35,7 +37,14 @@ export function FleetHead({ actions }: { actions?: ReactNode }) {
 export function FleetGate({ configs = false, children }: { configs?: boolean; children: ReactNode }) {
   const overview = useFleetOverview();
   if (overview.isPending) return <div className="od-page"><p role="status" className="od-muted">Connecting to fleet…</p></div>;
-  if (overview.error) return <div className="od-page"><Problem title="Could not reach fleet" error={overview.error} retry={() => void overview.refetch()} /></div>;
+  if (overview.error) {
+    return (
+      <div className="od-page" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <Problem title="Could not reach fleet" error={overview.error} retry={() => void overview.refetch()} />
+        <p className="od-muted">The <Link to="/fleet/connection">Connection</Link> page checks each step of the connection.</p>
+      </div>
+    );
+  }
   if (!overview.data.enabled) return <NotConnected />;
   if (configs && !overview.data.config_management) {
     return (
@@ -61,7 +70,7 @@ function NotConnected() {
           <div className="od-empty__glyph"><Icon name="server" size={20} /></div>
           <div className="od-empty__title">Fleet is not connected</div>
           <div className="od-empty__body">
-            Start the server with <code>--fleet-url</code> and <code>--fleet-token-file</code> to manage fleet&apos;s agents, groups, configs and rollouts here. Changes need a fleet credential with the admin role.
+            Connect the server to fleet to manage fleet&apos;s agents, groups, configs and rollouts here. <Link to="/fleet/connection">Connection</Link> shows how for the Helm chart, Docker Compose or your own fleet.
           </div>
         </div>
       </div>

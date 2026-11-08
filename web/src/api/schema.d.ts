@@ -696,6 +696,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/fleet/connection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Contact fleet now and report each step: reaching fleet with the server's credential, the livecapture plugin, and config management. A failing step is part of the answer; without a fleet connection configured is false. */
+        get: operations["checkFleetConnection"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/fleet/events": {
         parameters: {
             query?: never;
@@ -2915,6 +2932,13 @@ export interface components {
             items?: components["schemas"]["FleetAssignmentPreview"][];
             next_cursor?: string;
         };
+        FleetCheck: {
+            code?: string;
+            duration_ms: number;
+            message: string;
+            name: string;
+            status: string;
+        };
         FleetConfig: {
             /** Format: date-time */
             created_at: string;
@@ -2956,6 +2980,13 @@ export interface components {
         FleetConfigVersionPage: {
             items?: components["schemas"]["FleetConfigVersion"][];
             next_cursor?: string;
+        };
+        FleetConnection: {
+            /** Format: date-time */
+            checked_at: string;
+            checks?: components["schemas"]["FleetCheck"][];
+            configured: boolean;
+            endpoint?: string;
         };
         FleetDeleted: {
             deleted: boolean;
@@ -7978,6 +8009,47 @@ export interface operations {
             };
             /** @description The server has no fleet connection, fleet is unreachable, or fleet runs without config management. */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationError"];
+                };
+            };
+        };
+    };
+    checkFleetConnection: {
+        parameters: {
+            query?: {
+                /** @description The project the request works in: the project new work and saved artifacts go to, whose runtimes and saved work it uses, and that narrows lists. Empty is the default project; operations on an existing resource use the resource's project. */
+                project?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The checks, in the order they ran. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetConnection"];
+                };
+            };
+            /** @description Not signed in. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationError"];
+                };
+            };
+            /** @description The caller may not read fleet. */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

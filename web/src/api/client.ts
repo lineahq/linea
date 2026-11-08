@@ -65,7 +65,7 @@ import type {
 import type {
   CollectorGroupSave, FleetAgentConfig, FleetAgentDetail, FleetAgentPage, FleetAssignment, FleetAssignmentCreate, FleetAssignmentPage, FleetAssignmentPreviewPage,
   FleetConfig, FleetConfigCreate, FleetConfigPage, FleetConfigUpdate, FleetConfigVersion, FleetConfigVersionCreate, FleetConfigVersionPage,
-  FleetEventPage, FleetOverview, FleetRollout, FleetRolloutPage, FleetRolloutStart, FleetRolloutTargetPage,
+  FleetConnection, FleetEventPage, FleetOverview, FleetRollout, FleetRolloutPage, FleetRolloutStart, FleetRolloutTargetPage,
 } from './types';
 import type { AuditPage, RoleBindingRequest, RoleBindings, Session } from './types';
 import type { CopyRequest, LibraryPage, ProjectRequest, Projects, SavedArtifact as Copied, Sharing } from './types';
@@ -181,6 +181,7 @@ export const api = {
   /** addRoleBinding grants a role at the managed bindings' revision; 409 when it moved. */
   addRoleBinding: (req: RoleBindingRequest) => call<RoleBindings>('POST', '/api/v1/role-bindings', req),
   removeRoleBinding: (id: string, revision: number) => call<RoleBindings>('DELETE', `/api/v1/role-bindings/${encodeURIComponent(id)}` + query({ revision })),
+  fleetConnection: () => call<FleetConnection>('GET', fleet('connection')),
   fleetOverview: (groupBy = '') => call<FleetOverview>('GET', fleet() + query({ group_by: groupBy })),
   fleetAgents: (q: FleetAgentQuery = {}) => call<FleetAgentPage>('GET', fleet('agents') + query({ ...q })),
   fleetAgent: (id: string) => call<FleetAgentDetail>('GET', fleet('agents', id)),

@@ -41,6 +41,12 @@ change APIs, report schemas and persisted formats; the release notes say how.
   migrations in init containers, a generated server token installed as
   fleet's first admin, generated plugin tokens and a self-signed plugin
   certificate, all kept across upgrades.
+- The debugger checks its fleet connection on request: **Fleet → Connection**
+  in the web client, `linea fleet connection`, `GET /api/v1/fleet/connection`
+  and the MCP tool `linea_check_fleet_connection` report each step (fleet
+  with the server's credential, the livecapture plugin, config management)
+  with its result and error code. Without a fleet the page shows how each
+  deployment connects one.
 
 - Collector 0.165.0 joins the runtime support table. The debugger explains
   the new `queue_batch` processor like the batch processor (sends, triggers,

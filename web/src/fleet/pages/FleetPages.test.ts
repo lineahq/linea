@@ -8,6 +8,7 @@ import { AgentsPage } from './AgentsPage';
 import { AssignmentsPage, parseAssignmentsSearch } from './AssignmentsPage';
 import { ConfigDetailPage } from './ConfigDetailPage';
 import { ConfigsPage } from './ConfigsPage';
+import { ConnectionPage } from './ConnectionPage';
 import { GroupsPage } from './GroupsPage';
 import { RolloutDetailPage } from './RolloutsPage';
 
@@ -69,6 +70,7 @@ async function render(entry: string) {
   const tree = rootRoute.addChildren([
     page('/fleet', AgentsPage),
     page('/fleet/groups', GroupsPage),
+    page('/fleet/connection', ConnectionPage),
     page('/fleet/configs', ConfigsPage),
     page('/fleet/configs/$configId', ConfigDetailPage),
     page('/fleet/assignments', AssignmentsPage, parseAssignmentsSearch),
@@ -97,7 +99,37 @@ describe('Fleet', () => {
     routes['GET /api/v1/fleet'] = () => json({ enabled: false, config_management: false, total: 0, connected: 0, disconnected: 0 });
     await render('/fleet');
     await settle(() => text().includes('Fleet is not connected'));
+    expect(document.querySelector('a[href="/fleet/connection"]')).not.toBeNull();
+  });
+
+  it('shows each way to connect when the server has no fleet', async () => {
+    routes['GET /api/v1/fleet/connection'] = () => json({ configured: false, checked_at: '2026-11-08T10:00:00Z', checks: [] });
+    await render('/fleet/connection');
+    await settle(() => text().includes('Fleet is not connected'));
+    expect(text()).toContain('Helm chart');
+    expect(text()).toContain('compose-fleet.sh');
     expect(text()).toContain('--fleet-url');
+    expect(button('Test connection')).toBeUndefined();
+  });
+
+  it('tests the connection again on request', async () => {
+    let n = 0;
+    routes['GET /api/v1/fleet/connection'] = () => {
+      n++;
+      const capture = n === 1 ? { status: 'failed', message: 'fleet: plugin unavailable', code: 'unavailable' } : { status: 'ok', message: 'the livecapture plugin answered; 2 Collector(s) connected' };
+      return json({ configured: true, endpoint: 'http://fleet:8080', checked_at: new Date().toISOString(), checks: [
+        { name: 'fleet', status: 'ok', message: 'linea-fleet 0.1.1 with postgres storage accepted the server credential', duration_ms: 4 },
+        { name: 'live_capture', duration_ms: 7, ...capture },
+        { name: 'config_management', status: 'off', message: 'fleet runs without config management', duration_ms: 0 },
+      ] });
+    };
+    await render('/fleet/connection');
+    await settle(() => text().includes('live capture is not'));
+    expect(text()).toContain('http://fleet:8080');
+    await click(button('Test connection'));
+    await settle(() => text().includes('Fleet is connected') && !text().includes('live capture is not'));
+    expect(text()).toContain('2 Collector(s) connected');
+    expect(sent('GET', '/api/v1/fleet/connection')).toHaveLength(2);
   });
 });
 

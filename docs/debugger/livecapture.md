@@ -104,6 +104,7 @@ linea-server --config config.yaml --mcp --fleet-url https://fleet.example:8080 -
 | Transport | HTTPS unless the fleet URL is loopback. On a protected network `--fleet-allow-http` permits plaintext HTTP to another host. |
 | Changes | Changing the fleet or token needs a restart. |
 | Without `--fleet-url` | Inventory reports `enabled: false`, capture creation is refused and recorded captures stay readable. |
+| Checking it | **Fleet → Connection** in the web client, `linea fleet connection`, `GET /api/v1/fleet/connection` and `linea_check_fleet_connection` check now, step by step: reaching fleet with the server's credential, the livecapture plugin through fleet, and whether fleet runs config management. A failing step is part of the result, with its error code. Without a fleet the page shows each way to connect one. |
 
 ## Discovering Collectors
 

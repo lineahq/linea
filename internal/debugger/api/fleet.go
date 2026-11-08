@@ -13,6 +13,7 @@ import (
 
 func (s *Server) routeFleet() {
 	s.mux.HandleFunc("GET /api/v1/fleet", s.getFleetOverview)
+	s.mux.HandleFunc("GET /api/v1/fleet/connection", s.checkFleetConnection)
 	s.mux.HandleFunc("GET /api/v1/fleet/agents", s.listFleetAgents)
 	s.mux.HandleFunc("GET /api/v1/fleet/agents/{id}", s.getFleetAgent)
 	s.mux.HandleFunc("POST /api/v1/fleet/agents/{id}/config-retry", s.retryFleetAgentConfig)
@@ -69,6 +70,11 @@ func paged[T any](w http.ResponseWriter, r *http.Request, read func(platform.Col
 
 func (s *Server) getFleetOverview(w http.ResponseWriter, r *http.Request) {
 	v, err := s.runs.GetFleetOverview(r.Context(), callerOf(r), r.URL.Query().Get("group_by"))
+	captureReply(w, v, err)
+}
+
+func (s *Server) checkFleetConnection(w http.ResponseWriter, r *http.Request) {
+	v, err := s.runs.CheckFleetConnection(r.Context(), callerOf(r))
 	captureReply(w, v, err)
 }
 
@@ -285,6 +291,8 @@ func fleetPaths() map[string]any {
 	return map[string]any{
 		"/api/v1/fleet": map[string]any{"get": op("getFleetOverview", "Fleet's version, whether config management is on, and agent counts, grouped by a promoted attribute with group_by. Without a fleet connection enabled is false.",
 			[]any{query("group_by", "string", "service.name, service.version, host.name, k8s.namespace.name or k8s.pod.name.")}, "", ok("FleetOverview"))},
+		"/api/v1/fleet/connection": map[string]any{"get": op("checkFleetConnection", "Contact fleet now and report each step: reaching fleet with the server's credential, the livecapture plugin, and config management. A failing step is part of the answer; without a fleet connection configured is false.",
+			nil, "", map[string]any{"200": reply("The checks, in the order they ran.", ref("FleetConnection")), "401": operationFailure("Not signed in."), "403": operationFailure("The caller may not read fleet.")})},
 		"/api/v1/fleet/agents": map[string]any{"get": op("listFleetAgents", "Page fleet's agents with the Collectors each links to live capture.",
 			append(page, query("connected", "boolean", "Only connected or disconnected agents."), query("healthy", "boolean", "Only healthy or unhealthy agents."),
 				query("selector", "string", "Fleet selector, such as service.name=cart,k8s.namespace.name in (shop)."), query("sort", "string", "A promoted attribute.")), "", ok("FleetAgentPage"))},

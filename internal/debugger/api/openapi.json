@@ -4156,6 +4156,32 @@
         },
         "type": "object"
       },
+      "FleetCheck": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "duration_ms": {
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "duration_ms",
+          "message",
+          "name",
+          "status"
+        ],
+        "type": "object"
+      },
       "FleetConfig": {
         "properties": {
           "created_at": {
@@ -4300,6 +4326,31 @@
             "type": "string"
           }
         },
+        "type": "object"
+      },
+      "FleetConnection": {
+        "properties": {
+          "checked_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/FleetCheck"
+            },
+            "type": "array"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "endpoint": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "checked_at",
+          "configured"
+        ],
         "type": "object"
       },
       "FleetDeleted": {
@@ -14059,6 +14110,54 @@
           }
         },
         "summary": "Read one version with its body; fleet returns bodies to an admin credential only."
+      }
+    },
+    "/api/v1/fleet/connection": {
+      "get": {
+        "operationId": "checkFleetConnection",
+        "parameters": [
+          {
+            "description": "The project the request works in: the project new work and saved artifacts go to, whose runtimes and saved work it uses, and that narrows lists. Empty is the default project; operations on an existing resource use the resource's project.",
+            "in": "query",
+            "name": "project",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetConnection"
+                }
+              }
+            },
+            "description": "The checks, in the order they ran."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationError"
+                }
+              }
+            },
+            "description": "Not signed in."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationError"
+                }
+              }
+            },
+            "description": "The caller may not read fleet."
+          }
+        },
+        "summary": "Contact fleet now and report each step: reaching fleet with the server's credential, the livecapture plugin, and config management. A failing step is part of the answer; without a fleet connection configured is false."
       }
     },
     "/api/v1/fleet/events": {

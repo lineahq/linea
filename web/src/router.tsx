@@ -15,6 +15,7 @@ import { ConfigDetailPage } from './fleet/pages/ConfigDetailPage';
 import { AssignmentsPage, parseAssignmentsSearch } from './fleet/pages/AssignmentsPage';
 import { RolloutDetailPage, RolloutsPage } from './fleet/pages/RolloutsPage';
 import { EventsPage } from './fleet/pages/EventsPage';
+import { ConnectionPage } from './fleet/pages/ConnectionPage';
 import { RuntimesPage } from './runtimes/pages/RuntimesPage';
 import { BuildPage } from './runtimes/pages/BuildPage';
 import { UpgradeCheckPage } from './runtimes/pages/UpgradeCheckPage';
@@ -100,6 +101,7 @@ export const assignmentsRoute = createRoute({ getParentRoute: () => rootRoute, p
 export const rolloutsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/fleet/rollouts', component: RolloutsPage });
 export const rolloutDetailRoute = createRoute({ getParentRoute: () => rootRoute, path: '/fleet/rollouts/$rolloutId', component: RolloutDetailPage });
 export const eventsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/fleet/events', component: EventsPage });
+export const connectionRoute = createRoute({ getParentRoute: () => rootRoute, path: '/fleet/connection', component: ConnectionPage });
 export const bisectRoute = createRoute({ getParentRoute: () => rootRoute, path: '/fleet/bisect', component: ConfigBisectPage, validateSearch: parseBisectSearch });
 
 /** Live capture's old paths redirect, keeping their search. */
@@ -151,7 +153,7 @@ export const router = createRouter({
   routeTree: rootRoute.addChildren([
     workspaceRoute, runListRoute, runStorageRoute, playgroundRoute,
     capturesRoute, captureDetailRoute, newCaptureRoute,
-    fleetRoute, groupsRoute, configsRoute, configDetailRoute, assignmentsRoute, rolloutsRoute, rolloutDetailRoute, eventsRoute, bisectRoute,
+    fleetRoute, groupsRoute, configsRoute, configDetailRoute, assignmentsRoute, rolloutsRoute, rolloutDetailRoute, eventsRoute, bisectRoute, connectionRoute,
     ...movedRoutes,
     runtimesRoute, buildRoute, upgradeRoute, storageRoute,
     savedRoute, libraryRoute, suiteListRoute, suiteResultRoute, sourceDetailRoute,

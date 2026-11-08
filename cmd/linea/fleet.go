@@ -21,6 +21,7 @@ var fleetCommands = []struct {
 	name, flags, summary string
 }{
 	{"overview", "group-by", "fleet's version, config management and agent counts"},
+	{"connection", "", "check the server's fleet connection now, step by step"},
 	{"agents", "selector connected healthy sort limit cursor", "page agents with the Collectors each links to live capture"},
 	{"agent", "id!", "one agent with its components and remote config state"},
 	{"retry", "id!", "resend a desired config the agent failed to apply"},
@@ -113,6 +114,8 @@ func fleetCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	switch command {
 	case "overview":
 		v, err = c.GetFleetOverview(ctx, *groupBy)
+	case "connection":
+		v, err = c.CheckFleetConnection(ctx)
 	case "agents":
 		q := platform.FleetAgentQuery{Limit: *limit, Cursor: *cursor, Selector: *selector, Sort: *sort}
 		if q.Connected, err = optionalBool("connected", *connected); err == nil {
