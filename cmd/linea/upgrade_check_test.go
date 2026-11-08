@@ -114,7 +114,7 @@ func TestUpgradeCheckParity(t *testing.T) {
 		if l, c := upgradeWithoutRuntimeIdentity(withoutIDs(local)), upgradeWithoutRuntimeIdentity(withoutIDs(connected)); !bytes.Equal(l, c) {
 			t.Fatalf("%s: local and connected differ:\n%s\n---\n%s", format, l, c)
 		}
-		if format == "text" && !strings.HasPrefix(string(local), "upgrade check: compatible\n") {
+		if format == "text" && !strings.HasPrefix(string(local), "COMPATIBLE  Collector ") {
 			t.Fatalf("text:\n%s", local)
 		}
 	}
@@ -218,7 +218,8 @@ func upgradeAsLocal(out []byte) []byte {
 	out = regexp.MustCompile(`"kind": "remote",(\s+)"name": "next",`).ReplaceAll(out, []byte(`"kind": "container",${1}"name": "next",`))
 	out = bytes.ReplaceAll(out, []byte("`lab`"), []byte("`built-in`"))
 	out = bytes.ReplaceAll(out, []byte("from lab:"), []byte("from built-in:"))
-	out = bytes.ReplaceAll(out, []byte("feature gates: the from runtime does not list them\n"), nil)
+	out = bytes.ReplaceAll(out, []byte("from: lab,"), []byte("from: built-in,"))
+	out = bytes.ReplaceAll(out, []byte("\nFEATURE GATES\n  the from runtime does not list them\n"), nil)
 	out = bytes.ReplaceAll(out, []byte("the from and to runtime does"), []byte("the to runtime does"))
 	return bytes.ReplaceAll(out, []byte(`"name": "lab"`), []byte(`"name": "built-in"`))
 }

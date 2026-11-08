@@ -136,63 +136,78 @@ func connectedUpgradeCheck(config, from, to string, scenarios, ignore []string) 
 // writeUpgradeCheck prints the check as plain text; --format markdown
 // renders the same facts for a pull request.
 func writeUpgradeCheck(w io.Writer, c *platform.UpgradeCheck) error {
-	var errs []error
-	printf := func(format string, a ...any) {
-		_, err := fmt.Fprintf(w, format, a...)
-		errs = append(errs, err)
-	}
-	printf("upgrade check: %s\n", c.Verdict)
+	t := newTextOut(w)
+	t.line(0, "%s  Collector %s -> %s", t.status(string(c.Verdict), 0), c.From.CollectorVersion, c.To.CollectorVersion)
 	for _, side := range []struct {
 		name  string
 		rt    platform.UpgradeRuntime
 		valid bool
 	}{{"from", c.From, c.Configuration.FromValid}, {"to", c.To, c.Configuration.ToValid}} {
-		printf("%s %s: Collector %s", side.name, side.rt.Name, side.rt.CollectorVersion)
+		desc := side.rt.Name + ", Collector " + side.rt.CollectorVersion
 		if !side.rt.Verified {
-			printf(" (unverified)")
+			desc += " (unverified)"
 		}
 		if side.valid {
-			printf(", configuration valid\n")
+			desc += ", configuration valid"
 		} else {
-			printf(", configuration invalid\n")
+			desc += ", configuration invalid"
+		}
+		t.field(1, side.name, desc)
+	}
+	if len(c.Reasons) > 0 {
+		t.heading("inconclusive")
+		for _, r := range c.Reasons {
+			t.line(1, "%s: %s", r.Code, r.Message)
 		}
 	}
-	for _, r := range c.Reasons {
-		printf("inconclusive: %s: %s\n", r.Code, r.Message)
-	}
-	for _, d := range c.Configuration.Added {
-		printf("new diagnostic: %s %s %s: %s\n", d.Severity, d.Code, d.Component, d.Message)
-	}
-	for _, d := range c.Configuration.Removed {
-		printf("gone diagnostic: %s %s %s: %s\n", d.Severity, d.Code, d.Component, d.Message)
-	}
-	for _, g := range c.FeatureGates.Changes {
-		printf("feature gate %s", g.ID)
-		if g.Component != "" {
-			printf(" (%s)", g.Component)
+	if len(c.Configuration.Added) > 0 || len(c.Configuration.Removed) > 0 {
+		t.heading("diagnostics")
+		for _, d := range c.Configuration.Added {
+			t.line(1, "new: %s %s %s: %s", d.Severity, d.Code, d.Component, d.Message)
 		}
-		printf(": %s -> %s\n", gateText(g.From), gateText(g.To))
-	}
-	for _, side := range c.FeatureGates.Unknown {
-		printf("feature gates: the %s runtime does not list them\n", side)
-	}
-	for _, s := range c.Scenarios {
-		if s.Error != "" {
-			printf("scenario %s: not compared: %s\n", s.Name, s.Error)
-			continue
-		}
-		printf("scenario %s: %s, assertions %s -> %s, runs %s %s\n", s.Name, s.Outcome,
-			outcomeText(string(s.BeforeAssertions)), outcomeText(string(s.AfterAssertions)), s.Before, s.After)
-	}
-	for _, n := range c.Notes {
-		printf("note: %s\n", n)
-	}
-	for _, err := range errs {
-		if err != nil {
-			return err
+		for _, d := range c.Configuration.Removed {
+			t.line(1, "gone: %s %s %s: %s", d.Severity, d.Code, d.Component, d.Message)
 		}
 	}
-	return nil
+	if len(c.FeatureGates.Unknown) > 0 || len(c.FeatureGates.Changes) > 0 {
+		t.heading("feature gates")
+		for _, side := range c.FeatureGates.Unknown {
+			t.line(1, "the %s runtime does not list them", side)
+		}
+		for _, g := range c.FeatureGates.Changes {
+			id := g.ID
+			if g.Component != "" {
+				id += " (" + g.Component + ")"
+			}
+			t.line(1, "%s: %s -> %s", id, gateText(g.From), gateText(g.To))
+		}
+	}
+	if len(c.Scenarios) > 0 {
+		t.heading("scenarios")
+		word := func(s platform.UpgradeScenario) string {
+			if s.Error != "" {
+				return "error"
+			}
+			return string(s.Outcome)
+		}
+		width := statusWidth(c.Scenarios, word)
+		for _, s := range c.Scenarios {
+			t.line(1, "%s  %s", t.status(word(s), width), s.Name)
+			if s.Error != "" {
+				t.field(2, "not compared", s.Error)
+				continue
+			}
+			t.line(2, "assertions: %s -> %s", outcomeText(string(s.BeforeAssertions)), outcomeText(string(s.AfterAssertions)))
+			t.line(2, "runs: before %s, after %s", s.Before, s.After)
+		}
+	}
+	if len(c.Notes) > 0 {
+		t.heading("notes")
+		for _, n := range c.Notes {
+			t.line(1, "%s", n)
+		}
+	}
+	return t.err()
 }
 
 func gateText(g *platform.UpgradeGateState) string {

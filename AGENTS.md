@@ -39,7 +39,7 @@ Update the doc a change touches in the same commit.
 
 | Path | Contents |
 | --- | --- |
-| `cmd/linea/` | Debugger CLI, one file per command: `inspect`, `run`, `test`, `diff`, `upgrade-check`, `config-bisect`, `runs`, `suite`, `artifacts`, `export`, `ottl`, `statement`, `samples`, `runtime`, `capture`, `fleet`, `audit`, `token`, `access`, `project` (with `library`), `login` (with `logout`), `build`, `version`; runs the in-process Collector, no server |
+| `cmd/linea/` | Debugger CLI, one file per command: `inspect`, `run`, `test`, `diff`, `upgrade-check`, `config-bisect`, `runs`, `suite`, `artifacts`, `export`, `ottl`, `statement`, `samples`, `runtime`, `capture`, `fleet`, `audit`, `token`, `access`, `project` (with `library`), `login` (with `logout`), `build`, `version`, `completion` (shell scripts over a hidden `__complete`); text output goes through `textout.go`; runs the in-process Collector, no server |
 | `cmd/linea-server/` | Team server binary: HTTP API, web client and MCP; links no Collector (flags in `docs/internals/architecture.md`) |
 | `cmd/linea-worker/` | Worker process for runtimes (stdin/stdout, or `--connect` to dial a team server) |
 | `cmd/linea-builder/` | Runtime builder: dials a team server and compiles runtimes natively with the pinned Go toolchain |

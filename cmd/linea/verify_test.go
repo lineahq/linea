@@ -17,7 +17,7 @@ func TestRunVerifiesRecommendationsLocallyAndConnected(t *testing.T) {
 	args := []string{"run", "--config", filepath.Join(dir, "config.yaml"), "--scenario", filepath.Join(dir, "scenario.yaml"),
 		"--format", "text", "--verify-recommendations"}
 	verified := regexp.MustCompile(`recommendation \d+ filter\.move_earlier: same output on this input \(candidate run \S+\)`)
-	measured := regexp.MustCompile(`(?m)^      record_passes of \S+: \d+ -> \d+$`)
+	measured := regexp.MustCompile(`(?m)^    record_passes of \S+: \d+ -> \d+$`)
 	for name, extra := range map[string][]string{"local": nil, "connected": {"--server", startServe(t)}} {
 		t.Run(name, func(t *testing.T) {
 			code, out, stderr := runCLI(t, append(args, extra...)...)
@@ -40,7 +40,7 @@ func TestRunVerifiesRecommendationsLocallyAndConnected(t *testing.T) {
 
 	// Without the flag nothing is verified.
 	code, out, stderr := runCLI(t, args[:len(args)-1]...)
-	if code != exitOK || strings.Contains(out, "verifications:") || !strings.Contains(out, "observed] filter.move_earlier") {
+	if code != exitOK || strings.Contains(out, "VERIFICATIONS") || !strings.Contains(out, "observed] filter.move_earlier") {
 		t.Fatalf("exit %d: %s%s", code, out, stderr)
 	}
 }

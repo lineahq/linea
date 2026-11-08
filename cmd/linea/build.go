@@ -65,8 +65,13 @@ func buildCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	if !built.Checked {
 		fmt.Fprintf(stderr, "note: the CLI is for %s/%s, so the build did not start it; run its version command there to check it\n", built.GOOS, built.GOARCH)
 	}
-	_, err = fmt.Fprintf(stdout, "built %s\n  collector %s for %s/%s, %d bytes, %s\n", built.Path, built.CollectorVersion, built.GOOS, built.GOARCH, built.Size, built.Digest)
-	if err != nil {
+	t := newTextOut(stdout)
+	t.line(0, "built %s", built.Path)
+	t.field(1, "collector", built.CollectorVersion)
+	t.field(1, "platform", built.GOOS+"/"+built.GOARCH)
+	t.field(1, "size", fmt.Sprintf("%d bytes", built.Size))
+	t.field(1, "digest", built.Digest)
+	if err := t.err(); err != nil {
 		return fail(stderr, err)
 	}
 	return exitOK

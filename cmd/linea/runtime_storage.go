@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"text/tabwriter"
 
 	"github.com/lineahq/linea/internal/debugger/api"
 	"github.com/lineahq/linea/internal/debugger/platform"
@@ -47,36 +46,39 @@ func writeIndented(w io.Writer, v any) error {
 	return enc.Encode(v)
 }
 
-// writeStorage prints runtime images, caches and left-over containers.
+// writeStorage prints what can be reclaimed first, then runtime images,
+// caches and left-over containers.
 func writeStorage(w io.Writer, st *api.RuntimeStorage) error {
-	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "RUNTIME\tCOLLECTOR\tSTATE\tSIZE\tIMAGE")
+	t := newTextOut(w)
+	t.line(0, "reclaimable by runtime prune: %s (replaced and stale images); caches only with --caches", humanSize(st.Reclaimable))
+	t.heading("runtimes")
+	if len(st.Runtimes) == 0 {
+		t.line(1, "no runtimes")
+	}
+	var rows [][]string
 	for _, r := range st.Runtimes {
 		state := r.State
 		if r.InUse {
 			state += " (in use)"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", r.Name, r.CollectorVersion, state, humanSize(r.Size), shortImageID(r.ImageID))
+		rows = append(rows, []string{r.Name, r.CollectorVersion, state, humanSize(r.Size), shortImageID(r.ImageID)})
 	}
-	if err := tw.Flush(); err != nil {
-		return err
-	}
+	t.table(1, []string{"runtime", "collector", "state", "size", "image"}, rows)
 	if len(st.Caches) > 0 {
-		fmt.Fprintln(w)
-		tw = tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(tw, "CACHE\tSIZE")
+		t.heading("caches")
+		rows = nil
 		for _, v := range st.Caches {
-			fmt.Fprintf(tw, "%s\t%s\n", v.Name, humanSize(v.Size))
+			rows = append(rows, []string{v.Name, humanSize(v.Size)})
 		}
-		if err := tw.Flush(); err != nil {
-			return err
+		t.table(1, []string{"cache", "size"}, rows)
+	}
+	if len(st.Leftovers) > 0 {
+		t.heading("left-over containers")
+		for _, c := range st.Leftovers {
+			t.line(1, "%s (%s)", c.Name, c.State)
 		}
 	}
-	for _, c := range st.Leftovers {
-		fmt.Fprintf(w, "left-over container %s (%s)\n", c.Name, c.State)
-	}
-	_, err := fmt.Fprintf(w, "\nreclaimable by runtime prune: %s (replaced and stale images); caches only with --caches\n", humanSize(st.Reclaimable))
-	return err
+	return t.err()
 }
 
 // humanSize prints bytes in decimal units, as Docker does.
@@ -147,6 +149,7 @@ func runtimePruneCmd(ctx context.Context, args []string, stdout, stderr io.Write
 	return exitOK
 }
 
+// writePrune prints what a prune reclaimed, then what it removed and kept.
 func writePrune(w io.Writer, res *api.RuntimePruneResult) error {
 	name := func(i api.PrunedItem) string {
 		if i.Kind == "runtime" {
@@ -154,14 +157,21 @@ func writePrune(w io.Writer, res *api.RuntimePruneResult) error {
 		}
 		return i.Kind + " " + i.Name
 	}
-	for _, i := range res.Removed {
-		fmt.Fprintf(w, "removed %s\n", name(i))
+	t := newTextOut(w)
+	t.line(0, "reclaimed %s: removed %d, kept %d", humanSize(res.Reclaimed), len(res.Removed), len(res.Kept))
+	if len(res.Removed) > 0 {
+		t.heading("removed")
+		for _, i := range res.Removed {
+			t.line(1, "%s", name(i))
+		}
 	}
-	for _, i := range res.Kept {
-		fmt.Fprintf(w, "kept %s: %s\n", name(i), i.Reason)
+	if len(res.Kept) > 0 {
+		t.heading("kept")
+		for _, i := range res.Kept {
+			t.line(1, "%s: %s", name(i), i.Reason)
+		}
 	}
-	_, err := fmt.Fprintf(w, "reclaimed %s\n", humanSize(res.Reclaimed))
-	return err
+	return t.err()
 }
 
 func (r connectedRuntimes) Storage(ctx context.Context) (*api.RuntimeStorage, error) {

@@ -176,7 +176,7 @@ server.
 - `go run ./cmd/linea runs --server <url> [--scenario NAME] [--runtime NAME]
   [--result RESULT] [--limit N] [--cursor C | --all] [--format text|json]`
   lists a page of a server's runs newest first with each finished run's
-  summary. Text output names the next page's cursor on stderr, JSON output is
+  summary. Text output ends with `next page: --cursor C` when there is one, JSON output is
   the `{runs, next_cursor}` page, and `--all` follows every page. An unknown
   result exits 1.
 - `runs log --server <url> --run <id> [--format text|json]` prints the

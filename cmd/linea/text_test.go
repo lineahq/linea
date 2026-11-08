@@ -57,9 +57,7 @@ func TestWriteRecommendationsShowsChangeSavingsAndLimits(t *testing.T) {
 	}
 	var b strings.Builder
 	writeRecommendations(func(f string, a ...any) { fmt.Fprintf(&b, f, a...) }, recs)
-	want := `
-recommendations:
-  [redundancy, observed] filter.condition_never_matched (pipeline logs): Condition never matched.
+	want := `  [redundancy, observed] filter.condition_never_matched (pipeline logs): Condition never matched.
       change: remove condition 1 of filter/health: severity_number < 5
       saves: 3 evaluations without effect
       coverage: Observed on 4 log records in 1 request.

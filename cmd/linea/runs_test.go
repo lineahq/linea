@@ -42,7 +42,7 @@ func TestRunsListsServerRunsWithSummariesAndFilters(t *testing.T) {
 	}
 
 	code, out, _ = runCLI(t, "runs", "--server", server, "--scenario", "logs-cleanup", "--result", "completed")
-	if code != exitOK || !strings.Contains(out, runs[0].ID) || !strings.Contains(out, "logs-cleanup") || !strings.Contains(out, "pass (") {
+	if code != exitOK || !strings.Contains(out, runs[0].ID) || !strings.Contains(out, "logs-cleanup") || !strings.Contains(out, "PASS (") {
 		t.Fatalf("filtered text: exit %d, %s", code, out)
 	}
 	code, out, _ = runCLI(t, "runs", "--server", server, "--runtime", "acme")
@@ -61,8 +61,9 @@ func TestRunsListsServerRunsWithSummariesAndFilters(t *testing.T) {
 		t.Fatalf("test: exit %d, %s", code, stderr)
 	}
 	code, out, stderr = runCLI(t, "runs", "--server", server, "--limit", "1")
-	cursor := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(stderr), "more runs match: pass --cursor "), ", or --all")
-	if code != exitOK || strings.Contains(out, runs[0].ID) || cursor == "" || strings.Contains(cursor, " ") {
+	table, cursor, _ := strings.Cut(out, "\n\nnext page: --cursor ")
+	cursor = strings.TrimSpace(cursor)
+	if code != exitOK || strings.Contains(table, runs[0].ID) || cursor == "" || strings.Contains(cursor, " ") || stderr != "" {
 		t.Fatalf("first page: exit %d, %s%s", code, out, stderr)
 	}
 	if code, out, stderr = runCLI(t, "runs", "--server", server, "--limit", "1", "--cursor", cursor); code != exitOK || !strings.Contains(out, runs[0].ID) || stderr != "" {

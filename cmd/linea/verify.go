@@ -105,40 +105,54 @@ func errorMessage(err error) string {
 	return err.Error()
 }
 
-// writeVerifications prints what each verification showed.
+// writeVerifications prints what each verification showed, after a blank
+// line that sets it apart from the report or text before it.
 func writeVerifications(w io.Writer, vs []verification) error {
 	if len(vs) == 0 {
 		return nil
 	}
-	var errs []error
-	printf := func(format string, a ...any) {
-		_, err := fmt.Fprintf(w, format, a...)
-		errs = append(errs, err)
-	}
-	printf("\nverifications:\n")
-	for _, v := range vs {
-		printf("  recommendation %d %s: ", v.index, v.rule)
+	t := newTextOut(w)
+	t.wrote = true
+	t.heading("verifications")
+	words := make([]string, len(vs))
+	for i, v := range vs {
 		switch {
 		case v.refused != "":
-			printf("not verifiable: %s\n", v.refused)
-			continue
+			words[i] = "unverifiable"
 		case v.failed != "":
-			printf("candidate run %s failed: %s\n", v.candidate, v.failed)
-			continue
+			words[i] = "failed"
 		case v.confidence == string(platform.ConfidenceVerifiedOnInput):
-			printf("same output on this input")
+			words[i] = "same"
 		case v.confidence == string(platform.ConfidenceDiffersOnInput):
-			printf("the output differs on this input")
+			words[i] = "different"
 		default:
-			printf("inconclusive")
-		}
-		printf(" (candidate run %s)\n", v.candidate)
-		for _, r := range v.reasons {
-			printf("      reason: %s\n", r)
-		}
-		for _, m := range v.measured {
-			printf("      %s of %s: %d -> %d\n", m.Metric, m.Subject, m.Before, m.After)
+			words[i] = "inconclusive"
 		}
 	}
-	return errors.Join(errs...)
+	width := statusWidth(words, func(s string) string { return s })
+	for i, v := range vs {
+		head := fmt.Sprintf("%s  recommendation %d %s: ", t.status(words[i], width), v.index, v.rule)
+		switch words[i] {
+		case "unverifiable":
+			t.line(1, "%snot verifiable: %s", head, v.refused)
+			continue
+		case "failed":
+			t.line(1, "%scandidate run %s failed: %s", head, v.candidate, v.failed)
+			continue
+		case "same":
+			head += "same output on this input"
+		case "different":
+			head += "the output differs on this input"
+		default:
+			head += "inconclusive"
+		}
+		t.line(1, "%s (candidate run %s)", head, v.candidate)
+		for _, r := range v.reasons {
+			t.line(2, "reason: %s", r)
+		}
+		for _, m := range v.measured {
+			t.line(2, "%s of %s: %d -> %d", m.Metric, m.Subject, m.Before, m.After)
+		}
+	}
+	return t.err()
 }

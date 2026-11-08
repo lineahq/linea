@@ -39,7 +39,7 @@ func TestStatementTestOnRunThroughServe(t *testing.T) {
 	if code != exitOK || !strings.Contains(out, `"assertions"`) {
 		t.Fatalf("tested run report: exit %d, %s", code, stderr)
 	}
-	if code, out, stderr := runCLI(t, "statement", "test", "--server", server, "--run", id, "--proposed", config); code != exitOK || !strings.Contains(out, "candidate valid") || !strings.Contains(out, "runs show --server "+server+" --run ") {
+	if code, out, stderr := runCLI(t, "statement", "test", "--server", server, "--run", id, "--proposed", config); code != exitOK || !strings.HasPrefix(out, "VALID  candidate") || !strings.Contains(out, "runs show --server "+server+" --run ") {
 		t.Fatalf("text: exit %d, %s%s", code, out, stderr)
 	}
 
@@ -47,7 +47,7 @@ func TestStatementTestOnRunThroughServe(t *testing.T) {
 	if err := os.WriteFile(broken, []byte("service: [unclosed\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if code, out, _ := runCLI(t, "statement", "test", "--server", server, "--run", id, "--proposed", broken); code != exitError || !strings.Contains(out, "candidate INVALID") || strings.Contains(out, "test run") {
+	if code, out, _ := runCLI(t, "statement", "test", "--server", server, "--run", id, "--proposed", broken); code != exitError || !strings.HasPrefix(out, "INVALID  candidate") || strings.Contains(out, "test run") {
 		t.Fatalf("invalid: exit %d, %s", code, out)
 	}
 	for _, args := range [][]string{

@@ -301,7 +301,7 @@ func TestRuntimeBuildOnAServerUploadsAndFollows(t *testing.T) {
 	// Listing: the CLI prints what HTTP returns, page by page.
 	code, out, errOut := runCLI(t, "runtime", "builds", "--limit", "1", "--server", lab.URL)
 	if code != exitOK || !strings.HasPrefix(out, "BUILD") || !strings.Contains(out, builds[0].ID) || strings.Contains(out, builds[1].ID) ||
-		!strings.Contains(errOut, "more builds: pass --cursor ") {
+		!strings.Contains(out, "\n\nnext page: --cursor ") {
 		t.Fatalf("first page: exit %d: %s%s", code, out, errOut)
 	}
 	cli := parityCLI(t, ctx, []string{"runtime", "builds", "--all", "--format", "json", "--server", lab.URL})

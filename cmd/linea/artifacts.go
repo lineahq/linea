@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"text/tabwriter"
 	"time"
 
 	"github.com/lineahq/linea/internal/debugger/api"
@@ -89,9 +88,15 @@ func artifactsRevisionsCmd(ctx context.Context, args []string, stdout, stderr io
 // writeRevisions prints one row per revision and, when there is one, the
 // cursor of the next page.
 func writeRevisions(w io.Writer, page *platform.ArtifactRevisionPage) error {
-	fmt.Fprintf(w, "%s %s (%s)\n", page.Artifact.Kind, page.Artifact.Label, page.Artifact.ID)
-	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "REVISION\tGENERATION\tCREATED\tBYTES\tORIGIN")
+	t := newTextOut(w)
+	t.line(0, "artifact %s", page.Artifact.ID)
+	t.field(1, "kind", string(page.Artifact.Kind))
+	t.field(1, "label", page.Artifact.Label)
+	t.heading("revisions")
+	if len(page.Items) == 0 {
+		t.none("revisions")
+	}
+	rows := make([][]string, 0, len(page.Items))
 	for _, r := range page.Items {
 		origin := "-"
 		if r.Origin != nil {
@@ -101,15 +106,23 @@ func writeRevisions(w io.Writer, page *platform.ArtifactRevisionPage) error {
 		if r.Ref.RevisionID == page.Artifact.Head {
 			head = " (head)"
 		}
-		fmt.Fprintf(tw, "%s%s\t%d\t%s\t%d\t%s\n", r.Ref.RevisionID, head, r.Generation, r.Created.Local().Format(time.DateTime), r.Bytes, origin)
+		rows = append(rows, []string{r.Ref.RevisionID + head, fmt.Sprint(r.Generation), r.Created.Local().Format(time.DateTime), fmt.Sprint(r.Bytes), origin})
 	}
-	if err := tw.Flush(); err != nil {
-		return err
+	t.table(1, []string{"revision", "generation", "created", "bytes", "origin"}, rows)
+	t.nextPage(page.NextCursor)
+	return t.err()
+}
+
+// writeImport prints one row per archive file with what the import did to it.
+func writeImport(w io.Writer, items []platform.ImportedArtifact) error {
+	t := newTextOut(w)
+	t.line(0, "imported %s", plural(len(items), "file"))
+	rows := make([][]string, 0, len(items))
+	for _, item := range items {
+		rows = append(rows, []string{item.Path, item.Status, item.Artifact.ID})
 	}
-	if page.NextCursor != "" {
-		fmt.Fprintf(w, "more: --cursor %s\n", page.NextCursor)
-	}
-	return nil
+	t.table(1, []string{"file", "status", "artifact"}, rows)
+	return t.err()
 }
 
 // artifactsExportCmd writes the CI archive of a saved configuration and
@@ -183,12 +196,7 @@ func artifactsImportCmd(ctx context.Context, args []string, stdout, stderr io.Wr
 	if *format == "json" {
 		err = writeIndented(stdout, imp)
 	} else {
-		tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(tw, "FILE\tSTATUS\tARTIFACT")
-		for _, item := range imp.Items {
-			fmt.Fprintf(tw, "%s\t%s\t%s\n", item.Path, item.Status, item.Artifact.ID)
-		}
-		err = tw.Flush()
+		err = writeImport(stdout, imp.Items)
 	}
 	if err != nil {
 		return fail(stderr, err)

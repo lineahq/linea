@@ -10,8 +10,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/lineahq/linea/internal/debugger/api"
@@ -208,8 +208,11 @@ func runtimeListCmd(ctx context.Context, args []string, stdout, stderr io.Writer
 
 // writeRuntimes prints the runtime table.
 func writeRuntimes(w io.Writer, list []api.Runtime) error {
-	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tCOLLECTOR\tVERIFIED\tIMAGE")
+	t := newTextOut(w)
+	if len(list) == 0 {
+		t.none("runtimes")
+	}
+	var rows [][]string
 	for _, r := range list {
 		image := shortImageID(r.ImageID)
 		if r.Catalog != nil {
@@ -223,9 +226,20 @@ func writeRuntimes(w io.Writer, list []api.Runtime) error {
 		if r.Default {
 			name += " (default)"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%t\t%s\n", name, r.CollectorVersion, r.Verified, image)
+		rows = append(rows, []string{name, r.CollectorVersion, strconv.FormatBool(r.Verified), image})
 	}
-	return tw.Flush()
+	t.table(0, []string{"name", "collector", "verified", "image"}, rows)
+	return t.err()
+}
+
+// writeSupport prints which Collector releases this debugger verified.
+func writeSupport(w io.Writer, support *api.CollectorSupport) error {
+	t := newTextOut(w)
+	t.field(0, "oldest release", support.Oldest)
+	t.field(0, "verified releases", strings.Join(support.Verified, ", "))
+	t.field(0, "built-in runtime", "Collector "+support.BuiltIn)
+	t.line(0, "newer releases build unverified")
+	return t.err()
 }
 
 func runtimeVersionsCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -249,8 +263,7 @@ func runtimeVersionsCmd(ctx context.Context, args []string, stdout, stderr io.Wr
 		enc.SetIndent("", "  ")
 		err = enc.Encode(support)
 	} else {
-		_, err = fmt.Fprintf(stdout, "oldest release: %s\nverified releases: %s\nbuilt-in runtime: Collector %s\nnewer releases build unverified\n",
-			support.Oldest, strings.Join(support.Verified, ", "), support.BuiltIn)
+		err = writeSupport(stdout, support)
 	}
 	if err != nil {
 		return fail(stderr, err)

@@ -127,6 +127,7 @@ the untracked `dist/linea-runtime/`:
 | `login --server <url> [--ca <pem>]` / `logout --server <url>` | Sign in to a team server's identity provider with the device flow, or forget the sign-in; later `--server` commands present it and trust the kept `--ca`. |
 | `build --manifest <yaml> [--docker] [--os <os> --arch <arch>]` | Compile a `linea` CLI whose in-process Collector has the manifest's release and components ([A CLI with your components](custom-cli.md)). |
 | `version` | Show debugger, Collector, schema and component versions. |
+| `completion bash\|zsh\|fish\|powershell` | Print a shell completion script for commands, subcommands, flags and flag values ([shell completion](#shell-completion)). |
 
 The team server is a separate binary, `linea-server --config <file> [--addr <host:port>] [--tls-cert-file <pem> --tls-key-file <pem> | --allow-http] [--mcp]`: web client, HTTP API and optionally MCP, every request authenticated and authorized by role bindings, on connected workers only (it links no Collector). `linea-server` without `--config` is refused. See [team server](team-server.md).
 
@@ -137,6 +138,41 @@ Run `linea <command> -h` for flags. `inspect`, `run`, `test` and `diff`:
   and the files it names on your machine and sends them inline, so the server
   needs no access to them;
 - take `--runtime <name>` to run on a built runtime.
+
+### Output
+
+Text output is plain text for people and language models alike. It starts
+with the verdict (`PASS`, `FAIL`, `VALID`, `COMPLETED` and so on), followed
+by sections under capitalized headings such as `WARNINGS`, `INPUTS`,
+`OUTPUTS`, `ASSERTIONS` and `STAGES`. Single facts are `key: value` lines,
+lists are aligned columns, and nothing is wrapped or truncated. A run report
+keeps its event log for last, under `EVENTS`. An empty list prints `no runs`
+(or `no builds`, `no captures` and so on), and a list with more pages ends
+with `next page: --cursor C`. Color appears only on a
+terminal, never when `NO_COLOR` is set, and only marks what the words
+already say, so a pipe or a file gets the same text without escape codes.
+`--format json` is the stable machine format; scripts should read it
+rather than the text.
+
+### Shell completion
+
+`linea completion <shell>` prints a script that completes commands,
+subcommands, flags, the values of flags with fixed choices (such as
+`--format`) and file names for file flags. Load it in your shell, or add the
+line to your profile:
+
+```sh
+source <(linea completion bash)          # ~/.bashrc
+source <(linea completion zsh)           # ~/.zshrc, after compinit
+linea completion fish | source           # ~/.config/fish/config.fish
+```
+
+```powershell
+linea completion powershell | Out-String | Invoke-Expression   # $PROFILE
+```
+
+The script asks the `linea` on your `PATH`, so completions always match
+its flags.
 
 | Exit code | Meaning |
 | --- | --- |

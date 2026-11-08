@@ -103,12 +103,15 @@ func writePreview(w io.Writer, raw []byte) error {
 	if err := json.Unmarshal(raw, &ev); err != nil {
 		return err
 	}
-	fmt.Fprintf(w, "OTTL preview (never verified against a Collector run): valid %t, %d diagnostics\n", ev.Valid, len(ev.Diagnostics))
-	for _, d := range ev.Diagnostics {
-		fmt.Fprintf(w, "  %s %s: %s\n", d.Severity, d.Code, d.Message)
+	t := newTextOut(w)
+	status := "valid"
+	if !ev.Valid {
+		status = "invalid"
 	}
+	t.line(0, "%s  OTTL preview: %s (never verified against a Collector run)", t.status(status, 0), plural(len(ev.Diagnostics), "diagnostic"))
 	if len(ev.Output) > 0 {
-		fmt.Fprintln(w, "--format json prints the output and its diff")
+		t.field(1, "output", "--format json prints the output and its diff")
 	}
-	return nil
+	writeDiagnostics(t, ev.Diagnostics)
+	return t.err()
 }

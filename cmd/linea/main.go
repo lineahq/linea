@@ -22,6 +22,7 @@
 //	linea fleet   overview|agents|agent|retry|events|group-save|group-delete|configs|config|config-create|config-update|config-delete|versions|version|version-create|assignments|assignment|assignment-create|preview|rollouts|rollout|rollout-start|rollout-action|targets --server URL [flags]
 //	linea build   --manifest <ocb.yaml> [--out FILE] [--source MODULE=DIR]... [--os OS] [--arch ARCH] [--docker]
 //	linea version
+//	linea completion bash|zsh|fish|powershell
 //
 // inspect, run, test and diff take --runtime NAME to use a built runtime instead of
 // the built-in registry (diff also --after-runtime).
@@ -104,6 +105,7 @@ func init() {
 		{"logout", "forget the sign-in to a team server", logoutCmd},
 		{"build", "compile this CLI with an OCB manifest's Collector release and components, on this machine", buildCmd},
 		{"version", "show debugger, Collector and schema versions", versionCmd},
+		{"completion", "print a shell completion script for bash, zsh, fish or powershell", completionCmd},
 	}
 }
 
@@ -123,6 +125,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	case "help", "-h", "-help", "--help":
 		usage(stdout)
 		return exitOK
+	case "__complete":
+		return completeCmd(ctx, args[1:], stdout, stderr)
 	}
 	for _, c := range commands {
 		if c.name == args[0] {
@@ -166,6 +170,9 @@ func usage(w io.Writer) {
 func newFlagSet(name, synopsis string, stderr io.Writer) *flag.FlagSet {
 	fs := flag.NewFlagSet("linea "+name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	if probeHook != nil {
+		probeHook(name, synopsis, fs)
+	}
 	fs.Usage = func() {
 		fmt.Fprintf(stderr, "usage: linea %s %s\n", name, synopsis)
 		fs.PrintDefaults()

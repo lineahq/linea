@@ -17,6 +17,10 @@ your `PATH`. Check it with:
 linea version
 ```
 
+To complete commands and flags with Tab, load `linea completion bash`,
+`zsh`, `fish` or `powershell` in your shell profile
+([shell completion](debugger/README.md#shell-completion)).
+
 That is all the direct commands (`inspect`, `run`, `test`, `diff`) need: they
 run the Collector inside the `linea` process, with no Docker and no server.
 Docker is only needed to build runtimes for other Collector releases or custom

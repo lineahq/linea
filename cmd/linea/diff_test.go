@@ -50,11 +50,11 @@ func TestDiffExitsWithTheOutcome(t *testing.T) {
 	before, after, fixture, scenario := diffFiles(t)
 	ctx := context.Background()
 	out := runDiff(t, ctx, exitOK, "--before", before, "--after", before, "--fixture", fixture)
-	if !strings.HasPrefix(string(out), "comparison: same\n") {
+	if !strings.HasPrefix(string(out), "SAME  before ") {
 		t.Fatalf("same: %s", out)
 	}
 	out = runDiff(t, ctx, exitMismatch, "--before", before, "--after", after, "--scenario", scenario)
-	if !strings.HasPrefix(string(out), "comparison: different\n") || !strings.Contains(string(out), `log.severity_text modified in 3 record(s): "WARNING" -> "warning"`) {
+	if !strings.HasPrefix(string(out), "DIFFERENT  before ") || !strings.Contains(string(out), `log.severity_text modified in 3 record(s): "WARNING" -> "warning"`) {
 		t.Fatalf("different: %s", out)
 	}
 	broken := filepath.Join(t.TempDir(), "broken.yaml")

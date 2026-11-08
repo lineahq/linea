@@ -115,65 +115,75 @@ func connectedBisect(req platform.BisectRequest, scenarios, local []string) (api
 // writeBisection prints the bisection as plain text; --format markdown
 // renders the same facts for an incident note.
 func writeBisection(w io.Writer, b *platform.Bisection) error {
-	var errs []error
-	printf := func(format string, a ...any) {
-		_, err := fmt.Fprintf(w, format, a...)
-		errs = append(errs, err)
-	}
+	t := newTextOut(w)
 	name := b.Target.ConfigID
 	if b.Target.ConfigName != "" {
 		name = b.Target.ConfigName + " (" + b.Target.ConfigID + ")"
 	}
-	printf("config bisect: %s\n", b.Verdict)
-	printf("agent %s, config %s in layer %s, versions %d to %d, %d probes\n", b.Target.AgentID, name, b.Target.Entry, b.Good, b.Bad, b.Probes)
+	detail := ""
 	switch b.Verdict {
 	case platform.BisectFound:
-		printf("first bad version %d, last good %d\n", b.FirstBad, b.LastGood)
+		detail = fmt.Sprintf(": first bad version %d, last good %d", b.FirstBad, b.LastGood)
 	case platform.BisectInconclusive:
 		if b.FirstBad > 0 && b.LastGood > 0 {
-			printf("first bad version between %d and %d\n", b.LastGood+1, b.FirstBad)
+			detail = fmt.Sprintf(": first bad version between %d and %d", b.LastGood+1, b.FirstBad)
 		}
 	}
-	for _, r := range b.Reasons {
-		printf("inconclusive: %s: %s\n", r.Code, r.Message)
+	t.line(0, "%s  agent %s%s", t.status(string(b.Verdict), 0), b.Target.AgentID, detail)
+	t.field(1, "config", name)
+	t.field(1, "layer", b.Target.Entry)
+	t.field(1, "versions", fmt.Sprintf("%d to %d", b.Good, b.Bad))
+	t.field(1, "probes", fmt.Sprint(b.Probes))
+	if len(b.Reasons) > 0 {
+		t.heading("inconclusive")
+		for _, r := range b.Reasons {
+			t.line(1, "%s: %s", r.Code, r.Message)
+		}
 	}
+	var tested []platform.BisectVersion
 	for _, v := range b.Versions {
-		if v.Status == platform.BisectUntested {
-			continue
+		if v.Status != platform.BisectUntested {
+			tested = append(tested, v)
 		}
-		printf("version %d: %s", v.Version, v.Status)
-		if v.Reason != "" {
-			printf(" (%s)", v.Reason)
+	}
+	if len(tested) > 0 {
+		t.heading("versions")
+		width := statusWidth(tested, func(v platform.BisectVersion) string { return string(v.Status) })
+		for _, v := range tested {
+			reason := ""
+			if v.Reason != "" {
+				reason = " (" + v.Reason + ")"
+			}
+			t.line(1, "%s  version %d%s", t.status(string(v.Status), width), v.Version, reason)
+			for _, s := range v.Scenarios {
+				t.line(2, "%s %s %s", s.Name, outcomeText(string(s.Outcome)), s.Run)
+			}
 		}
-		var runs []string
-		for _, s := range v.Scenarios {
-			runs = append(runs, fmt.Sprintf("%s %s %s", s.Name, outcomeText(string(s.Outcome)), s.Run))
-		}
-		if len(runs) > 0 {
-			printf("; %s", strings.Join(runs, ", "))
-		}
-		printf("\n")
 	}
 	if c := b.Culprit; c != nil {
+		t.heading("culprit")
 		for _, s := range c.Scenarios {
-			printf("scenario %s: assertions %s -> %s, runs %s %s", s.Name, outcomeText(string(s.GoodAssertions)), outcomeText(string(s.BadAssertions)), s.Good, s.Bad)
+			var extra string
 			switch {
 			case s.Error != "":
-				printf(", not compared: %s", s.Error)
+				extra = ", not compared: " + s.Error
 			case s.Comparison != nil:
-				printf(", comparison %s", s.Comparison.Outcome)
+				extra = ", comparison " + string(s.Comparison.Outcome)
 			}
-			printf("\n")
+			t.line(1, "%s: assertions %s -> %s, runs %s %s%s", s.Name, outcomeText(string(s.GoodAssertions)), outcomeText(string(s.BadAssertions)), s.Good, s.Bad, extra)
 		}
-		printf("\n%s", c.Diff)
-	}
-	for _, n := range b.Notes {
-		printf("note: %s\n", n)
-	}
-	for _, err := range errs {
-		if err != nil {
-			return err
+		t.heading("culprit diff")
+		if c.Diff == "" {
+			t.none("differences")
+		} else {
+			t.printf("%s", strings.TrimSuffix(c.Diff, "\n")+"\n")
 		}
 	}
-	return nil
+	if len(b.Notes) > 0 {
+		t.heading("notes")
+		for _, n := range b.Notes {
+			t.line(1, "%s", n)
+		}
+	}
+	return t.err()
 }

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/lineahq/linea/internal/debugger/platform"
@@ -72,23 +71,33 @@ func auditCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	} else {
 		var page auditListing
 		if err = json.Unmarshal(raw, &page); err == nil {
-			tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "TIME\tPRINCIPAL\tCLIENT\tOPERATION\tPERMISSION\tSCOPE\tOUTCOME\tRESOURCES")
-			for _, e := range page.Events {
-				outcome := e.Outcome
-				if e.Code != "" {
-					outcome += " (" + e.Code + ")"
-				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", e.Time.Local().Format(time.DateTime), e.Principal, e.Client, e.Operation,
-					e.Permission, e.Scope, outcome, strings.Join(e.Resources, ","))
-			}
-			if err = tw.Flush(); err == nil && page.NextCursor != "" {
-				fmt.Fprintf(stdout, "more: --cursor %s\n", page.NextCursor)
-			}
+			err = writeAudit(stdout, &page)
 		}
 	}
 	if err != nil {
 		return fail(stderr, err)
 	}
 	return exitOK
+}
+
+// writeAudit prints one page of events, newest first. The outcome is the
+// last column, so its color never shifts the others.
+func writeAudit(w io.Writer, page *auditListing) error {
+	t := newTextOut(w)
+	if len(page.Events) == 0 {
+		t.none("audit events")
+		return t.err()
+	}
+	var rows [][]string
+	for _, e := range page.Events {
+		outcome := t.status(e.Outcome, 0)
+		if e.Code != "" {
+			outcome += " (" + e.Code + ")"
+		}
+		rows = append(rows, []string{e.Time.Local().Format(time.DateTime), e.Principal, e.Client, e.Operation,
+			e.Permission, e.Scope, orDash(strings.Join(e.Resources, ",")), outcome})
+	}
+	t.table(0, []string{"time", "principal", "client", "operation", "permission", "scope", "resources", "outcome"}, rows)
+	t.nextPage(page.NextCursor)
+	return t.err()
 }

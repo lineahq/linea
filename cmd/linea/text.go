@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -13,36 +12,34 @@ import (
 	"github.com/lineahq/linea/internal/debugger/platform"
 )
 
+// writeText prints a run's report: the verdict, warnings, inputs,
+// outputs and assertions first, then what each stage did, the analyses and
+// recommendations, and the event log last.
 func writeText(w io.Writer, rep *platform.Report) error {
+	t := newTextOut(w)
+	printf := t.printf
 	r := rep.Result
-	var errs []error
-	printf := func(format string, a ...any) {
-		_, err := fmt.Fprintf(w, format, a...)
-		errs = append(errs, err)
+
+	verdict, detail := runVerdict(rep)
+	if detail != "" {
+		detail = ": " + detail
 	}
-	if rep.Scenario != "" {
-		printf("scenario %s\n", rep.Scenario)
-	}
+	t.line(0, "%s  run %s%s", t.status(verdict, 0), r.RunID, detail)
+	t.field(1, "scenario", rep.Scenario)
 	if p := rep.Provenance; p != nil {
-		printf("debugger %s, collector %s, config sha256 %.12s\n", p.ProductVersion, p.CollectorVersion, p.Config.SHA256)
+		t.field(1, "collector", p.CollectorVersion)
+		t.field(1, "debugger", p.ProductVersion)
+		t.field(1, "config sha256", fmt.Sprintf("%.12s", p.Config.SHA256))
 	}
-	printf("run %s: %s", r.RunID, r.Status)
-	if r.StatusReason != "" {
-		printf(" (%s)", r.StatusReason)
-	}
-	printf("\n")
-	if g := rep.Topology; g != nil {
-		for _, c := range g.Components {
-			if c.Mode == platform.ModeStandIn {
-				printf("WARNING: %s ran as a stand-in: %s\n", c.Ref, c.Note)
-			}
+
+	if warnings := runWarnings(rep); len(warnings) > 0 {
+		t.heading("warnings")
+		for _, w := range warnings {
+			t.line(1, "%s", w)
 		}
 	}
-	for _, ref := range rep.References {
-		if ref.Source == platform.ReferenceStandIn {
-			printf("WARNING: ${%s:%s} was unavailable (%s); the stand-in %q was used\n", ref.Scheme, ref.Target, ref.Reason, ref.StandIn)
-		}
-	}
+
+	t.heading("inputs")
 	for i, in := range r.Inputs {
 		status := "accepted"
 		switch {
@@ -61,78 +58,92 @@ func writeText(w io.Writer, rep *platform.Report) error {
 		if in.After != "" {
 			source += " after " + in.After
 		}
-		printf("input %d: %s at receiver %s%s, %d item(s), %s\n", i+1, in.Signal, in.Receiver, source, in.Counts.Items, status)
+		t.line(1, "%d  %s at receiver %s%s, %s, %s", i+1, in.Signal, in.Receiver, source, plural(in.Counts.Items, "item"), status)
+	}
+	if len(r.Inputs) == 0 {
+		t.line(1, "none")
 	}
 	if s := r.Settle; s != nil {
-		printf("settled %s after the last input (%s)\n", s.Duration, s.Reason)
+		t.field(1, "settled", fmt.Sprintf("%s after the last input (%s)", s.Duration, s.Reason))
 	}
-	if ts := rep.Timestamps; ts != nil {
-		if ts.Mode == platform.TimestampsRebased && ts.Offset != "" {
-			printf("input timestamps rebased by %s to the run's start\n", ts.Offset)
+	if ts := rep.Timestamps; ts != nil && ts.Mode == platform.TimestampsRebased {
+		if ts.Offset != "" {
+			t.field(1, "timestamps", "rebased by "+ts.Offset+" to the run's start")
 		}
 		for _, c := range ts.WallClock {
-			if ts.Mode == platform.TimestampsRebased {
-				printf("%s reads the wall clock: `%s`\n", c.Component, c.Expression)
-				continue
-			}
-			age := ""
-			if ts.Offset != "" {
-				age = fmt.Sprintf("; the latest input record is %s old", ts.Offset)
-			}
-			printf("WARNING: %s reads the wall clock: `%s`%s (declare execution.timestamps: rebase)\n", c.Component, c.Expression, age)
+			t.line(1, "%s reads the wall clock: `%s`", c.Component, c.Expression)
 		}
+	}
+
+	if len(r.Mocks) > 0 {
+		t.heading("mocks")
 	}
 	for _, d := range r.Mocks {
-		printf("mocked %s (%s, %s): %d fixture(s) supplied\n", d.Ref, d.Provider, d.Mode, len(d.Supplied))
+		t.line(1, "%s (%s, %s): %d fixture(s) supplied", d.Ref, d.Provider, d.Mode, len(d.Supplied))
 		for _, s := range d.Supplied {
-			printf("    supplied: %s\n", s)
+			t.field(2, "supplied", s)
 		}
 		for _, l := range d.Limitations {
-			printf("    limitation: %s\n", l)
-		}
-		for _, w := range d.Warnings {
-			printf("    WARNING: %s\n", w)
+			t.field(2, "limitation", l)
 		}
 	}
 
-	printf("\n%4s  %-18s %-20s %-12s %5s %6s\n", "SEQ", "KIND", "COMPONENT", "PIPELINE", "FROM", "ITEMS")
-	for _, e := range r.Events {
-		from, items := "", ""
-		if e.InputSeq != 0 {
-			from = fmt.Sprint(e.InputSeq)
+	if len(r.Outputs) > 0 || len(r.EndpointOutputs) > 0 || rep.Comparison != nil {
+		t.heading("outputs")
+		var rows [][]string
+		for _, o := range r.Outputs {
+			rows = append(rows, []string{"exporter " + o.Exporter, string(o.Signal), plural(o.Batches, "batch"), plural(o.Counts.Items, "item")})
 		}
-		if e.Counts != nil {
-			items = fmt.Sprint(e.Counts.Items)
+		for _, o := range r.EndpointOutputs {
+			rows = append(rows, []string{"endpoint " + o.Component + " " + o.Endpoint, string(o.Signal), plural(o.Batches, "batch"), plural(o.Counts.Items, "item")})
 		}
-		printf("%4d  %-18s %-20s %-12s %5s %6s", e.Seq, e.Kind, e.Component, e.Pipeline, from, items)
-		if e.Error != "" {
-			printf("  error: %s", e.Error)
+		t.table(1, nil, rows)
+		if c := rep.Comparison; c != nil {
+			switch {
+			case c.Incomplete != "":
+				t.line(1, "reference comparison: %s (%s)", t.status("incomplete", 0), c.Incomplete)
+			case c.Equal:
+				t.line(1, "reference comparison: %s", t.status("equal", 0))
+			default:
+				t.line(1, "reference comparison: %s", t.status("different", 0))
+				for _, d := range c.Differences {
+					t.line(2, "- %s", d)
+				}
+			}
+			if c.Incomplete != "" || c.Equal {
+				for _, n := range c.Notes {
+					t.field(2, "note", n)
+				}
+			}
 		}
-		if e.Log != nil {
-			printf("  %s: %s", e.Log.Level, oneLine(e.Log.Message))
-		}
-		if e.Endpoint != "" {
-			printf("  endpoint %s", e.Endpoint)
-		}
-		printf("\n")
 	}
 
-	printf("\nstages:\n")
+	if a := rep.Assertions; a != nil {
+		t.heading("assertions")
+		t.line(1, "overall: %s (run exits 0 on assertions; the test command sets exit codes)", t.status(string(a.Outcome), 0))
+		writeAssertionResults(t, 1, a.Results, false)
+	}
+
+	if len(rep.Stages) > 0 {
+		t.heading("stages")
+	}
 	for _, s := range rep.Stages {
 		where := "in " + s.Pipeline
 		if s.Pipeline == "" {
 			where = s.Kind // a connector joins pipelines rather than running in one
 		}
-		printf("  %s %s (%s)\n", s.Component, where, s.Emission)
+		t.line(1, "%s %s (%s)", s.Component, where, s.Emission)
 		for _, in := range s.Inputs {
 			printf("    input seq %d: %s", in.Seq, in.Outcome)
 			if in.Error != "" {
 				printf(", error: %s", in.Error)
 			}
 			if d := in.Diff; d != nil {
-				printf(", %d change(s), %d removed, %d added", len(d.Changes), len(d.Removed), len(d.Added))
+				printf(", %s, %d removed, %d added", plural(len(d.Changes), "change"), len(d.Removed), len(d.Added))
 				if m := d.Matching; m != nil {
-					printf(" (matched: %d same record, %d exact, %d high, %d medium confidence)", m.Object, m.Exact, m.High, m.Medium)
+					if matched := matchingLine(m.Object, m.Exact, m.High, m.Medium); matched != "" {
+						printf(" (matched: %s)", matched)
+					}
 				}
 				for _, rm := range d.Removed {
 					printf("\n      removed %s", recordLabel(rm))
@@ -144,13 +155,13 @@ func writeText(w io.Writer, rep *platform.Report) error {
 			printf("\n")
 		}
 		if rc := s.Reconciliation; rc != nil {
-			printf("    reconciliation over %d emission(s): %d removed, %d added, %d change(s)\n",
-				len(s.Emissions), len(rc.Removed), len(rc.Added), len(rc.Changes))
+			t.line(2, "reconciliation over %d emission(s): %d removed, %d added, %s",
+				len(s.Emissions), len(rc.Removed), len(rc.Added), plural(len(rc.Changes), "change"))
 		}
 	}
 
 	if len(rep.OTTL) > 0 {
-		printf("\nottl replay:\n")
+		t.heading("ottl replay")
 	}
 	for _, o := range rep.OTTL {
 		printf("  %s input seq %d: %s\n", o.Processor, o.Input, o.Verification)
@@ -164,7 +175,7 @@ func writeText(w io.Writer, rep *platform.Report) error {
 	}
 
 	if len(rep.Aggregations) > 0 {
-		printf("\naggregations:\n")
+		t.heading("aggregations")
 	}
 	for _, a := range rep.Aggregations {
 		printf("  %s input seq %d: %d data point(s), %s\n", a.Connector, a.Input, len(a.Points), a.Verification)
@@ -188,7 +199,7 @@ func writeText(w io.Writer, rep *platform.Report) error {
 	}
 
 	if len(rep.Routing) > 0 {
-		printf("\nrouting:\n")
+		t.heading("routing")
 	}
 	for _, r := range rep.Routing {
 		printf("  %s input seq %d: %d rule(s), %s\n", r.Connector, r.Input, len(r.Rules), r.Verification)
@@ -217,7 +228,7 @@ func writeText(w io.Writer, rep *platform.Report) error {
 	}
 
 	if len(rep.Sampling) > 0 {
-		printf("\nsampling decisions:\n")
+		t.heading("sampling decisions")
 	}
 	for _, s := range rep.Sampling {
 		printf("  %s (pipeline %s, decision_wait %s)\n", s.Processor, s.Pipeline, s.DecisionWait)
@@ -251,63 +262,138 @@ func writeText(w io.Writer, rep *platform.Report) error {
 	}
 
 	if len(rep.Batching) > 0 {
-		printf("\nbatching:\n")
+		t.heading("batching")
 	}
 	for _, b := range rep.Batching {
 		writeBatching(printf, b)
 	}
 	if len(rep.Grouping) > 0 {
-		printf("\ngrouping:\n")
+		t.heading("grouping")
 	}
 	for _, g := range rep.Grouping {
 		writeGrouping(printf, g)
 	}
 	if len(rep.Filtering) > 0 {
-		printf("\nfiltering:\n")
+		t.heading("filtering")
 	}
 	for _, f := range rep.Filtering {
 		writeFiltering(printf, f)
 	}
-	writeRecommendations(printf, rep.Recommendations)
+	if len(rep.Recommendations) > 0 {
+		t.heading("recommendations")
+		writeRecommendations(printf, rep.Recommendations)
+	}
 
-	printf("\n")
-	for _, o := range r.Outputs {
-		printf("exporter %s (%s): %d batch(es), %d item(s)\n", o.Exporter, o.Signal, o.Batches, o.Counts.Items)
-	}
-	for _, o := range r.EndpointOutputs {
-		printf("endpoint %s %s (%s): %d batch(es), %d item(s)\n", o.Component, o.Endpoint, o.Signal, o.Batches, o.Counts.Items)
-	}
-	if c := rep.Comparison; c != nil {
-		switch {
-		case c.Incomplete != "":
-			printf("reference comparison: incomplete (%s)\n", c.Incomplete)
-			for _, n := range c.Notes {
-				printf("  note: %s\n", n)
+	if len(r.Events) > 0 {
+		t.heading("events")
+		rows := make([][]string, 0, len(r.Events))
+		for _, e := range r.Events {
+			from, items := "", ""
+			if e.InputSeq != 0 {
+				from = fmt.Sprint(e.InputSeq)
 			}
-		case c.Equal:
-			printf("reference comparison: equal\n")
-			for _, n := range c.Notes {
-				printf("  note: %s\n", n)
+			if e.Counts != nil {
+				items = fmt.Sprint(e.Counts.Items)
 			}
-		default:
-			printf("reference comparison: DIFFERENT\n")
-			for _, d := range c.Differences {
-				printf("  - %s\n", d)
+			var notes []string
+			if e.Error != "" {
+				notes = append(notes, "error: "+e.Error)
 			}
+			if e.Log != nil {
+				notes = append(notes, fmt.Sprintf("%s: %s", e.Log.Level, oneLine(e.Log.Message)))
+			}
+			if e.Endpoint != "" {
+				notes = append(notes, "endpoint "+e.Endpoint)
+			}
+			rows = append(rows, []string{fmt.Sprint(e.Seq), string(e.Kind), e.Component, e.Pipeline, from, items, strings.Join(notes, "; ")})
 		}
+		t.table(1, []string{"seq", "kind", "component", "pipeline", "from", "items", "detail"}, rows)
 	}
+	return t.err()
+}
+
+// runVerdict returns the run's verdict word and what follows it on the
+// first line. The verdict is the assertions' outcome when the scenario
+// declares any, otherwise the run's status, or "different" when the
+// reference comparison differs.
+func runVerdict(rep *platform.Report) (string, string) {
+	r := rep.Result
+	verdict := string(r.Status)
+	var parts []string
 	if a := rep.Assertions; a != nil {
-		printf("assertions: %s (use the test command for exit codes)\n", label(a.Outcome))
+		verdict = string(a.Outcome)
+		passed := 0
 		for _, res := range a.Results {
-			printf("  %-12s %s: %s\n", label(res.Outcome), res.Name, res.Target)
-			for _, c := range res.Checks {
-				if c.Outcome != assertion.Pass {
-					printf("      %s\n", c.Line())
-				}
+			if res.Outcome == assertion.Pass {
+				passed++
+			}
+		}
+		parts = append(parts, string(r.Status), fmt.Sprintf("%d of %d assertions passed", passed, len(a.Results)))
+	}
+	if c := rep.Comparison; c != nil && c.Incomplete == "" && !c.Equal {
+		if rep.Assertions == nil {
+			verdict = "different"
+			parts = append(parts, string(r.Status))
+		}
+		parts = append(parts, "reference comparison different")
+	}
+	detail := strings.Join(parts, ", ")
+	switch {
+	case r.StatusReason == "":
+	case detail == "":
+		detail = r.StatusReason
+	default:
+		detail += " (" + r.StatusReason + ")"
+	}
+	return verdict, detail
+}
+
+// runWarnings collects what makes a run differ from the deployed Collector:
+// stand-ins, unavailable references, wall clock reads that were not
+// rebased, and mock warnings.
+func runWarnings(rep *platform.Report) []string {
+	var out []string
+	if g := rep.Topology; g != nil {
+		for _, c := range g.Components {
+			if c.Mode == platform.ModeStandIn {
+				out = append(out, fmt.Sprintf("%s ran as a stand-in: %s", c.Ref, c.Note))
 			}
 		}
 	}
-	return errors.Join(errs...)
+	for _, ref := range rep.References {
+		if ref.Source == platform.ReferenceStandIn {
+			out = append(out, fmt.Sprintf("${%s:%s} was unavailable (%s); the stand-in %q was used", ref.Scheme, ref.Target, ref.Reason, ref.StandIn))
+		}
+	}
+	if ts := rep.Timestamps; ts != nil && ts.Mode != platform.TimestampsRebased {
+		for _, c := range ts.WallClock {
+			age := ""
+			if ts.Offset != "" {
+				age = fmt.Sprintf("; the latest input record is %s old", ts.Offset)
+			}
+			out = append(out, fmt.Sprintf("%s reads the wall clock: `%s`%s (declare execution.timestamps: rebase)", c.Component, c.Expression, age))
+		}
+	}
+	for _, d := range rep.Result.Mocks {
+		for _, w := range d.Warnings {
+			out = append(out, fmt.Sprintf("mock %s: %s", d.Ref, w))
+		}
+	}
+	return out
+}
+
+// matchingLine names the non-zero record matches of a stage diff.
+func matchingLine(object, exact, high, medium int) string {
+	var parts []string
+	for _, p := range []struct {
+		n    int
+		what string
+	}{{object, "same record"}, {exact, "exact"}, {high, "high confidence"}, {medium, "medium confidence"}} {
+		if p.n > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", p.n, p.what))
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 // writeRecommendations prints each recommendation with its kind and
@@ -316,7 +402,6 @@ func writeRecommendations(printf func(string, ...any), recs []platform.Recommend
 	if len(recs) == 0 {
 		return
 	}
-	printf("\nrecommendations:\n")
 	for _, r := range recs {
 		printf("  [%s, %s] %s", r.Kind, r.Confidence, r.Rule)
 		if r.Pipeline != "" {
