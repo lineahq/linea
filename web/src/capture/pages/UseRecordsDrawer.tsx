@@ -7,25 +7,28 @@ import { scenarioSetup } from '../../input/quickInput';
 import { receiverSignals } from '../../scenario/scenarioDoc';
 import { Icon } from '../../ui/Icon';
 import { useDebounced } from '../../useDebounced';
-import { newScenarioPatch } from '../../workspace/drafts';
+import { addSignalPipeline, SIGNALS, starterConfig, type Signal } from '../../config/templates';
+import { newPatch } from '../../workspace/drafts';
 import { getWorkspace, updateWorkspace, updateWorkspaceSessionOnly, useWorkspace, type WorkspaceState } from '../../workspace/store';
 import { useReplaceDrafts } from '../../workspace/useReplaceDrafts';
 import { draftDrifted, draftSummary, keepsText, materializeFixtures } from '../addInputs';
 import { stashCaptureHandoff } from '../handoff';
 import { appendCaptureInputs } from '../inputs';
-import { streamKey, streamLabel, type StreamSelection } from '../recordView';
+import type { StreamSelection } from '../recordView';
 import { InlineConfirm } from './InlineConfirm';
 
 const COPY_WARNING = 'Saving a fixture keeps a separate copy of the selected records. It may contain personal data, and deleting the capture will not remove that copy.';
 
 /**
- * "Use records": put the chosen records into a debugger scenario. They start
- * a new scenario for the open configuration (asking first when the open
- * scenario has unsaved edits), go to the current draft (appended, nothing
- * existing is replaced) or are handed to another configuration the owner
- * picks in the Debugger. Only record
- * identifiers cross to the Debugger, never payloads. In the Debugger, a
- * handed-off selection (`handedOff`) can only go to the current draft.
+ * "Use records": put the chosen records into a debugger scenario, one input
+ * per signal. They start a new configuration and scenario (OTLP in, one
+ * pipeline per captured signal, asking first when the open drafts have
+ * unsaved edits), go to the current draft (appended, nothing existing is
+ * replaced; a signal no receiver accepts can get a pipeline added on request)
+ * or are handed to another configuration the owner picks in the Debugger.
+ * Only record identifiers cross to the Debugger, never payloads. In the
+ * Debugger, a handed-off selection (`handedOff`) can only go to the current
+ * draft.
  */
 export function UseRecordsDrawer({ session, groups, onClose, onAdded, handedOff = false }: {
   session: CaptureSession;
@@ -55,29 +58,53 @@ export function UseRecordsDrawer({ session, groups, onClose, onAdded, handedOff 
   }, [onClose]);
 
   // A new scenario starts without the open scenario's mocks and settings.
-  const setupOf = (w: Pick<WorkspaceState, 'scenarioYAML'>) => (dest === 'new' ? '' : scenarioSetup(w.scenarioYAML));
+  const fresh = dest === 'new';
+  const signalOf = (g: StreamSelection) => g.stream.signal ?? '';
+  const signals = [...new Set(groups.map(signalOf))];
+  const known = signals.filter((s): s is Signal => (SIGNALS as string[]).includes(s));
+  // A new configuration has one OTLP pipeline per captured signal.
+  const newConfig = starterConfig(known);
+  const configFor = (w: Pick<WorkspaceState, 'configYAML'>) => (fresh ? newConfig : w.configYAML);
+  // A new scenario starts without the open scenario's mocks and settings.
+  const setupOf = (w: Pick<WorkspaceState, 'scenarioYAML'>) => (fresh ? '' : scenarioSetup(w.scenarioYAML));
   const setup = setupOf(ws);
   const config = useDebounced(ws.configYAML, 250);
   const debouncedSetup = useDebounced(setup, 250);
   const graph = useQuery({
     queryKey: ['capture-destinations', config, debouncedSetup],
     queryFn: ({ signal }) => api.graph({ config_yaml: config, setup_yaml: debouncedSetup }, signal),
-    enabled: dest !== 'other' && !!config.trim(),
+    enabled: dest === 'draft' && !!config.trim(),
     retry: false,
   });
   const current = config === ws.configYAML && debouncedSetup === setup;
   const valid = current && !graph.isError && graph.data?.valid === true;
   const accepts = receiverSignals(valid ? graph.data?.topology : undefined);
-  const choices = (g: StreamSelection) => [...accepts].filter(([, signals]) => signals.includes(g.stream.signal ?? '')).map(([id]) => id).sort();
-  const receiverFor = (g: StreamSelection) => receivers[streamKey(g.stream)] ?? (choices(g).length === 1 ? choices(g)[0] : '');
-  const chosen = groups.map((g) => ({ ...g, receiver: receiverFor(g) }));
+  const choices = (signal: string) => (fresh ? ['otlp'] : [...accepts].filter(([, s]) => s.includes(signal)).map(([id]) => id).sort());
+  const receiverFor = (signal: string) => {
+    const options = choices(signal);
+    const picked = receivers[signal];
+    return picked && options.includes(picked) ? picked : options.length === 1 ? options[0] : '';
+  };
+  const chosen = groups.map((g) => ({ ...g, receiver: receiverFor(signalOf(g)) }));
   const summary = draftSummary(ws.scenarioYAML);
   const draftError = 'error' in summary ? summary.error : undefined;
-  const mapped = chosen.every((g) => g.receiver && choices(g).includes(g.receiver));
-  const ready = valid && (dest === 'new' || !draftError) && mapped;
+  const mapped = chosen.every((g) => g.receiver);
+  const ready = fresh ? known.length === signals.length : valid && !draftError && mapped;
   const total = groups.reduce((n, g) => n + g.sequences.length, 0);
   const raw = session.data.contains_raw;
-  const where = ws.configPath || 'the unsaved configuration';
+  const [pipelineError, setPipelineError] = useState('');
+
+  /** addPipeline adds a pipeline for a signal to the open configuration, at the user's request. */
+  function addPipeline(signal: Signal) {
+    const r = addSignalPipeline(getWorkspace().configYAML, signal);
+    if ('error' in r) {
+      setPipelineError(r.error);
+      return;
+    }
+    setPipelineError('');
+    updateWorkspace({ configYAML: r.yaml });
+    setReceivers((m) => ({ ...m, [signal]: r.receiver }));
+  }
 
   const write = (patch: Partial<WorkspaceState>) => (raw ? updateWorkspaceSessionOnly(patch) : updateWorkspace(patch));
   const done = () => {
@@ -90,7 +117,7 @@ export function UseRecordsDrawer({ session, groups, onClose, onAdded, handedOff 
     mutationFn: async (): Promise<string | undefined> => {
       const controller = new AbortController();
       abort.current = controller;
-      const prepared = { configYAML: ws.configYAML, setup };
+      const prepared = { configYAML: configFor(ws), setup };
       try {
         const fixtures = await materializeFixtures({
           sessionId: session.id,
@@ -102,10 +129,10 @@ export function UseRecordsDrawer({ session, groups, onClose, onAdded, handedOff 
           onProgress: (done, count) => setProgress(`Preparing input ${done + 1} of ${count}…`),
         });
         const latest = getWorkspace();
-        if (draftDrifted({ configYAML: latest.configYAML, setup: setupOf(latest) }, prepared)) {
+        if (draftDrifted({ configYAML: configFor(latest), setup: setupOf(latest) }, prepared)) {
           throw new Error('The configuration or mocks changed while the inputs were being prepared. Review the receivers and try again.');
         }
-        if (dest === 'new') return appendCaptureInputs('', fixtures);
+        if (fresh) return appendCaptureInputs('', fixtures);
         write({ scenarioYAML: appendCaptureInputs(latest.scenarioYAML, fixtures) });
         return undefined;
       } finally {
@@ -114,7 +141,7 @@ export function UseRecordsDrawer({ session, groups, onClose, onAdded, handedOff 
     },
     onSuccess: (scenario) => {
       if (scenario === undefined) done();
-      else replace.request(['scenario'], 'Creating a scenario from these records', () => write(newScenarioPatch(getWorkspace(), scenario)));
+      else replace.request(['config', 'scenario'], 'Creating a configuration and scenario from these records', () => write(newPatch(getWorkspace(), newConfig, scenario)));
     },
   });
 
@@ -123,7 +150,7 @@ export function UseRecordsDrawer({ session, groups, onClose, onAdded, handedOff 
       const g = chosen[0];
       return api.captureFixture(session.id, {
         selection: { stream: g.stream, sequences: g.sequences, watermark: g.watermark, receiver: g.receiver },
-        config_yaml: ws.configYAML,
+        config_yaml: configFor(ws),
         setup_yaml: setup,
         save: true,
         ...(label.trim() ? { label: label.trim() } : {}),
@@ -162,9 +189,9 @@ export function UseRecordsDrawer({ session, groups, onClose, onAdded, handedOff 
           <label className={`od-radio-card${dest === 'new' ? ' od-radio-card--on' : ''}`}>
             <input type="radio" name="dest" checked={dest === 'new'} onChange={() => setDest('new')} />
             <span>
-              <strong>New scenario · {where}</strong>
+              <strong>New configuration and scenario</strong>
               <br />
-              <span className="od-subtle">A scenario with only these records as inputs, ready to run. It replaces the open scenario{summary && !('error' in summary) && summary.inputs + summary.assertions > 0 ? ', and asks first if that has unsaved changes' : ''}.</span>
+              <span className="od-subtle">An OTLP pipeline for each captured signal ({signals.join(', ')}) and a scenario with these records as its inputs, ready to run. It replaces the open configuration and scenario, and asks first if they have unsaved changes.</span>
             </span>
           </label>
           <label className={`od-radio-card${dest === 'draft' ? ' od-radio-card--on' : ''}`}>
@@ -187,9 +214,26 @@ export function UseRecordsDrawer({ session, groups, onClose, onAdded, handedOff 
           </label>
         </fieldset>}
 
-        {dest !== 'other' && (
+        {fresh && (
+          <section aria-label="Inputs">
+            <h3 style={{ margin: '0 0 6px', fontSize: 12.5 }}>Inputs</h3>
+            <table className="od-table">
+              <thead><tr><th>Signal</th><th>Receiver</th></tr></thead>
+              <tbody>
+                {signals.map((signal) => (
+                  <tr key={signal}>
+                    <td><SignalCell signal={signal} groups={groups.filter((g) => signalOf(g) === signal)} /></td>
+                    <td className="mono">{(SIGNALS as string[]).includes(signal) ? 'otlp' : <span role="alert" className="od-field__error">Unknown signal</span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        )}
+
+        {dest === 'draft' && (
           <>
-            {dest === 'draft' && draftError && (
+            {draftError && (
               <div className="od-callout od-callout--fail" role="alert">
                 <Icon name="circle-x" size={16} />
                 <div className="od-callout__main">
@@ -234,36 +278,48 @@ export function UseRecordsDrawer({ session, groups, onClose, onAdded, handedOff 
             )}
             {valid && (
               <section aria-label="Receivers">
-                <h3 style={{ margin: '0 0 6px', fontSize: 12.5 }}>Map each stream to a receiver</h3>
+                <h3 style={{ margin: '0 0 6px', fontSize: 12.5 }}>Choose a receiver for each signal</h3>
                 <table className="od-table">
-                  <thead><tr><th>Stream</th><th>Receiver</th></tr></thead>
+                  <thead><tr><th>Signal</th><th>Receiver</th></tr></thead>
                   <tbody>
-                    {chosen.map((g) => {
-                      const options = choices(g);
+                    {signals.map((signal) => {
+                      const options = choices(signal);
+                      const addable = (SIGNALS as string[]).includes(signal);
                       return (
-                        <tr key={streamKey(g.stream)}>
+                        <tr key={signal}>
+                          <td><SignalCell signal={signal} groups={groups.filter((g) => signalOf(g) === signal)} /></td>
                           <td>
-                            <div className="mono">{streamLabel(g.stream)}</div>
-                            <div className="od-subtle" style={{ fontSize: 12 }}>{g.sequences.length} record{g.sequences.length === 1 ? '' : 's'}</div>
-                          </td>
-                          <td>
-                            <select
-                              className="od-select"
-                              aria-label={`Receiver for ${streamLabel(g.stream)}`}
-                              value={g.receiver}
-                              disabled={busy || !options.length}
-                              onChange={(e) => setReceivers((r) => ({ ...r, [streamKey(g.stream)]: e.target.value }))}
-                            >
-                              <option value="">{options.length ? 'Choose receiver' : `No receiver accepts ${g.stream.signal}`}</option>
-                              {options.map((id) => <option key={id} value={id}>{id}</option>)}
-                            </select>
-                            {!options.length && <div role="alert" className="od-field__error">Add a {g.stream.signal} pipeline with a receiver in the Debugger, or send these records to another configuration.</div>}
+                            {options.length ? (
+                              <select
+                                className="od-select"
+                                aria-label={`Receiver for ${signal}`}
+                                value={receiverFor(signal)}
+                                disabled={busy}
+                                onChange={(e) => setReceivers((r) => ({ ...r, [signal]: e.target.value }))}
+                              >
+                                <option value="">Choose receiver</option>
+                                {options.map((id) => <option key={id} value={id}>{id}</option>)}
+                              </select>
+                            ) : (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start' }}>
+                                <div className="od-subtle" style={{ fontSize: 12 }}>No receiver in the configuration accepts {signal}.</div>
+                                {addable && (
+                                  <button type="button" className="od-btn od-btn--sm" disabled={busy} onClick={() => addPipeline(signal as Signal)}>
+                                    <Icon name="plus" size={14} /><span>Add a {signal} pipeline</span>
+                                  </button>
+                                )}
+                              </div>
+                            )}
                           </td>
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
+                {signals.some((signal) => !choices(signal).length) && (
+                  <p className="od-subtle" style={{ margin: '6px 0 0', fontSize: 12 }}>An added pipeline goes from the configuration's OTLP receiver to its debug exporter, adding either when missing. It changes your configuration draft; review it in the Debugger.</p>
+                )}
+                {pipelineError && <div role="alert" className="od-field__error">{pipelineError}</div>}
               </section>
             )}
           </>
@@ -318,7 +374,7 @@ export function UseRecordsDrawer({ session, groups, onClose, onAdded, handedOff 
       <div className="od-drawer__foot">
         {dest !== 'other' ? (
           <button type="button" className="od-btn od-btn--primary" disabled={!ready || busy || replace.asking} onClick={() => add.mutate()}>
-            {add.isPending ? progress || 'Adding…' : dest === 'new' ? 'Create the scenario and open it' : 'Add as inputs and open the scenario'}
+            {add.isPending ? progress || 'Adding…' : fresh ? 'Create and open it' : 'Add as inputs and open the scenario'}
           </button>
         ) : (
           <button type="button" className="od-btn od-btn--primary" disabled={busy} onClick={handOff}>Choose a configuration in the Debugger</button>
@@ -326,5 +382,19 @@ export function UseRecordsDrawer({ session, groups, onClose, onAdded, handedOff 
         <button type="button" className="od-btn" onClick={onClose}>Cancel</button>
       </div>
     </aside>
+  );
+}
+
+/** SignalCell names a signal and how many streams and records go into its one input. */
+function SignalCell({ signal, groups }: { signal: string; groups: StreamSelection[] }) {
+  const records = groups.reduce((n, g) => n + g.sequences.length, 0);
+  return (
+    <>
+      <div className="mono">{signal}</div>
+      <div className="od-subtle" style={{ fontSize: 12 }}>
+        {records} record{records === 1 ? '' : 's'}
+        {groups.length > 1 ? ` from ${groups.length} streams, as one input` : ''}
+      </div>
+    </>
   );
 }

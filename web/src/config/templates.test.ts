@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { COMPONENT_SNIPPETS, CONFIG_TEMPLATES, defaultPipelines, insertComponent, lineOf, pipelinesOf, type ComponentSnippet } from './templates';
+import { addSignalPipeline, COMPONENT_SNIPPETS, CONFIG_TEMPLATES, starterConfig, defaultPipelines, insertComponent, lineOf, pipelinesOf, type ComponentSnippet } from './templates';
 
 const snippet = (kind: string, type: string) => COMPONENT_SNIPPETS.find((s) => s.kind === kind && s.type === type) as ComponentSnippet;
 
@@ -141,5 +141,34 @@ describe('section spacing', () => {
     expect(r.yaml).toBe('exporters:\n  debug:\n\nconnectors:\n  forward: {}\n\nservice:\n  pipelines:\n    logs:\n      receivers: [otlp]\n      exporters: [debug]\n');
     const v = inserted(config, snippet('connector', 'forward'), []).yaml;
     expect(v).toContain('backend.example.invalid:4317\n\nconnectors:\n  forward: {}\n\nservice:');
+  });
+});
+
+describe('addSignalPipeline', () => {
+  it('reuses the OTLP receiver and debug exporter and keeps comments', () => {
+    const text = `# mine\n${starterConfig(['logs'])}`;
+    const r = addSignalPipeline(text, 'metrics');
+    if ('error' in r) throw new Error(r.error);
+    expect(r).toMatchObject({ pipeline: 'metrics', receiver: 'otlp' });
+    expect(r.yaml).toContain('# mine');
+    const c = parse(r.yaml);
+    expect(c.service.pipelines.metrics).toEqual({ receivers: ['otlp'], exporters: ['debug'] });
+    expect(c.service.pipelines.logs.processors).toEqual(['batch']);
+  });
+  it('adds a receiver and an exporter when the configuration has none', () => {
+    const r = addSignalPipeline('receivers:\n  filelog: {include: [a]}\nexporters:\n  otlp/out: {endpoint: x}\nservice:\n  pipelines:\n    logs:\n      receivers: [filelog]\n      exporters: [otlp/out]\n', 'traces');
+    if ('error' in r) throw new Error(r.error);
+    const c = parse(r.yaml);
+    expect(Object.keys(c.receivers)).toEqual(['filelog', 'otlp']);
+    expect(c.exporters.debug).toEqual({ verbosity: 'detailed' });
+    expect(c.service.pipelines.traces).toEqual({ receivers: ['otlp'], exporters: ['debug'] });
+  });
+  it('names a second pipeline of a signal apart and refuses unreadable text', () => {
+    const r = addSignalPipeline(starterConfig(['logs']), 'logs');
+    expect(r).toMatchObject({ pipeline: 'logs/2' });
+    expect(addSignalPipeline('a: [', 'logs')).toHaveProperty('error');
+    const blank = addSignalPipeline('', 'logs');
+    if ('error' in blank) throw new Error(blank.error);
+    expect(parse(blank.yaml).service.pipelines.logs.receivers).toEqual(['otlp']);
   });
 });

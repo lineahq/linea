@@ -1283,8 +1283,16 @@ through the existing records endpoint, 100 per page, client-side (no new
 shape). Selections over 200 records or 1 MiB warn and offer a sample of 100;
 the fixture limits still apply. A finished capture with nothing selected
 shows "Next steps": it is already stored, nothing to save, and offers a sample
-or all records. "Use records" defaults to New scenario (`newScenarioPatch`),
-which replaces the open scenario only after `useReplaceDrafts` confirms.
+or all records. "Use records" makes one input per signal (`mergeFixtures`
+in `inputs.ts` concatenates the streams' OTLP resource lists; every stream
+keeps its `capture_origins` entry). It defaults to New configuration and
+scenario: `starterConfig` (OTLP receiver, one pipeline per captured signal,
+debug exporter) with the records on `otlp`, no receiver choice, applied as
+one `newPatch` after `useReplaceDrafts` confirms for both drafts. "Add to the
+open scenario" asks for one receiver per signal; a signal no receiver
+accepts offers "Add a <signal> pipeline", which edits the configuration
+draft through `addSignalPipeline` (reusing or adding an `otlp` receiver and
+a `debug` exporter) only when the user clicks it.
 The capture aside (`.capture-aside`) is fixed-width and never scrolls
 sideways.
 

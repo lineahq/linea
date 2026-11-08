@@ -7,6 +7,13 @@ change APIs, report schemas and persisted formats; the release notes say how.
 
 ## Unreleased
 
+- Using capture records in the web client: "New configuration and scenario"
+  now starts a configuration of its own (OTLP in, one pipeline per captured
+  signal) with no receiver to map, instead of joining the open
+  configuration. Every destination makes one input per signal, however many
+  streams the records came from. Adding to the open scenario when no
+  receiver accepts a signal offers to add a pipeline for it to the
+  configuration draft.
 - The Docker Compose team server is configured by `.env` for any use, not
   only one person on loopback: `LINEA_AUTH` chooses sign-in (`local`, `oidc`
   through an identity provider, or `proxy` behind an authenticating proxy),

@@ -41,10 +41,12 @@ const pipeline = (s: Signal) => `    ${s}:
       exporters: [debug]
 `;
 
-const starter = (signals: Signal[]) => `${PIPELINE_HEADER}
+/** starterConfig is OTLP in, batch, debug out, with one pipeline per signal. */
+export const starterConfig = (signals: Signal[]) => `${PIPELINE_HEADER}
 service:
   pipelines:
 ${signals.map(pipeline).join('')}`;
+const starter = starterConfig;
 
 export const CONFIG_TEMPLATES: ConfigTemplate[] = [
   {
@@ -657,6 +659,49 @@ export function insertComponent(text: string, s: ComponentSnippet, into: string[
   // The user's formatting stays: no padding inside [a, b], no folding.
   const yaml = doc.toString({ flowCollectionPadding: false, lineWidth: 0 });
   return { yaml, id, line: lineOf(yaml, sectionName, id), created };
+}
+
+/**
+ * addSignalPipeline adds a pipeline for `signal` to the configuration: from
+ * its OTLP receiver (added when it has none) to its debug exporter (added
+ * likewise). Nothing existing changes.
+ */
+export function addSignalPipeline(text: string, signal: Signal): { yaml: string; pipeline: string; receiver: string } | { error: string } {
+  const doc = parseDocument(text.trim() ? text : '{}');
+  if (doc.errors.length) return { error: `The configuration cannot be read: ${doc.errors[0].message}` };
+  if (!isMap(doc.contents)) return { error: 'The configuration is not a YAML mapping.' };
+  if (doc.contents.flow) doc.contents.flow = false;
+  const pick = (sec: string, type: string, body: string) => {
+    const m = section(doc, sec);
+    m.flow = false;
+    const found = keys(m).find((k) => k === type || k.startsWith(`${type}/`));
+    if (found) return found;
+    m.set(type, parseDocument(body).contents);
+    return type;
+  };
+  const receiver = pick('receivers', 'otlp', 'protocols:\n  grpc:\n    endpoint: 0.0.0.0:4317\n  http:\n    endpoint: 0.0.0.0:4318\n');
+  const exporter = pick('exporters', 'debug', 'verbosity: detailed\n');
+  const service = section(doc, 'service');
+  service.flow = false;
+  let pipes = service.get('pipelines');
+  if (!isMap(pipes)) {
+    pipes = new YAMLMap();
+    service.set('pipelines', pipes);
+  }
+  const pipelines = pipes as YAMLMap;
+  pipelines.flow = false;
+  const name = uniqueName(signal, keys(pipelines));
+  const seq = (id: string) => {
+    const s = new YAMLSeq();
+    s.flow = true;
+    s.items.push(doc.createNode(id));
+    return s;
+  };
+  const p = new YAMLMap();
+  p.set('receivers', seq(receiver));
+  p.set('exporters', seq(exporter));
+  pipelines.set(name, p);
+  return { yaml: doc.toString({ flowCollectionPadding: false, lineWidth: 0 }), pipeline: name, receiver };
 }
 
 /** lineOf finds the 1-based line of a key in a top-level section. */
