@@ -533,6 +533,10 @@ linea logout --server https://debugger.example.com
   it with the sign-in, and uses it for every later `--server` command to that
   server, also when `$LINEA_TOKEN` supplies the token. A later `login` without
   `--ca` keeps the stored CA.
+- Against a server without CLI sign-in, `login` stores nothing. If the server
+  already signs requests in, as the Compose stack's proxy does, it says that no
+  sign-in is needed and exits 0; otherwise it asks for an API token in
+  `$LINEA_TOKEN` and exits 1.
 
 MCP clients and scripts may also present the provider's ID or access tokens
 (JWTs) as bearer tokens, accepted only for the configured audiences.

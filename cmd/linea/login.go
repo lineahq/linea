@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -54,6 +55,9 @@ func loginCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		Wait: loginWait,
 		CA:   ca,
 	})
+	if errors.Is(err, client.ErrNoCLISignIn) {
+		return noCLISignIn(ctx, *server, ca, stdout, stderr)
+	}
 	if err != nil {
 		return fail(stderr, err)
 	}
@@ -70,6 +74,20 @@ func loginCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	}
 	fmt.Fprintf(stdout, "signed in to %s as %s (%s)\n", *server, s.Principal.Name, s.Principal.ID)
 	return exitOK
+}
+
+// noCLISignIn answers login for a server without CLI sign-in. When the server
+// already signs requests in, such as behind the Compose stack's proxy, no
+// sign-in is needed; otherwise it takes an API token.
+func noCLISignIn(ctx context.Context, server string, ca []byte, stdout, stderr io.Writer) int {
+	if c, err := client.NewWithCA(server, "", ca); err == nil {
+		if s, err := c.Session(ctx); err == nil {
+			fmt.Fprintf(stdout, "no sign-in needed: %s already signs requests in as %s (%s); pass --server to any command\n", server, s.Principal.Name, s.Principal.ID)
+			return exitOK
+		}
+	}
+	fmt.Fprintf(stderr, "error: %s has no CLI sign-in; ask for an API token and set %s\n", server, serverTokenEnv)
+	return exitError
 }
 
 func logoutCmd(_ context.Context, args []string, stdout, stderr io.Writer) int {

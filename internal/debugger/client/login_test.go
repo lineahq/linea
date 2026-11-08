@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -167,5 +168,36 @@ func TestLoginTrustsThePrivateCA(t *testing.T) {
 	}
 	if _, err := NewWithCA(srv.URL, cred.IDToken, []byte("not a certificate")); err == nil || !strings.Contains(err.Error(), "no PEM certificate") {
 		t.Fatalf("a CA file without certificates = %v", err)
+	}
+}
+
+// TestLoginNamesAServerWithoutCLISignIn: a 404 and the web client's page
+// both mean the server has no CLI sign-in; another answer stays an error of
+// its own.
+func TestLoginNamesAServerWithoutCLISignIn(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		ctype  string
+		body   string
+		none   bool
+	}{
+		{name: "not found", status: http.StatusNotFound, ctype: "text/plain", body: "no", none: true},
+		{name: "web client page", status: http.StatusOK, ctype: "text/html; charset=utf-8", body: "<!doctype html>", none: true},
+		{name: "server error", status: http.StatusInternalServerError, ctype: "text/html", body: "<!doctype html>"},
+		{name: "incomplete JSON", status: http.StatusOK, ctype: "application/json", body: `{"issuer":""}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", tc.ctype)
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			t.Cleanup(srv.Close)
+			_, err := Login(context.Background(), srv.URL, LoginOptions{})
+			if err == nil || errors.Is(err, ErrNoCLISignIn) != tc.none {
+				t.Fatalf("Login = %v, want no CLI sign-in %t", err, tc.none)
+			}
+		})
 	}
 }
