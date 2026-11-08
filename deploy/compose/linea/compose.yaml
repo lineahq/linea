@@ -398,7 +398,7 @@ services:
   # what it still runs; stop_grace_period leaves room for that.
   linea:
     <<: *hardened
-    image: ghcr.io/lineahq/linea-server:${LINEA_VERSION:-0.1.1}
+    image: ghcr.io/lineahq/linea-server:${LINEA_VERSION:-0.2.0}
     build:
       context: ../../..
       dockerfile: deploy/docker/linea-server.Dockerfile
@@ -465,7 +465,7 @@ services:
   # default 5GiB, bounds /cache).
   pool:
     <<: *hardened
-    image: ghcr.io/lineahq/linea-worker:${LINEA_VERSION:-0.1.1}
+    image: ghcr.io/lineahq/linea-worker:${LINEA_VERSION:-0.2.0}
     build:
       context: ../../..
       dockerfile: deploy/docker/linea-worker.Dockerfile
@@ -499,7 +499,7 @@ services:
   # the registry.
   builder:
     <<: *hardened
-    image: ghcr.io/lineahq/linea-builder:${LINEA_VERSION:-0.1.1}
+    image: ghcr.io/lineahq/linea-builder:${LINEA_VERSION:-0.2.0}
     build:
       context: ../../..
       dockerfile: deploy/docker/linea-builder.Dockerfile

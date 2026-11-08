@@ -7,6 +7,12 @@ change APIs, report schemas and persisted formats; the release notes say how.
 
 ## Unreleased
 
+## [0.2.0]
+
+**Upgrading from 0.1:** a Docker Compose stack needs `LINEA_AUTH=local` in
+`.env` to keep the previous behavior, and fleet needs `migrate` before the
+new release starts (schema version 11). Both are described below.
+
 - Using capture records in the web client: "New configuration and scenario"
   now starts a configuration of its own (OTLP in, one pipeline per captured
   signal) with no receiver to map, instead of joining the open
@@ -120,5 +126,6 @@ First public release.
   `github.com/lineahq/linea/collector/livecapture`, tagged
   `collector/livecapture/v0.1.0`, and the contrib `opamp` extension.
 
+[0.2.0]: https://github.com/lineahq/linea/releases/tag/v0.2.0
 [0.1.1]: https://github.com/lineahq/linea/releases/tag/v0.1.1
 [0.1.0]: https://github.com/lineahq/linea/releases/tag/v0.1.0

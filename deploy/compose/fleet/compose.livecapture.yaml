@@ -28,7 +28,7 @@ services:
       retries: 30
 
   capture-migrate:
-    image: ghcr.io/lineahq/linea-fleet-livecapture:${CAPTURE_VERSION:-0.1.1}
+    image: ghcr.io/lineahq/linea-fleet-livecapture:${CAPTURE_VERSION:-0.2.0}
     build:
       context: ../../..
       dockerfile: deploy/docker/linea-fleet-livecapture.Dockerfile
@@ -53,7 +53,7 @@ services:
     restart: "no"
 
   livecapture-plugin:
-    image: ghcr.io/lineahq/linea-fleet-livecapture:${CAPTURE_VERSION:-0.1.1}
+    image: ghcr.io/lineahq/linea-fleet-livecapture:${CAPTURE_VERSION:-0.2.0}
     build:
       context: ../../..
       dockerfile: deploy/docker/linea-fleet-livecapture.Dockerfile

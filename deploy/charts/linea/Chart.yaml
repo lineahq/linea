@@ -3,5 +3,5 @@ name: linea
 description: A linea team server, with a worker pool and a runtime builder that dial it
 type: application
 # The release's version; the release workflow checks that both match its tag.
-version: 0.1.1
-appVersion: "0.1.1"
+version: 0.2.0
+appVersion: "0.2.0"

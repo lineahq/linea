@@ -153,7 +153,7 @@ services:
 
   fleet:
     <<: *fleet-hardened
-    image: ghcr.io/lineahq/linea-fleet:${LINEA_VERSION:-0.1.1}
+    image: ghcr.io/lineahq/linea-fleet:${LINEA_VERSION:-0.2.0}
     build:
       context: ../../..
       dockerfile: deploy/docker/linea-fleet.Dockerfile
@@ -185,7 +185,7 @@ services:
 
   livecapture-plugin:
     <<: *fleet-hardened
-    image: ghcr.io/lineahq/linea-fleet-livecapture:${LINEA_VERSION:-0.1.1}
+    image: ghcr.io/lineahq/linea-fleet-livecapture:${LINEA_VERSION:-0.2.0}
     build:
       context: ../../..
       dockerfile: deploy/docker/linea-fleet-livecapture.Dockerfile
@@ -225,7 +225,7 @@ services:
   # Explicit steps, run by scripts/debugger/compose-fleet.sh (profile fleet-init).
   fleet-migrate:
     <<: *fleet-hardened
-    image: ghcr.io/lineahq/linea-fleet:${LINEA_VERSION:-0.1.1}
+    image: ghcr.io/lineahq/linea-fleet:${LINEA_VERSION:-0.2.0}
     profiles: [fleet-init]
     command: [migrate, --runtime-role, fleet_app]
     environment:
@@ -236,7 +236,7 @@ services:
     restart: "no"
   capture-migrate:
     <<: *fleet-hardened
-    image: ghcr.io/lineahq/linea-fleet-livecapture:${LINEA_VERSION:-0.1.1}
+    image: ghcr.io/lineahq/linea-fleet-livecapture:${LINEA_VERSION:-0.2.0}
     profiles: [fleet-init]
     command: [migrate, --runtime-role, capture_app]
     environment:
@@ -249,7 +249,7 @@ services:
   # changes nothing while that admin is active.
   fleet-bootstrap:
     <<: *fleet-hardened
-    image: ghcr.io/lineahq/linea-fleet:${LINEA_VERSION:-0.1.1}
+    image: ghcr.io/lineahq/linea-fleet:${LINEA_VERSION:-0.2.0}
     profiles: [fleet-init]
     command: [bootstrap, --server-id, "${LINEA_FLEET_SERVER_ID:-linea-fleet}", --name, linea-server]
     environment:

@@ -1,7 +1,7 @@
 name: linea-fleet
 
 x-fleet: &fleet
-  image: ghcr.io/lineahq/linea-fleet:${FLEET_VERSION:-0.1.1}
+  image: ghcr.io/lineahq/linea-fleet:${FLEET_VERSION:-0.2.0}
   build:
     context: ../../..
     dockerfile: deploy/docker/linea-fleet.Dockerfile

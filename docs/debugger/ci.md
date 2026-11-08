@@ -41,10 +41,10 @@ The simplest pin is a release archive. Each release publishes
 a `SHA256SUMS` file:
 
 ```sh
-VERSION=0.1.1
+VERSION=0.2.0
 curl -fsSL -o linea.tar.gz \
   "https://github.com/lineahq/linea/releases/download/v$VERSION/linea_${VERSION}_linux_amd64.tar.gz"
-tar -xzf linea.tar.gz        # unpacks linea_0.1.1_linux_amd64/linea
+tar -xzf linea.tar.gz        # unpacks linea_0.2.0_linux_amd64/linea
 ```
 
 - The example workflows install the release that `LINEA_VERSION` names the same
