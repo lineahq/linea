@@ -478,6 +478,7 @@ fleet:
 | Databases | With `postgresql.enabled` and no `fleet.deploy.database.existingSecret`, a Job per release revision creates the databases `fleet` and `livecapture` in the bundled PostgreSQL, each with its own migration and runtime role, and resets their generated passwords. With your own PostgreSQL, create them yourself and name a Secret with the keys `fleet-migrate-url`, `fleet-runtime-url`, `capture-migrate-url` and `capture-runtime-url` ([roles](../fleet/deployment.md)). |
 | Migrations | An init container in each pod migrates its schema before the pod starts. Each runs one pod, replaced rather than rolled, so a migration never overlaps a running instance. |
 | Server token | Generated once, kept in a Secret across upgrades and never printed. Fleet's `bootstrap` init container installs it as the first admin, without expiry; on later starts it changes nothing. |
+| Config management | Off: fleet only reports. `fleet.deploy.configManagement: true` starts it with `--config-management` for config versions, assignments and rollouts ([config management](../fleet/config-management.md)). |
 | Plugin | Registered with fleet with generated host and service tokens. Its control and delivery endpoints serve TLS with `fleet.deploy.livecapture.tls.secretName`, or a self-signed certificate the chart generates once for the Service names and `tls.extraHosts`. |
 
 Install fails with `fleet.url`, `fleet.token` or `fleet.existingSecret` set

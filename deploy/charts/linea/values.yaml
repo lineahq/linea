@@ -52,6 +52,9 @@ fleet:
     enabled: false
     # The fleet identity recorded in its database; never change it later.
     serverID: linea-fleet
+    # Remote config management for supervised Collectors: config versions,
+    # assignments and rollouts. Off, fleet only reports.
+    configManagement: false
     image:
       repository: ghcr.io/lineahq/linea-fleet
       # Defaults to the chart's appVersion.

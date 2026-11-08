@@ -287,6 +287,7 @@ spec:
             - --allow-insecure-remote
             - --plugins-config=/etc/fleet/plugins/plugins.json
             - --plugin-listen=0.0.0.0:8081
+            - --config-management={{ $d.configManagement | default false }}
           env:
             - {name: LINEA_FLEET_DATABASE_URL_FILE, value: /etc/fleet/runtime/url}
           ports:

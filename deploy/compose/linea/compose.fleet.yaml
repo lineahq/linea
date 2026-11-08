@@ -147,7 +147,7 @@ services:
     build:
       context: ../../..
       dockerfile: deploy/docker/linea-fleet.Dockerfile
-    command: [--server-id, "${LINEA_FLEET_SERVER_ID:-linea-fleet}", --management-listen, "0.0.0.0:8080", --agent-listen, "0.0.0.0:4320", --allow-insecure-remote, --plugins-config, /run/secrets/plugins.json, --plugin-listen, "0.0.0.0:8081"]
+    command: [--server-id, "${LINEA_FLEET_SERVER_ID:-linea-fleet}", --management-listen, "0.0.0.0:8080", --agent-listen, "0.0.0.0:4320", --allow-insecure-remote, --plugins-config, /run/secrets/plugins.json, --plugin-listen, "0.0.0.0:8081", "--config-management=${LINEA_FLEET_CONFIG_MANAGEMENT:-false}"]
     environment:
       GOMAXPROCS: "2"
       GOMEMLIMIT: 768MiB

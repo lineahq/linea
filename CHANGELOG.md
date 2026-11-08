@@ -47,6 +47,10 @@ change APIs, report schemas and persisted formats; the release notes say how.
   with the server's credential, the livecapture plugin, config management)
   with its result and error code. Without a fleet the page shows how each
   deployment connects one.
+- Fleet config management can be turned on in the debugger's deployments:
+  `LINEA_FLEET_CONFIG_MANAGEMENT=true` in the Compose stack's `.env`, or
+  `fleet.deploy.configManagement: true` in the Helm chart. Both default to
+  off, as before.
 
 - Collector 0.165.0 joins the runtime support table. The debugger explains
   the new `queue_batch` processor like the batch processor (sends, triggers,
