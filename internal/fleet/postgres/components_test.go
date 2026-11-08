@@ -66,7 +66,7 @@ func TestPostgresComponentSets(t *testing.T) {
 		t.Fatal("invalid hash accepted:", err)
 	}
 
-	managed, err := auth.Generate(auth.CredentialRequest{ID: strings.Repeat("72", 16), Name: "managed", Role: "agent", RemoteConfig: true, ExpiresAt: time.Now().Add(time.Hour)}, time.Now())
+	managed, err := auth.Generate(auth.CredentialRequest{ID: strings.Repeat("72", 16), Name: "managed", Role: "agent", RemoteConfig: true, ExpiresAt: new(time.Now().Add(time.Hour))}, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

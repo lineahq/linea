@@ -3043,7 +3043,6 @@
           "name",
           "role",
           "created_at",
-          "expires_at",
           "remote_config"
         ],
         "properties": {
@@ -3068,7 +3067,8 @@
           },
           "expires_at": {
             "type": "string",
-            "format": "date-time"
+            "format": "date-time",
+            "description": "Absent on an admin or reader credential that is valid until revoked. Agent credentials always have one."
           },
           "revoked_at": {
             "type": "string",
@@ -3089,10 +3089,9 @@
         "required": [
           "id",
           "name",
-          "role",
-          "expires_at"
+          "role"
         ],
-        "description": "Caller chooses a unique credential ID for lost-response reconciliation. Agent bearer tokens are reusable across Collectors: no UID binding or pre-registration. Expiry must be future and within 365 days.",
+        "description": "Caller chooses a unique credential ID for lost-response reconciliation. Agent bearer tokens are reusable across Collectors: no UID binding or pre-registration. An expiry must be future and within 365 days. Agent credentials require one; an admin or reader credential without one is valid until revoked.",
         "properties": {
           "id": {
             "$ref": "#/components/schemas/AgentID"

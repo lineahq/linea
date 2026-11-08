@@ -62,8 +62,8 @@ Secrets:
 | Factory | The shell version needs OpenSSL; PowerShell uses .NET. Both create random database passwords and connection files in an ignored private directory and refuse to overwrite it |
 | Permissions | Windows restricts the directory ACL to owner and SYSTEM. Unix uses a 0700 parent and readable individual mounts for container UID 65532. Git Bash on Windows cannot restrict the ACL with `umask` or `chmod`: prefer PowerShell 7, or restrict the directory yourself |
 | Protection | File-based Compose secrets are plaintext host files. Protect the directory and its backups; never commit or print them |
-| Admin token | Expires in 90 days. `admin.json` is an operator copy of the one-time disclosure: store it in your secret manager |
-| Admin expiry | Startup requires an active admin. If all admins expire, stop fleet and run offline bootstrap again. Bootstrap refuses while an active admin exists |
+| Admin token | Valid until revoked; it does not expire. `admin.json` is an operator copy of the one-time disclosure: store it in your secret manager |
+| Admin expiry | Startup requires an active admin. If all admins are revoked or expired, stop fleet and run offline bootstrap again. Bootstrap refuses while an active admin exists. Admins issued before schema version 11 keep their 90-day expiry |
 | Rotation | Changing secret files does not rotate passwords in an existing database. Coordinate database password changes with connection-file updates |
 
 Storage and roles:
@@ -348,7 +348,8 @@ docker compose --project-name fleet-restore --env-file restore.env up -d --wait 
 3. Run migrations, start fleet, and check readiness and authenticated
    inventory, groups and credential metadata with an independent HTTP client.
 
-- The current durable schema is version 10. Migrations only go forward, and
+- The current durable schema is version 11 (version 11 lets admin and reader
+  credentials be valid until revoked). Migrations only go forward, and
   `docker compose run --rm -T migrate` also re-applies the runtime role's
   grants.
 - The config management tables exist in every installation and stay unused

@@ -55,7 +55,7 @@ func TestPostgresConfigs(t *testing.T) {
 		t.Helper()
 		waitUntil(t, func() bool { r, err := s.GetRollout(ctx, id); return err == nil && r.State == configmgmt.Completed })
 	}
-	reader, err := auth.Generate(auth.CredentialRequest{ID: strings.Repeat("71", 16), Name: "reader", Role: "reader", ExpiresAt: time.Now().Add(time.Hour)}, time.Now())
+	reader, err := auth.Generate(auth.CredentialRequest{ID: strings.Repeat("71", 16), Name: "reader", Role: "reader", ExpiresAt: new(time.Now().Add(time.Hour))}, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestPostgresConfigs(t *testing.T) {
 	// Assignments: static group, selector group and inline selector targets.
 	group := strings.Repeat("9a", 16)
 	member, outsider := strings.Repeat("a1", 16), strings.Repeat("a2", 16)
-	agentCredential, err := auth.Generate(auth.CredentialRequest{ID: strings.Repeat("72", 16), Name: "agent", Role: "agent", ExpiresAt: time.Now().Add(time.Hour)}, time.Now())
+	agentCredential, err := auth.Generate(auth.CredentialRequest{ID: strings.Repeat("72", 16), Name: "agent", Role: "agent", ExpiresAt: new(time.Now().Add(time.Hour))}, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

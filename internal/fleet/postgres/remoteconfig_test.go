@@ -45,10 +45,10 @@ func TestPostgresRemoteConfig(t *testing.T) {
 	admin := issued.Credential.ID
 
 	// Only agent credentials carry the remote config opt-in; it defaults off.
-	if _, err := auth.Generate(auth.CredentialRequest{ID: "00000000000000000000000000000051", Name: "reader", Role: "reader", RemoteConfig: true, ExpiresAt: time.Now().Add(time.Hour)}, time.Now()); !errors.Is(err, fleet.ErrInvalid) {
+	if _, err := auth.Generate(auth.CredentialRequest{ID: "00000000000000000000000000000051", Name: "reader", Role: "reader", RemoteConfig: true, ExpiresAt: new(time.Now().Add(time.Hour))}, time.Now()); !errors.Is(err, fleet.ErrInvalid) {
 		t.Fatal("reader credential accepted remote_config:", err)
 	}
-	c, err := auth.Generate(auth.CredentialRequest{ID: "00000000000000000000000000000052", Name: "agent", Role: "agent", ExpiresAt: time.Now().Add(time.Hour)}, time.Now())
+	c, err := auth.Generate(auth.CredentialRequest{ID: "00000000000000000000000000000052", Name: "agent", Role: "agent", ExpiresAt: new(time.Now().Add(time.Hour))}, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

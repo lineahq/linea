@@ -25,6 +25,11 @@ change APIs, report schemas and persisted formats; the release notes say how.
 - CLI text output is structured into headed sections and aligned tables,
   and `linea completion bash|zsh|fish|powershell` completes commands, flags
   and values.
+- Fleet admin and reader credentials may be issued without `expires_at` and
+  then stay valid until revoked; agent credentials still require an expiry.
+  `bootstrap` issues its admin without expiry, so a team server connected
+  with it no longer loses fleet after 90 days. Fleet schema version 11:
+  **run `migrate` before starting the new release.**
 
 - Collector 0.165.0 joins the runtime support table. The debugger explains
   the new `queue_batch` processor like the batch processor (sends, triggers,

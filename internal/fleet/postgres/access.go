@@ -12,7 +12,7 @@ import (
 
 func requireAdmin(ctx context.Context, tx pgx.Tx, id string) error {
 	var ok bool
-	err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM fleet.credentials WHERE id=$1 AND role='admin' AND revoked_at IS NULL AND expires_at>clock_timestamp())", id).Scan(&ok)
+	err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM fleet.credentials WHERE id=$1 AND role='admin' AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>clock_timestamp()))", id).Scan(&ok)
 	if err != nil {
 		return err
 	}
@@ -23,7 +23,7 @@ func requireAdmin(ctx context.Context, tx pgx.Tx, id string) error {
 }
 func requireAgent(ctx context.Context, tx pgx.Tx, id string) error {
 	var ok bool
-	err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM fleet.credentials WHERE id=$1 AND role='agent' AND revoked_at IS NULL AND expires_at>clock_timestamp())", id).Scan(&ok)
+	err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM fleet.credentials WHERE id=$1 AND role='agent' AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>clock_timestamp()))", id).Scan(&ok)
 	if err != nil {
 		return err
 	}
@@ -38,7 +38,7 @@ func Bootstrap(ctx context.Context, url, serverID, name string) (auth.Issued, er
 		return auth.Issued{}, fleet.ErrInvalid
 	}
 	now := time.Now()
-	issued, err := auth.Generate(auth.CredentialRequest{ID: randomID(), Name: name, Role: "admin", ExpiresAt: now.Add(90 * 24 * time.Hour)}, now)
+	issued, err := auth.Generate(auth.CredentialRequest{ID: randomID(), Name: name, Role: "admin"}, now)
 	if err != nil {
 		return auth.Issued{}, err
 	}
@@ -47,7 +47,7 @@ func Bootstrap(ctx context.Context, url, serverID, name string) (auth.Issued, er
 			return err
 		}
 		var count int
-		if err := tx.QueryRow(ctx, "SELECT count(*) FROM fleet.credentials WHERE role='admin' AND revoked_at IS NULL AND expires_at>clock_timestamp()").Scan(&count); err != nil {
+		if err := tx.QueryRow(ctx, "SELECT count(*) FROM fleet.credentials WHERE role='admin' AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>clock_timestamp())").Scan(&count); err != nil {
 			return err
 		}
 		if count > 0 {
@@ -202,7 +202,7 @@ func (s *Store) RevokeCredential(ctx context.Context, actor, id string) error {
 		if c.Role == "admin" {
 			var count int
 			var targetActive bool
-			if err := tx.QueryRow(ctx, "SELECT count(*),COALESCE(bool_or(id=$1),false) FROM fleet.credentials WHERE role='admin' AND revoked_at IS NULL AND expires_at>clock_timestamp()", id).Scan(&count, &targetActive); err != nil {
+			if err := tx.QueryRow(ctx, "SELECT count(*),COALESCE(bool_or(id=$1),false) FROM fleet.credentials WHERE role='admin' AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>clock_timestamp())", id).Scan(&count, &targetActive); err != nil {
 				return err
 			}
 			if targetActive && count <= 1 {
@@ -222,7 +222,7 @@ func (s *Store) RevokeCredential(ctx context.Context, actor, id string) error {
 func (s *Store) ActiveCredentialIDs(ctx context.Context, ids []string) (map[string]bool, error) {
 	ctx, cancel := bounded(ctx)
 	defer cancel()
-	rows, err := s.pool.Query(ctx, "SELECT id FROM fleet.credentials WHERE id=ANY($1::text[]) AND revoked_at IS NULL AND expires_at>clock_timestamp()", ids)
+	rows, err := s.pool.Query(ctx, "SELECT id FROM fleet.credentials WHERE id=ANY($1::text[]) AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>clock_timestamp())", ids)
 	if err != nil {
 		return nil, fleet.ErrUnavailable
 	}

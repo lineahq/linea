@@ -54,7 +54,7 @@ func TestPostgresReplicas(t *testing.T) {
 	b.SetSignals(func(string, uint64) {}, func(id string) { revoked <- id })
 	credential := func(id string) string {
 		t.Helper()
-		c, err := auth.Generate(auth.CredentialRequest{ID: id, Name: "replica-agent", Role: "agent", ExpiresAt: time.Now().Add(time.Hour)}, time.Now())
+		c, err := auth.Generate(auth.CredentialRequest{ID: id, Name: "replica-agent", Role: "agent", ExpiresAt: new(time.Now().Add(time.Hour))}, time.Now())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -277,7 +277,7 @@ func TestPostgresReplicas(t *testing.T) {
 		t.Fatal("restored history unreadable:", err)
 	}
 	// Live and starting replicas both refuse migration.
-	if _, err := maintenance.Exec(ctx, "DELETE FROM fleet.schema_version WHERE version=10"); err != nil {
+	if _, err := maintenance.Exec(ctx, "DELETE FROM fleet.schema_version WHERE version=11"); err != nil {
 		t.Fatal(err)
 	}
 	if err := Migrate(ctx, url); !errors.Is(err, ErrReplicasActive) {
@@ -337,7 +337,7 @@ func TestPostgresReapBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(s.Close)
-	c, err := auth.Generate(auth.CredentialRequest{ID: "00000000000000000000000000000051", Name: "reap-agent", Role: "agent", ExpiresAt: time.Now().Add(time.Hour)}, time.Now())
+	c, err := auth.Generate(auth.CredentialRequest{ID: "00000000000000000000000000000051", Name: "reap-agent", Role: "agent", ExpiresAt: new(time.Now().Add(time.Hour))}, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

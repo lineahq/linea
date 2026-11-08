@@ -207,7 +207,7 @@ Credential rules:
 | IDs | Caller-chosen, exactly 32 lowercase hex characters (a GUID in `N` format). Anything else, such as a name, is refused with 400 `invalid_argument` and `invalid request: id must be 32 lowercase hexadecimal characters`. Group, config and rollout IDs use the same format |
 | Error messages | Every `invalid_argument` names the field and the rule it broke, never the submitted value |
 | Retry | Retrying a successful create returns 409 and does not disclose the token again. After an uncertain disclosure, query, revoke and reissue with a new ID |
-| Expiry | Required, at most 365 days |
+| Expiry | At most 365 days. Required for agent credentials. An admin or reader credential created without `expires_at` is valid until revoked, for a service such as the debugger |
 | `agent_id` | Not accepted by the credential API |
 | `labels` | Up to 16, used by plugins and config management ([labels](plugins.md#serving-an-unchanged-collector-component)) |
 | Revocation | Closes every session using the credential and blocks new registrations and state publication |

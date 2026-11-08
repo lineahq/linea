@@ -52,7 +52,7 @@ func TestPostgresInventory(t *testing.T) {
 	}
 	t.Cleanup(s.Close)
 	admin := issued.Credential.ID
-	c, err := auth.Generate(auth.CredentialRequest{ID: "00000000000000000000000000000041", Name: "inventory-agent", Role: "agent", Labels: map[string]string{"capture": "edge,core"}, ExpiresAt: time.Now().Add(time.Hour)}, time.Now())
+	c, err := auth.Generate(auth.CredentialRequest{ID: "00000000000000000000000000000041", Name: "inventory-agent", Role: "agent", Labels: map[string]string{"capture": "edge,core"}, ExpiresAt: new(time.Now().Add(time.Hour))}, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
