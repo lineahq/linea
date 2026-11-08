@@ -225,9 +225,12 @@ func upgradeAsLocal(out []byte) []byte {
 }
 
 // upgradeWithoutRuntimeIdentity drops what only a runtime's kind decides: a
-// container runtime's image and manifest digests, and which side's feature
-// gates a check could not read.
+// container runtime's image and manifest digests, and the feature gate
+// comparison, which needs runtimes that list their gates (the test's local
+// container runtime does not; the connected ones do).
 func upgradeWithoutRuntimeIdentity(out []byte) []byte {
 	out = regexp.MustCompile(`\n\s+"(image_id|manifest_digest)": "[^"]*",`).ReplaceAll(out, nil)
-	return regexp.MustCompile(`"unknown": \[(\s+"(from|to)",?)+\s+\]`).ReplaceAll(out, []byte(`"unknown": []`))
+	out = regexp.MustCompile(`,\s+"unknown": \[(\s+"(from|to)",?)+\s+\]`).ReplaceAll(out, nil)
+	out = regexp.MustCompile(`(## Feature gates\n\n)(Not compared: |No feature gate )[^\n]*\n`).ReplaceAll(out, []byte("${1}GATES\n"))
+	return regexp.MustCompile(`\nFEATURE GATES\n(  [^\n]*\n)+`).ReplaceAll(out, nil)
 }
