@@ -11,7 +11,7 @@ import (
 	"github.com/lineahq/linea/internal/debugger/analysis"
 )
 
-// tinyBatchers: a batch processor whose metadata_keys split its arrivals
+// tinyBatchers: a batching processor whose metadata_keys split its arrivals
 // into batchers that sent smaller batches than one batcher would have sent
 // on the same arrivals. No threshold decides it: the one-batcher figure is a
 // replay of this run's own arrivals through the processor's settings
@@ -21,9 +21,12 @@ import (
 func tinyBatchers(in Input) []Recommendation {
 	var out []Recommendation
 	for _, b := range in.Batching {
-		if len(b.Batchers) < 2 {
+		// The replay counts items, so a queue_batch sized in bytes is not
+		// compared.
+		if len(b.Batchers) < 2 || b.Settings.Bytes() {
 			continue
 		}
+		st := b.Settings
 		timeout, err := time.ParseDuration(b.Settings.Timeout)
 		if err != nil {
 			continue
@@ -35,8 +38,8 @@ func tinyBatchers(in Input) []Recommendation {
 				sent[f.Batcher].items += f.Items
 			}
 		}
-		compared := func(i int) bool { return !b.Batchers[i].Unknown && !b.Batchers[i].Refused }
-		var knownBatchers, knownRequests, unknownRequests, refusedRequests, unsent int
+		compared := func(i int) bool { return !b.Batchers[i].Unknown && !b.Batchers[i].Refused && !b.Batchers[i].Evicted }
+		var knownBatchers, knownRequests, unknownRequests, refusedRequests, evictedRequests, unsent int
 		var splitSends, splitItems int
 		for i, bt := range b.Batchers {
 			switch {
@@ -44,6 +47,8 @@ func tinyBatchers(in Input) []Recommendation {
 				unknownRequests += bt.Arrivals
 			case bt.Refused:
 				refusedRequests += bt.Arrivals
+			case bt.Evicted:
+				evictedRequests += bt.Arrivals
 			default:
 				knownBatchers++
 				knownRequests += bt.Arrivals
@@ -90,11 +95,11 @@ func tinyBatchers(in Input) []Recommendation {
 		if n := len(smaller) - listed; n > 0 {
 			list += fmt.Sprintf(" and %d more", n)
 		}
-		summary := fmt.Sprintf("%s splits the arrivals of pipeline %s by metadata_keys %s into %d batchers, which sent %s %ss per send on average (%s); one batcher holding the same %s would have sent %s %ss per send (%s). Below that, per send: %s. Each batcher fills send_batch_size %d, or waits out its own %s timeout, on its share of the arrivals alone. metadata_keys usually exist for a reason, such as keeping one tenant's requests apart, so no change is suggested.",
-			b.Processor, b.Pipeline, strings.Join(b.Settings.MetadataKeys, ", "), knownBatchers,
+		summary := fmt.Sprintf("%s splits the arrivals of pipeline %s by %s %s into %d batchers, which sent %s %ss per send on average (%s); one batcher holding the same %s would have sent %s %ss per send (%s). Below that, per send: %s. Each batcher fills %s %d, or waits out its own %s %s, on its share of the arrivals alone. %s usually exist for a reason, such as keeping one tenant's requests apart, so no change is suggested.",
+			b.Processor, b.Pipeline, st.KeysName(), strings.Join(st.MetadataKeys, ", "), knownBatchers,
 			number(float64(splitItems)/float64(splitSends)), noun, plural(splitSends, "send"),
 			plural(knownRequests, "request"), number(float64(one.items)/float64(one.sends)), noun, plural(one.sends, "send"),
-			list, b.Settings.SendBatchSize, b.Settings.Timeout)
+			list, st.SizeName(), st.SendBatchSize, st.Timeout, st.TimeoutName(), st.KeysName())
 
 		coverage := []string{
 			fmt.Sprintf("Observed on %s in %s; production traffic and its metadata mix decide how full each batcher gets.", plural(knownRequests, "request"), plural(knownBatchers, "batcher")),
@@ -105,6 +110,9 @@ func tinyBatchers(in Input) []Recommendation {
 		if refusedRequests > 0 {
 			coverage = append(coverage, fmt.Sprintf("Not compared: %s refused beyond metadata_cardinality_limit.", plural(refusedRequests, "request")))
 		}
+		if evictedRequests > 0 {
+			coverage = append(coverage, fmt.Sprintf("Not compared: %s in partitions flushed early to stay within batch::partition::cache_size %d.", plural(evictedRequests, "request"), st.CacheSize))
+		}
 		if unsent > 0 {
 			coverage = append(coverage, fmt.Sprintf("%s arrived without being sent in this run and are not counted.", plural(unsent, noun)))
 		}
@@ -113,7 +121,7 @@ func tinyBatchers(in Input) []Recommendation {
 			Components: []string{processorRef(b.Processor)},
 			Summary:    summary,
 			Evidence:   evidence,
-			Blockers:   []string{"No change suggested: whether to keep metadata_keys is the user's decision."},
+			Blockers:   []string{"No change suggested: whether to keep " + st.KeysName() + " is the user's decision."},
 			Coverage:   coverage,
 		})
 	}
@@ -137,12 +145,16 @@ func (s batcherSends) average() float64 {
 // pending (capped at send_batch_max_size); after a request is appended the
 // batcher sends while it holds send_batch_size items, or on every request
 // without a timer; what is pending after the last arrival leaves in one
-// send when the run completed (finalSend), by a tick or at shutdown. It
-// reports false when an arrival has no offset (normalized reports).
+// send when the run completed (finalSend), by a tick or at shutdown.
+// queue_batch (exporterhelper v0.165.0 partitionBatcher) also restarts the
+// timer when a request arrives at an empty batcher and when a size send
+// leaves items pending. It reports false when an arrival has no offset
+// (normalized reports).
 func oneBatcher(b *analysis.Batching, timeout time.Duration, compared func(batcher int) bool, finalSend bool) (batcherSends, bool) {
 	size, maxSize := b.Settings.SendBatchSize, b.Settings.SendBatchMaxSize
 	tick := float64(timeout) / float64(time.Millisecond)
 	timed := timeout > 0 && size > 0
+	qb := b.Settings.QueueBatch()
 	var out batcherSends
 	pending := 0
 	send := func() {
@@ -173,13 +185,16 @@ func oneBatcher(b *analysis.Batching, timeout time.Duration, compared func(batch
 			// the arrival.
 			next += (math.Floor((at-next)/tick) + 1) * tick
 		}
+		if qb && timed && pending == 0 {
+			next = at + tick
+		}
 		pending += a.Items
 		sentBySize := false
 		for pending > 0 && (!timed || pending >= size) {
 			send()
 			sentBySize = true
 		}
-		if timed && sentBySize {
+		if timed && sentBySize && (!qb || pending > 0) {
 			next = at + tick
 		}
 	}
@@ -189,9 +204,10 @@ func oneBatcher(b *analysis.Batching, timeout time.Duration, compared func(batch
 	return out, true
 }
 
-// groupingAfterBatch: groupbyattrs before a batch processor regroups one
-// request at a time, while the batch processor appends requests without
-// merging equal resources. Run after it, groupbyattrs sees each send whole
+// groupingAfterBatch: groupbyattrs before a batching processor regroups one
+// request at a time, while the batching processor appends requests without
+// merging equal resources (batch, and queue_batch's MergeSplit, which
+// moves resource blocks; exporterhelper v0.165.0). Run after it, groupbyattrs sees each send whole
 // and merges the equal resources of the requests the batch joined.
 //
 // Observed when the run shows it exactly: groupbyattrs emits blocks without
@@ -211,7 +227,7 @@ func groupingAfterBatch(in Input) []Recommendation {
 			if componentType(id) != "groupbyattrs" {
 				continue
 			}
-			rel := slices.IndexFunc(ids[at+1:], func(id string) bool { return componentType(id) == "batch" })
+			rel := slices.IndexFunc(ids[at+1:], func(bid string) bool { return batches(in, p.ID, bid) })
 			if rel < 0 {
 				continue
 			}
@@ -247,7 +263,7 @@ func groupingAfterBatch(in Input) []Recommendation {
 				rec.Coverage = []string{fmt.Sprintf("Observed on %s; another input may repeat fewer or more resources within a batch.", plural(gain.requests, "request"))}
 			} else {
 				rec.Confidence = ConfidenceStatic
-				rec.Summary = fmt.Sprintf("%s runs before %s in pipeline %s. groupbyattrs regroups one request at a time, while the batch processor appends requests without merging equal resources; run after it, %s sees each send whole and merges the equal resources of the requests the batch joined.",
+				rec.Summary = fmt.Sprintf("%s runs before %s in pipeline %s. groupbyattrs regroups one request at a time, while the batching processor appends requests without merging equal resources; run after it, %s sees each send whole and merges the equal resources of the requests the batch joined.",
 					id, ids[batch], p.ID, id)
 				rec.Coverage = []string{"Not shown by the run: how many resource blocks that merges. " + why}
 			}

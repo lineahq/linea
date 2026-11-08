@@ -319,7 +319,7 @@ function RecommendationsComparison({ view, c, label }: { view?: RecommendationCh
   );
 }
 
-const BATCH_TONES: Record<Trigger, string> = { size: 'keep', timeout: 'mod', shutdown: 'none', immediate: 'none' };
+const BATCH_TONES: Record<Trigger, string> = { size: 'keep', timeout: 'mod', shutdown: 'none', immediate: 'none', evicted: 'none' };
 
 /**
  * BatchingComparison puts each batch processor's settings and batches in both

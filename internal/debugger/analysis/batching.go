@@ -9,12 +9,13 @@ import (
 	"github.com/lineahq/linea/internal/debugger/telemetry"
 )
 
-// Batching explains when and why one batch processor instance (batch in
-// one pipeline) sent what it held. Arrivals and flushes are observations
-// (the stage's inputs and emissions); each flush's trigger is inferred
-// from the configured sizes and a replay of the processor's timer, and
-// the inferred trigger counts are checked against the processor's own
-// trigger metrics.
+// Batching explains when and why one batching processor instance (batch
+// or queue_batch in one pipeline) sent what it held. Arrivals and flushes
+// are observations (the stage's inputs and emissions); each flush's
+// trigger is inferred from the configured sizes and a replay of the
+// processor's timer, and the inference is checked against the processor's
+// own metrics: the trigger counts of batch, the send count and sizes of
+// queue_batch.
 type Batching struct {
 	Processor string        `json:"processor"`
 	Pipeline  string        `json:"pipeline"`
@@ -24,13 +25,15 @@ type Batching struct {
 	Arrivals []BatchArrival `json:"arrivals"`
 	// Flushes are the stage's emissions, in event order.
 	Flushes []BatchFlush `json:"flushes"`
-	// Verification compares the inferred triggers with the processor's
-	// trigger metrics: metrics_agree, metrics_differ, or unverified when
-	// the metrics were not recorded.
+	// Verification compares the inference with the processor's metrics
+	// (batch: the size and timeout trigger counts; queue_batch: the number
+	// of sends and the items they held): metrics_agree, metrics_differ, or
+	// unverified when the metrics were not recorded.
 	Verification string `json:"verification"`
-	// Batchers are the processor's batchers with metadata_keys, one per
-	// combination of their values, in order of first arrival; absent
-	// without metadata_keys, when one batcher holds everything.
+	// Batchers are the processor's batchers with metadata_keys (queue_batch:
+	// its partitions), one per combination of their values, in order of
+	// first arrival; absent without metadata_keys, when one batcher holds
+	// everything.
 	Batchers []BatchBatcher `json:"batchers,omitempty"`
 	Notes    []string       `json:"notes,omitempty"`
 }
@@ -49,14 +52,36 @@ type BatchBatcher struct {
 	Unknown bool `json:"unknown,omitempty"`
 	// Refused: a new combination beyond metadata_cardinality_limit; the
 	// processor refuses its requests with a permanent error.
-	Refused  bool `json:"refused,omitempty"`
+	Refused bool `json:"refused,omitempty"`
+	// Evicted: queue_batch held more partitions than
+	// batch::partition::cache_size and flushed and removed this one, the
+	// least recently used; a later request with its values starts a new
+	// batcher.
+	Evicted  bool `json:"evicted,omitempty"`
 	Arrivals int  `json:"arrivals"`
 	Items    int  `json:"items"`
 	Flushes  int  `json:"flushes"`
 }
 
-// BatchSettings are the batch processor's effective settings.
+// Batching processor types.
+const (
+	TypeBatch      = "batch"
+	TypeQueueBatch = "queue_batch"
+)
+
+// IsBatcher reports whether a processor type batches requests: the batch
+// processor and, from Collector 0.165, the queue_batch processor.
+func IsBatcher(typ string) bool { return typ == TypeBatch || typ == TypeQueueBatch }
+
+// BatchSettings are the processor's effective settings, in the batch
+// processor's terms. For queue_batch, SendBatchSize is batch::min_size,
+// SendBatchMaxSize batch::max_size, Timeout batch::flush_timeout and
+// MetadataKeys batch::partition::metadata_keys; without its batch section
+// it sends every request as it arrives (Unbatched, SendBatchSize 0).
 type BatchSettings struct {
+	// Type is the processor type, batch or queue_batch; empty in reports
+	// from before queue_batch, which are batch.
+	Type             string   `json:"type,omitempty"`
 	SendBatchSize    int      `json:"send_batch_size"`
 	SendBatchMaxSize int      `json:"send_batch_max_size"`
 	Timeout          string   `json:"timeout"`
@@ -64,6 +89,61 @@ type BatchSettings struct {
 	// MetadataCardinalityLimit bounds the batchers metadata_keys creates;
 	// 0 is no limit.
 	MetadataCardinalityLimit int `json:"metadata_cardinality_limit,omitempty"`
+	// Sizer is what queue_batch's sizes count, items or bytes (the
+	// serialized request); empty for batch, which counts items.
+	Sizer string `json:"sizer,omitempty"`
+	// CacheSize bounds queue_batch's partitions
+	// (batch::partition::cache_size); beyond it the least recently used
+	// one is flushed and removed.
+	CacheSize int `json:"cache_size,omitempty"`
+	// Unbatched: queue_batch without its batch section queues requests and
+	// sends each one as it is.
+	Unbatched bool `json:"unbatched,omitempty"`
+}
+
+// QueueBatch reports whether the settings are queue_batch's.
+func (s BatchSettings) QueueBatch() bool { return s.Type == TypeQueueBatch }
+
+// Bytes reports whether the sizes count bytes rather than items.
+func (s BatchSettings) Bytes() bool { return s.Sizer == "bytes" }
+
+// SizeName, MaxSizeName, TimeoutName and KeysName name the settings as the
+// processor's own configuration does.
+func (s BatchSettings) SizeName() string {
+	if s.QueueBatch() {
+		return "batch::min_size"
+	}
+	return "send_batch_size"
+}
+
+func (s BatchSettings) MaxSizeName() string {
+	if s.QueueBatch() {
+		return "batch::max_size"
+	}
+	return "send_batch_max_size"
+}
+
+func (s BatchSettings) TimeoutName() string {
+	if s.QueueBatch() {
+		return "batch::flush_timeout"
+	}
+	return "timeout"
+}
+
+func (s BatchSettings) KeysName() string {
+	if s.QueueBatch() {
+		return "batch::partition::metadata_keys"
+	}
+	return "metadata_keys"
+}
+
+// SizeUnit is what the sizes count, for summaries: the signal's item
+// noun, or "byte".
+func (s BatchSettings) SizeUnit(itemNoun string) string {
+	if s.Bytes() {
+		return "byte"
+	}
+	return itemNoun
 }
 
 // BatchArrival is one request the processor received.
@@ -83,7 +163,8 @@ type BatchArrival struct {
 
 // Batch flush triggers.
 const (
-	// TriggerSize: the pending items reached send_batch_size.
+	// TriggerSize: the pending items reached send_batch_size (queue_batch:
+	// batch::min_size, in items or bytes).
 	TriggerSize = "size"
 	// TriggerTimeout: the timer fired with items pending.
 	TriggerTimeout = "timeout"
@@ -92,6 +173,9 @@ const (
 	// TriggerImmediate: without a timer (timeout or send_batch_size 0)
 	// every request is sent as it arrives, split by send_batch_max_size.
 	TriggerImmediate = "immediate"
+	// TriggerEvicted: queue_batch flushed a partition it removed to stay
+	// within batch::partition::cache_size.
+	TriggerEvicted = "evicted"
 )
 
 // Batching verifications.
@@ -143,10 +227,13 @@ type BatchWait struct {
 	Max float64 `json:"max"`
 }
 
-// Batch processor metrics read for verification (batchprocessor v0.162.0).
+// Metrics read for verification: the batch processor's trigger counts
+// (batchprocessor v0.162.0) and queue_batch's histogram of the items in
+// each send (queuebatchprocessor v0.165.0).
 const (
 	metricSizeTrigger    = "otelcol_processor_batch_batch_size_trigger_send"
 	metricTimeoutTrigger = "otelcol_processor_batch_timeout_trigger_send"
+	metricQueueBatchSend = "otelcol_processor_queuebatch_batch_send_size"
 )
 
 // BatchInput is what Batch reads for one processor instance.
@@ -163,15 +250,21 @@ type BatchInput struct {
 	// handed to the pipeline for each scenario input: what metadata_keys
 	// reads. Inputs whose receiver dropped them are absent.
 	InputHeaders map[int]map[string][]string
-	// BatchProcessors are the IDs of every batch processor in the
-	// configuration, to tell when an earlier one replaced the request
-	// context.
+	// BatchProcessors are the IDs of every batching processor (batch and
+	// queue_batch) in the configuration, to tell when an earlier one
+	// replaced the request context.
 	BatchProcessors map[string]bool
 }
 
-// Batch explains one batch processor instance. Shutdown sends its pending
-// items with the timeout trigger (batchprocessor v0.162.0), so the timeout
-// metric counts both timeout and shutdown flushes.
+// Batch explains one batching processor instance. Shutdown sends its
+// pending items with the timeout trigger (batchprocessor v0.162.0), so the
+// timeout metric counts both timeout and shutdown flushes.
+//
+// queue_batch (queuebatchprocessor v0.165.0, docs/internals/batching.md)
+// sends the same way but restarts a batcher's timer when a pending batch
+// starts (a request reaching an empty batcher, or what a size send left)
+// and at every tick, not after a size send that left nothing. Its sizes
+// may count bytes, which the replay measures as the serialized request.
 func Batch(in BatchInput) (*Batching, error) {
 	b := &Batching{Processor: in.Processor, Pipeline: in.Pipeline, Signal: in.Signal, Settings: in.Settings, Arrivals: []BatchArrival{}, Flushes: []BatchFlush{}}
 	var start time.Time
@@ -201,6 +294,26 @@ func Batch(in BatchInput) (*Batching, error) {
 	}
 
 	sources := batchSources(in)
+	qb := in.Settings.QueueBatch()
+	// sizeOf is an event's size in the unit of the configured sizes; with
+	// bytes, the length of the serialized request, which adds up when
+	// requests are joined (their resource blocks are appended).
+	bytesUnknown := false
+	sizeOf := func(e instrument.Event, items int) (int, error) {
+		if !in.Settings.Bytes() {
+			return items, nil
+		}
+		if e.Snapshot == "" {
+			bytesUnknown = true
+			return 0, nil
+		}
+		p, err := in.Snapshots.Payload(e.Snapshot)
+		if err != nil {
+			return 0, err
+		}
+		raw, err := p.Proto()
+		return len(raw), err
+	}
 	hasTimer := in.Timeout > 0 && in.Settings.SendBatchSize > 0
 	tol := in.Timeout / 2
 	if tol > 25*time.Millisecond {
@@ -232,7 +345,11 @@ func Batch(in BatchInput) (*Batching, error) {
 				}
 				a.Services = serviceNames(p)
 			}
-			a.Batcher = shards.arrive(e, items)
+			size, err := sizeOf(e, items)
+			if err != nil {
+				return nil, err
+			}
+			a.Batcher = shards.arrive(e, items, size)
 			arrivalShard[e.Seq] = a.Batcher
 			b.Arrivals = append(b.Arrivals, a)
 			continue
@@ -241,6 +358,10 @@ func Batch(in BatchInput) (*Batching, error) {
 		f.Batcher = shards.of(sources[e.Seq], arrivalShard)
 		sh := &shards.list[f.Batcher]
 		f.Pending = sh.pending
+		size, err := sizeOf(e, items)
+		if err != nil {
+			return nil, err
+		}
 		if e.Counts != nil {
 			f.Resources = e.Counts.Resources
 		}
@@ -252,15 +373,25 @@ func Batch(in BatchInput) (*Batching, error) {
 				return nil, err
 			}
 		}
-		max := in.Settings.SendBatchMaxSize
-		f.Split = max > 0 && items == max && sh.pending > max
+		maxSize := in.Settings.SendBatchMaxSize
+		if in.Settings.Bytes() {
+			f.Split = maxSize > 0 && sh.size > maxSize && sh.size > size
+		} else {
+			f.Split = maxSize > 0 && items == maxSize && sh.pending > maxSize
+		}
 		switch {
 		case !hasTimer:
 			f.Trigger = TriggerImmediate
-		case sh.pending >= in.Settings.SendBatchSize:
+		case sh.evicted && sh.pending > 0:
+			f.Trigger = TriggerEvicted
+		case sh.size >= in.Settings.SendBatchSize:
 			f.Trigger = TriggerSize
-			// processItem resets the timer after its last size send.
-			sh.nextTick = e.Time.Add(in.Timeout)
+			// batch: processItem resets the timer after its last size
+			// send. queue_batch: what the send left starts a pending
+			// batch, which restarts the timer.
+			if !qb || sh.size > size {
+				sh.nextTick = e.Time.Add(in.Timeout)
+			}
 		default:
 			for !sh.nextTick.IsZero() && sh.nextTick.Before(e.Time.Add(-tol)) {
 				sh.nextTick = sh.nextTick.Add(in.Timeout)
@@ -277,9 +408,10 @@ func Batch(in BatchInput) (*Batching, error) {
 				b.Notes = append(b.Notes, "flush "+strconv.Itoa(e.Seq)+" is not on a replayed timer tick; it is counted as a timeout flush")
 			}
 		}
-		sh.pending -= items
-		if sh.pending < 0 {
-			sh.pending = 0
+		sh.pending = max(sh.pending-items, 0)
+		sh.size = max(sh.size-size, 0)
+		if sh.pending == 0 {
+			sh.size = 0
 		}
 		sh.flushes++
 		f.Left = sh.pending
@@ -304,8 +436,50 @@ func Batch(in BatchInput) (*Batching, error) {
 	if pending > 0 && in.Completed {
 		b.Notes = append(b.Notes, strconv.Itoa(pending)+" items arrived without being sent")
 	}
-	b.Verification = verifyTriggers(b, in.Metrics, hasTimer)
+	if in.Settings.Bytes() {
+		note := "batch::sizer is bytes: the replay measures each request serialized; arrivals, pending and left are shown in items"
+		if bytesUnknown {
+			note += ". Some requests were not recorded, so their bytes are missing and a size send may be counted as a timeout send"
+		}
+		b.Notes = append(b.Notes, note)
+	}
+	if qb {
+		b.Verification = verifyQueueBatch(b, in.Metrics)
+	} else {
+		b.Verification = verifyTriggers(b, in.Metrics, hasTimer)
+	}
 	return b, nil
+}
+
+// verifyQueueBatch compares the sends with queue_batch's histogram of the
+// items in each send: its count is the number of sends and its sum the
+// items they held. The processor records it only with batching on.
+func verifyQueueBatch(b *Batching, metrics []instrument.ComponentMetric) string {
+	var count uint64
+	var sum float64
+	found := false
+	for _, m := range metrics {
+		if m.Component != b.Processor || m.Pipeline != b.Pipeline || m.Name != metricQueueBatchSend || m.Count == nil {
+			continue
+		}
+		found = true
+		count += *m.Count
+		if m.Sum != nil {
+			sum += *m.Sum
+		}
+	}
+	if !found {
+		return BatchUnverified
+	}
+	items := 0
+	for _, f := range b.Flushes {
+		items += f.Items
+	}
+	if count == uint64(len(b.Flushes)) && int64(sum) == int64(items) {
+		return BatchMetricsAgree
+	}
+	b.Notes = append(b.Notes, "the processor counted "+strconv.FormatUint(count, 10)+" sends of "+strconv.FormatInt(int64(sum), 10)+" items in all; the run recorded "+strconv.Itoa(len(b.Flushes))+" sends of "+strconv.Itoa(items))
+	return BatchMetricsDiffer
 }
 
 // batchSources counts, per flush seq, the records each arrival contributed,

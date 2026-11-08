@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/lineahq/linea/internal/debugger/analysis"
 )
 
 // ClientRead is one value a component's configuration reads from the
@@ -63,17 +65,26 @@ func batchDropsClientContext(in Input) []Recommendation {
 				onlyMetadata = false
 			}
 		}
-		kept := "no metadata (its metadata_keys is empty)"
+		qb := componentType(l.Batch) == analysis.TypeQueueBatch
+		keysOption, sends := "metadata_keys", "sends with a new context"
+		if qb {
+			// queue_batch keeps a request's context when it sends it alone.
+			keysOption, sends = "batch::partition::metadata_keys", "sends a batch joining several requests with a new context"
+		}
+		kept := "no metadata (its " + keysOption + " is empty)"
 		if len(l.MetadataKeys) > 0 {
 			kept = "the metadata keys " + strings.Join(l.MetadataKeys, ", ")
 		}
 		rec := Recommendation{
 			Kind: KindRisk, Confidence: ConfidenceStatic, Pipeline: l.Pipeline,
 			Components: []string{processorRef(l.Batch), l.Component},
-			Summary: fmt.Sprintf("%s reads %s from the request's client context in pipeline %s (%s), but runs after %s, which sends with a new context holding only %s: there it finds nothing.",
-				reader, strings.Join(names, ", "), l.Pipeline, strings.Join(hows, "; "), l.Batch, kept),
+			Summary: fmt.Sprintf("%s reads %s from the request's client context in pipeline %s (%s), but runs after %s, which %s holding only %s: there it finds nothing.",
+				reader, strings.Join(names, ", "), l.Pipeline, strings.Join(hows, "; "), l.Batch, sends, kept),
 			Evidence: []Evidence{{SectionTopology, "pipeline/" + l.Pipeline}},
 			Coverage: []string{"Read from the configuration: whether requests carry these values depends on the receivers (include_metadata for metadata) and the clients."},
+		}
+		if qb {
+			rec.Coverage = append(rec.Coverage, l.Batch+" loses the context only for sends joining several requests: a request sent alone, because it reached batch::min_size by itself or was the only one pending at batch::flush_timeout, keeps it.")
 		}
 		ids := pipelineIDs(p)
 		first := slices.Index(ids, l.Batches[0])
@@ -82,26 +93,30 @@ func batchDropsClientContext(in Input) []Recommendation {
 		switch {
 		case onlyMetadata && len(l.Batches) == 1:
 			keys := append(slices.Clone(l.MetadataKeys), newKeys...)
-			rec.Change = &ConfigChange{Op: OpSetOption, Component: l.Batch, Option: "metadata_keys", Value: jsonList(keys)}
-			rec.Coverage = append(rec.Coverage, fmt.Sprintf("%s then keeps a batcher for each distinct combination of these values (up to metadata_cardinality_limit), so batches may get smaller.", l.Batch))
-		case isProcessor && !slices.ContainsFunc(ids[first:at], func(id string) bool { return componentType(id) != "batch" }):
+			rec.Change = &ConfigChange{Op: OpSetOption, Component: l.Batch, Option: keysOption, Value: jsonList(keys)}
+			if qb {
+				rec.Coverage = append(rec.Coverage, fmt.Sprintf("%s then keeps a partition for each distinct combination of these values (beyond batch::partition::cache_size it flushes the least recently used one), so batches may get smaller.", l.Batch))
+			} else {
+				rec.Coverage = append(rec.Coverage, fmt.Sprintf("%s then keeps a batcher for each distinct combination of these values (up to metadata_cardinality_limit), so batches may get smaller.", l.Batch))
+			}
+		case isProcessor && !slices.ContainsFunc(ids[first:at], func(id string) bool { return !analysis.IsBatcher(componentType(id)) }):
 			order := slices.Delete(slices.Clone(ids), at, at+1)
 			order = slices.Insert(order, first, reader)
 			rec.Change = &ConfigChange{Op: OpSwap, Processors: order}
 		case onlyMetadata:
-			rec.Blockers = []string{fmt.Sprintf("No change suggested: the metadata_keys of every batch processor before %s (%s) would have to list %s.",
+			rec.Blockers = []string{fmt.Sprintf("No change suggested: the metadata keys of every batching processor before %s (%s) would have to list %s.",
 				reader, strings.Join(l.Batches, ", "), strings.Join(newKeys, ", "))}
 		case isProcessor:
 			var between []string
 			for _, id := range ids[first:at] {
-				if componentType(id) != "batch" {
+				if !analysis.IsBatcher(componentType(id)) {
 					between = append(between, id)
 				}
 			}
 			rec.Blockers = []string{fmt.Sprintf("No change suggested: %s sit between %s and %s; they may write what %s reads, so moving it ahead of them is not known to be safe.",
 				strings.Join(between, ", "), l.Batches[0], reader, reader)}
 		default:
-			rec.Blockers = []string{fmt.Sprintf("No change suggested: metadata_keys cannot carry %s, and %s cannot run before a processor.", strings.Join(names, ", "), reader)}
+			rec.Blockers = []string{fmt.Sprintf("No change suggested: metadata keys cannot carry %s, and %s cannot run before a processor.", strings.Join(names, ", "), reader)}
 		}
 		out = append(out, rec)
 	}

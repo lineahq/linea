@@ -174,3 +174,110 @@ func TestBatchAttributesRecordsAndWaits(t *testing.T) {
 		t.Fatal("normalized batching keeps wall-clock values")
 	}
 }
+
+// TestBatchReplaysQueueBatch: queue_batch restarts a batcher's timer when
+// a pending batch starts (a request reaching an empty batcher, or what a
+// size send left) and keeps ticking otherwise, and its sends are checked
+// against its batch_send_size histogram.
+func TestBatchReplaysQueueBatch(t *testing.T) {
+	qb := BatchSettings{Type: TypeQueueBatch, SendBatchSize: 4, SendBatchMaxSize: 6, Timeout: "300ms", Sizer: "items"}
+	for _, tt := range []struct {
+		name     string
+		settings BatchSettings
+		steps    []batchStep
+		count    int64 // batch_send_size count; -1 for none
+		sum      float64
+		want     []string
+		verified string
+	}{
+		{
+			name:     "timer restarts with each pending batch",
+			settings: qb,
+			steps: []batchStep{
+				{"in", 2, 2}, {"in", 2, 3}, {"out", 2, 5},
+				// The size send left nothing; the request at 502 starts a
+				// pending batch and its timer: 802, not the batch
+				// processor's tick at 602.
+				{"in", 502, 1}, {"out", 802, 1},
+				// The split leaves 2 items, whose timer starts at 1003.
+				{"in", 1003, 8}, {"out", 1003, 6}, {"out", 1303, 2},
+			},
+			count: 4, sum: 14,
+			want:     []string{TriggerSize, TriggerTimeout, TriggerSize, TriggerTimeout},
+			verified: BatchMetricsAgree,
+		},
+		{
+			name:     "differing histogram is reported",
+			settings: qb,
+			steps:    []batchStep{{"in", 1, 1}, {"out", 301, 1}},
+			count:    2, sum: 1,
+			want:     []string{TriggerTimeout},
+			verified: BatchMetricsDiffer,
+		},
+		{
+			name:     "without a batch section every request is sent",
+			settings: BatchSettings{Type: TypeQueueBatch, Unbatched: true, Timeout: "0s"},
+			steps:    []batchStep{{"in", 1, 2}, {"out", 1, 2}},
+			count:    -1,
+			want:     []string{TriggerImmediate},
+			verified: BatchUnverified,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var metrics []instrument.ComponentMetric
+			if tt.count >= 0 {
+				c := uint64(tt.count)
+				metrics = []instrument.ComponentMetric{{Component: "batch", Pipeline: "logs", Name: metricQueueBatchSend, Type: "histogram", Count: &c, Sum: &tt.sum}}
+			}
+			timeout, _ := time.ParseDuration(tt.settings.Timeout)
+			b, err := Batch(BatchInput{
+				Processor: "batch", Pipeline: "logs", Signal: "logs",
+				Settings: tt.settings, Timeout: timeout,
+				Events: batchEvents(tt.steps), Metrics: metrics, Completed: true,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, f := range b.Flushes {
+				got = append(got, f.Trigger)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("triggers = %v, want %v (notes %v)", got, tt.want, b.Notes)
+			}
+			if b.Verification != tt.verified {
+				t.Fatalf("verification = %s, want %s (notes %v)", b.Verification, tt.verified, b.Notes)
+			}
+		})
+	}
+}
+
+// TestBatchMeasuresQueueBatchBytes: with batch::sizer bytes the replay
+// sizes each request serialized, so two requests that reach min_size
+// together are a size send.
+func TestBatchMeasuresQueueBatchBytes(t *testing.T) {
+	const payload = `{"resourceLogs":[{"resource":{},"scopeLogs":[{"logRecords":[{"body":{"stringValue":"0123456789"}}]}]}]}`
+	snaps := instrument.Snapshots{"sha256:r": json.RawMessage(payload), "sha256:two": json.RawMessage(
+		`{"resourceLogs":[{"resource":{},"scopeLogs":[{"logRecords":[{"body":{"stringValue":"0123456789"}}]}]},{"resource":{},"scopeLogs":[{"logRecords":[{"body":{"stringValue":"0123456789"}}]}]}]}`)}
+	one, err := snaps.Payload("sha256:r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := one.Proto()
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := batchEvents([]batchStep{{"in", 0, 1}, {"in", 10, 1}, {"out", 10, 2}})
+	events[1].Snapshot, events[2].Snapshot, events[3].Snapshot = "sha256:r", "sha256:r", "sha256:two"
+	b, err := Batch(BatchInput{
+		Processor: "batch", Pipeline: "logs", Signal: "logs",
+		Settings: BatchSettings{Type: TypeQueueBatch, SendBatchSize: 2 * len(raw), Timeout: "300ms", Sizer: "bytes"},
+		Timeout:  300 * time.Millisecond, Events: events, Snapshots: snaps, Completed: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f := b.Flushes[0]; f.Trigger != TriggerSize || f.Left != 0 {
+		t.Fatalf("flush = %+v (notes %v)", f, b.Notes)
+	}
+}

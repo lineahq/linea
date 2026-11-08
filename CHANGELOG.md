@@ -7,6 +7,16 @@ change APIs, report schemas and persisted formats; the release notes say how.
 
 ## Unreleased
 
+- Collector 0.165.0 joins the runtime support table. The debugger explains
+  the new `queue_batch` processor like the batch processor (sends, triggers,
+  partitions, client context, verification against its metrics), and the
+  batching recommendations name its options. Reports gain batch settings
+  `sizer`, `cache_size` and `unbatched`, the batcher field `evicted` and the
+  send trigger `evicted`.
+- New recommendation `batch.exporter_batches`: a batch or queue_batch
+  processor in a pipeline whose every exporter already batches in its own
+  `sending_queue::batch`.
+
 ## [0.1.1]
 
 - Releases carry third-party notices, which 0.1.0 lacked: every CLI archive

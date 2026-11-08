@@ -1,5 +1,5 @@
 import type { Batching } from '../api/types';
-import { batcherLabel, durationMs, fmtMs, itemNoun, TRIGGER_LABELS, triggerCounts, triggerOf, type Trigger } from '../inspect/batching';
+import { batcherLabel, durationMs, fmtMs, itemNoun, settingNames, TRIGGER_LABELS, triggerCounts, triggerOf, type Trigger } from '../inspect/batching';
 
 /** BatchingRow is one setting or outcome of a batch processor in both runs. */
 export interface BatchingRow {
@@ -38,16 +38,25 @@ function settingRows(a?: Batching, b?: Batching): BatchingRow[] {
   const s = (x: Batching | undefined, f: (b: Batching) => string) => (x ? f(x) : NONE);
   const max = (x: Batching) => (x.settings.send_batch_max_size ? String(x.settings.send_batch_max_size) : 'no limit');
   const keys = (x: Batching) => (x.settings.metadata_keys?.length ? x.settings.metadata_keys.join(', ') : 'none');
+  // One processor ID has one type in both runs; name the settings as it does.
+  const n = settingNames((b ?? a)!.settings);
+  const queueBatch = (b ?? a)!.settings.type === 'queue_batch';
   const rows = [
-    row('send_batch_size', s(a, (x) => String(x.settings.send_batch_size)), s(b, (x) => String(x.settings.send_batch_size))),
-    row('timeout', s(a, (x) => x.settings.timeout), s(b, (x) => x.settings.timeout)),
-    row('send_batch_max_size', s(a, max), s(b, max)),
-    row('metadata_keys', s(a, keys), s(b, keys)),
+    row(n.size, s(a, (x) => String(x.settings.send_batch_size)), s(b, (x) => String(x.settings.send_batch_size))),
+    row(n.timeout, s(a, (x) => x.settings.timeout), s(b, (x) => x.settings.timeout)),
+    row(n.maxSize, s(a, max), s(b, max)),
+    row(n.keys, s(a, keys), s(b, keys)),
   ];
   // The two duration strings may spell one value differently ("1s", "1000ms").
   if (a && b && durationMs(a.settings.timeout) === durationMs(b.settings.timeout)) rows[1].changed = false;
-  if (a?.settings.metadata_keys?.length || b?.settings.metadata_keys?.length) {
-    rows.push(row('metadata_cardinality_limit', s(a, (x) => String(x.settings.metadata_cardinality_limit)), s(b, (x) => String(x.settings.metadata_cardinality_limit))));
+  if (queueBatch) {
+    const sizer = (x: Batching) => (x.settings.unbatched ? 'no batch section' : x.settings.sizer || 'items');
+    rows.push(row('batch::sizer', s(a, sizer), s(b, sizer)));
+    if (a?.settings.metadata_keys?.length || b?.settings.metadata_keys?.length) {
+      rows.push(row(n.limit, s(a, (x) => String(x.settings.cache_size ?? 0)), s(b, (x) => String(x.settings.cache_size ?? 0))));
+    }
+  } else if (a?.settings.metadata_keys?.length || b?.settings.metadata_keys?.length) {
+    rows.push(row(n.limit, s(a, (x) => String(x.settings.metadata_cardinality_limit)), s(b, (x) => String(x.settings.metadata_cardinality_limit))));
   }
   return rows;
 }

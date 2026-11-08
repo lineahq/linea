@@ -14,6 +14,7 @@ const TITLES: Record<string, string> = {
   'config.memory_limiter_not_first': 'memory_limiter is not first',
   'config.unused_component': 'Unused component',
   'batch.chained': 'Several batch processors in one pipeline',
+  'batch.exporter_batches': 'Exporters batch again',
   'filter.no_effect': 'Filter conditions not tested',
   'filter.condition_never_matched': 'Filter condition not tested',
   'filter.after_batch': 'Filter runs after batch',

@@ -80,7 +80,7 @@ func filterMoveEarlier(in Input) []Recommendation {
 		}
 		ids := pipelineIDs(p)
 		at := slices.Index(ids, pl.Filter)
-		if at < n || hasBatchBefore(ids, at) {
+		if at < n || hasBatchBefore(in, pl.Pipeline, ids, at) {
 			continue // filter.after_batch covers a filter behind a batch.
 		}
 		skipped := make([]string, n)
@@ -126,9 +126,9 @@ func placementCoverage(pl Placement) []string {
 	return out
 }
 
-func hasBatchBefore(ids []string, at int) bool {
+func hasBatchBefore(in Input, pipeline string, ids []string, at int) bool {
 	for _, id := range ids[:max(at, 0)] {
-		if componentType(id) == "batch" {
+		if batches(in, pipeline, id) {
 			return true
 		}
 	}

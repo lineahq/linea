@@ -360,7 +360,7 @@ func Execute(ctx context.Context, req Request) (*Report, error) {
 	}
 	rep.Recommendations = recommend.Recommend(recommend.Input{Topology: rep.Topology, Stages: rep.Stages, Filtering: rep.Filtering,
 		OTTL: rep.OTTL, Batching: rep.Batching, Grouping: rep.Grouping, Sampling: rep.Sampling, Placements: placements, DeadWrites: dead,
-		ContextLosses: contextLosses(resolved, rep.Topology)})
+		ContextLosses: contextLosses(resolved, rep.Topology), ExporterBatches: exporterBatches(resolved)})
 	if len(assertions) > 0 {
 		if rep.Assertions, err = assertion.Evaluate(assertions, rep.Topology, rep.Result); err != nil {
 			return nil, err

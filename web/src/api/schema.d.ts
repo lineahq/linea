@@ -1877,6 +1877,7 @@ export interface components {
         };
         BatchBatcher: {
             arrivals: number;
+            evicted?: boolean;
             flushes: number;
             items: number;
             metadata?: {
@@ -1901,11 +1902,15 @@ export interface components {
             wait_ms?: components["schemas"]["BatchWait"];
         };
         BatchSettings: {
+            cache_size?: number;
             metadata_cardinality_limit?: number;
             metadata_keys?: string[];
             send_batch_max_size: number;
             send_batch_size: number;
+            sizer?: string;
             timeout: string;
+            type?: string;
+            unbatched?: boolean;
         };
         BatchSource: {
             arrival: number;

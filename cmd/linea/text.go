@@ -361,12 +361,21 @@ func changeLine(c *platform.RecommendationChange) string {
 	return string(c.Op)
 }
 
-// writeBatching prints one batch processor's settings and its sends.
+// writeBatching prints one batching processor's settings and its sends.
 func writeBatching(printf func(string, ...any), b *analysis.Batching) {
 	st := b.Settings
-	printf("  %s (pipeline %s, %s): send_batch_size %d, timeout %s, send_batch_max_size %d", b.Processor, b.Pipeline, b.Signal, st.SendBatchSize, st.Timeout, st.SendBatchMaxSize)
+	unit := ""
+	if st.Bytes() {
+		unit = " bytes"
+	}
+	if st.Unbatched {
+		printf("  %s (pipeline %s, %s): no batch section, every request is sent as it is", b.Processor, b.Pipeline, b.Signal)
+	} else {
+		printf("  %s (pipeline %s, %s): %s %d%s, %s %s, %s %d%s", b.Processor, b.Pipeline, b.Signal,
+			st.SizeName(), st.SendBatchSize, unit, st.TimeoutName(), st.Timeout, st.MaxSizeName(), st.SendBatchMaxSize, unit)
+	}
 	if len(st.MetadataKeys) > 0 {
-		printf(", metadata_keys %s", strings.Join(st.MetadataKeys, ", "))
+		printf(", %s %s", st.KeysName(), strings.Join(st.MetadataKeys, ", "))
 	}
 	printf("\n    %d request(s) in, %d batch(es) out, %s\n", len(b.Arrivals), len(b.Flushes), b.Verification)
 	for _, f := range b.Flushes {

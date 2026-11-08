@@ -348,6 +348,9 @@
           "arrivals": {
             "type": "integer"
           },
+          "evicted": {
+            "type": "boolean"
+          },
           "flushes": {
             "type": "integer"
           },
@@ -439,6 +442,9 @@
       },
       "BatchSettings": {
         "properties": {
+          "cache_size": {
+            "type": "integer"
+          },
           "metadata_cardinality_limit": {
             "type": "integer"
           },
@@ -454,8 +460,17 @@
           "send_batch_size": {
             "type": "integer"
           },
+          "sizer": {
+            "type": "string"
+          },
           "timeout": {
             "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "unbatched": {
+            "type": "boolean"
           }
         },
         "required": [

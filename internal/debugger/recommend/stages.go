@@ -16,7 +16,7 @@ import (
 // that enrich from the environment cannot act in a debug run, and the rest
 // have rules of their own.
 var noEffectExempt = map[string]bool{
-	"batch": true, "memory_limiter": true,
+	"batch": true, "queue_batch": true, "memory_limiter": true,
 	"k8sattributes": true, "resourcedetection": true,
 	"filter": true, "transform": true, "groupbyattrs": true, "tail_sampling": true,
 }
@@ -123,15 +123,21 @@ func sizeNeverReached(in Input) []Recommendation {
 		}
 		noun := itemNoun(b.Signal)
 		per := float64(items) / float64(len(b.Flushes))
+		st := b.Settings
 		var summary string
-		if span := last - first; span > 0 && items > 0 {
+		switch span := last - first; {
+		case st.Bytes():
+			// Arrivals count items, so the rate says nothing about bytes.
+			summary = fmt.Sprintf("Every send of %s came from its %s %s, never reaching %s %d bytes; it sent %s %ss per send on average. A longer %s makes fuller batches with longer waits; a %s near the serialized size of the batch you want sends by size.",
+				b.Processor, st.Timeout, st.TimeoutName(), st.SizeName(), size, number(per), noun, st.TimeoutName(), st.SizeName())
+		case span > 0 && items > 0:
 			rate := float64(items) * 1000 / span
 			fill := time.Duration(float64(size) / rate * float64(time.Second))
-			summary = fmt.Sprintf("At this input's rate of about %s %ss/s, send_batch_size %d fills after %s; the %s timeout sent every batch instead, %s %ss per send on average. A longer timeout makes fuller batches with longer waits; a send_batch_size near the batch you want sends by size at this rate.",
-				number(rate), noun, size, roundDuration(fill), b.Settings.Timeout, number(per), noun)
-		} else {
-			summary = fmt.Sprintf("Every send of %s came from its %s timeout, with at most %s against send_batch_size %d. The input arrived at once, so its rate does not say which setting would decide.",
-				b.Processor, b.Settings.Timeout, plural(most, noun), size)
+			summary = fmt.Sprintf("At this input's rate of about %s %ss/s, %s %d fills after %s; the %s %s sent every batch instead, %s %ss per send on average. A longer %s makes fuller batches with longer waits; a %s near the batch you want sends by size at this rate.",
+				number(rate), noun, st.SizeName(), size, roundDuration(fill), st.Timeout, st.TimeoutName(), number(per), noun, st.TimeoutName(), st.SizeName())
+		default:
+			summary = fmt.Sprintf("Every send of %s came from its %s %s, with at most %s against %s %d. The input arrived at once, so its rate does not say which setting would decide.",
+				b.Processor, st.Timeout, st.TimeoutName(), plural(most, noun), st.SizeName(), size)
 		}
 		out = append(out, Recommendation{
 			Kind: KindInefficiency, Confidence: ConfidenceObserved, Pipeline: b.Pipeline,

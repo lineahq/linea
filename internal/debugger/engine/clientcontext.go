@@ -9,20 +9,24 @@ import (
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/confmap"
 
+	"github.com/lineahq/linea/internal/debugger/analysis"
 	"github.com/lineahq/linea/internal/debugger/config"
 	"github.com/lineahq/linea/internal/debugger/recommend"
 	"github.com/lineahq/linea/internal/debugger/topology"
 )
 
-// contextLosses lists, per pipeline, the components behind a batch
+// contextLosses lists, per pipeline, the components behind a batching
 // processor that read something from the request's client context the
 // batch does not pass on. The batch processor sends with
 // client.NewContext(context.Background(), ...) holding only the values of
 // its metadata_keys (lowercased; batchprocessor v0.162.0 newShard), so the
 // client address, authentication data and gRPC metadata are gone behind
 // it, and so is every metadata key it does not list. What each component
-// reads comes from its configuration (clientReads). See
-// docs/internals/recommendations.md.
+// reads comes from its configuration (clientReads).
+// queue_batch (v0.165.0) does the same for a send that joins several
+// requests, keeping only its batch::partition::metadata_keys; a send of
+// one request keeps that request's context.
+// See docs/internals/recommendations.md.
 func contextLosses(resolved *config.Resolved, g *topology.Graph) []recommend.ContextLoss {
 	if resolved == nil || resolved.Config == nil || g == nil {
 		return nil
@@ -30,7 +34,7 @@ func contextLosses(resolved *config.Resolved, g *topology.Graph) []recommend.Con
 	var out []recommend.ContextLoss
 	for _, p := range g.Pipelines {
 		ids := processorIDs(p)
-		first := slices.IndexFunc(ids, func(id string) bool { return typeOf(id) == "batch" })
+		first := slices.IndexFunc(ids, func(id string) bool { return merges(resolved, id) })
 		if first < 0 {
 			continue
 		}
@@ -50,7 +54,7 @@ func contextLosses(resolved *config.Resolved, g *topology.Graph) []recommend.Con
 			}
 			loss := recommend.ContextLoss{Pipeline: p.ID, Component: ref}
 			for _, b := range ids[first:at] {
-				if typeOf(b) != "batch" {
+				if !merges(resolved, b) {
 					continue
 				}
 				keys := batchMetadataKeys(resolved, b)
@@ -66,7 +70,7 @@ func contextLosses(resolved *config.Resolved, g *topology.Graph) []recommend.Con
 				}
 			}
 			if loss.Batch != "" {
-				loss.Batches = slices.DeleteFunc(slices.Clone(ids[first:at]), func(id string) bool { return typeOf(id) != "batch" })
+				loss.Batches = slices.DeleteFunc(slices.Clone(ids[first:at]), func(id string) bool { return !merges(resolved, id) })
 				out = append(out, loss)
 			}
 		}
@@ -74,14 +78,37 @@ func contextLosses(resolved *config.Resolved, g *topology.Graph) []recommend.Con
 	return out
 }
 
-// batchMetadataKeys are a batch processor's metadata_keys, lowercased as
-// the processor keeps them.
+// merges reports whether processor id joins requests into batches it sends
+// with a new context: every batch processor, and a queue_batch processor
+// with a batch section (without one it sends each request with its own
+// context; exporterhelper v0.165.0).
+func merges(resolved *config.Resolved, id string) bool {
+	switch typeOf(id) {
+	case analysis.TypeBatch:
+		return true
+	case analysis.TypeQueueBatch:
+		var cid component.ID
+		if err := cid.UnmarshalText([]byte(id)); err != nil {
+			return false
+		}
+		s, _, err := queueBatchSettings(resolved.Config.Processors[cid])
+		return err == nil && !s.Unbatched
+	}
+	return false
+}
+
+// batchMetadataKeys are a batching processor's metadata_keys (queue_batch:
+// batch::partition::metadata_keys), lowercased as the processor keeps them.
 func batchMetadataKeys(resolved *config.Resolved, id string) []string {
 	conf, ok := marshalled(resolved.Config.Processors, id)
 	if !ok {
 		return nil
 	}
-	raw, _ := conf.Get("metadata_keys").([]any)
+	field := "metadata_keys"
+	if typeOf(id) == analysis.TypeQueueBatch {
+		field = "batch::partition::metadata_keys"
+	}
+	raw, _ := conf.Get(field).([]any)
 	var keys []string
 	for _, k := range raw {
 		if s, ok := k.(string); ok {

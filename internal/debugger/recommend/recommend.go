@@ -215,6 +215,9 @@ type Input struct {
 	// reader does not pass on; computed from the configuration, so static
 	// recommendations have them too.
 	ContextLosses []ContextLoss
+	// ExporterBatches are the exporters that batch in their own sending
+	// queue; computed from the configuration.
+	ExporterBatches []ExporterBatch
 }
 
 type rule struct {
@@ -232,6 +235,7 @@ var rules = []rule{
 	{"config.memory_limiter_not_first", OutputUnchanged, memoryLimiterNotFirst},
 	{"config.unused_component", OutputUnchanged, unusedComponent},
 	{"batch.chained", OutputRegrouped, batchChained},
+	{"batch.exporter_batches", OutputRegrouped, batchBeforeExporterBatching},
 	{"filter.no_effect", "", filterNoEffect},
 	{"filter.condition_never_matched", "", conditionNeverMatched},
 	{"filter.after_batch", OutputUnchanged, filterAfterBatch},
@@ -286,8 +290,8 @@ func Recommend(in Input) []Recommendation {
 }
 
 // Static is the recommendations the configuration alone supports.
-func Static(g *topology.Graph, losses []ContextLoss) []Recommendation {
-	return Recommend(Input{Topology: g, ContextLosses: losses})
+func Static(g *topology.Graph, losses []ContextLoss, exporters []ExporterBatch) []Recommendation {
+	return Recommend(Input{Topology: g, ContextLosses: losses, ExporterBatches: exporters})
 }
 
 // processorRef is the topology ref of a processor ID.
@@ -339,4 +343,20 @@ func itemNoun(signal string) string {
 		return "log record"
 	}
 	return "item"
+}
+
+// batches reports whether processor id joins requests into batches: a
+// batch processor, or a queue_batch processor unless the run's batching
+// evidence shows it without a batch section (it then queues and sends every
+// request as it is). Without a run every queue_batch counts.
+func batches(in Input, pipeline, id string) bool {
+	if !analysis.IsBatcher(componentType(id)) {
+		return false
+	}
+	for _, b := range in.Batching {
+		if b != nil && b.Processor == id && (pipeline == "" || b.Pipeline == pipeline) && b.Settings.Unbatched {
+			return false
+		}
+	}
+	return true
 }

@@ -195,7 +195,7 @@ func CompleteInspection(ctx context.Context, in *InspectionInput) (*Inspection, 
 	out.Diagnostics = append(out.Diagnostics, config.StandInDiagnostics(resolved.References)...)
 	g := graph(c, resolved, factories)
 	out.Topology = &g
-	out.Recommendations = recommend.Static(&g, contextLosses(resolved, &g))
+	out.Recommendations = recommend.Static(&g, contextLosses(resolved, &g), exporterBatches(resolved))
 	out.References = resolved.References
 	// Without a scenario the gaps say what a run's scenario has to supply.
 	plugins, err := c.Plugins()

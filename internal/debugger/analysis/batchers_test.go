@@ -103,3 +103,37 @@ func TestBatchTimesEachBatcherFromItsFirstRequest(t *testing.T) {
 		t.Fatalf("notes = %v", b.Notes)
 	}
 }
+
+// TestBatchEvictsQueueBatchPartitions: beyond batch::partition::cache_size
+// queue_batch flushes and removes its least recently used partition, with
+// no cardinality refusal; a later request with its values starts a new one.
+func TestBatchEvictsQueueBatchPartitions(t *testing.T) {
+	events := batchEvents([]batchStep{{"in", 0, 1}, {"in", 10, 1}, {"out", 10, 1}, {"in", 20, 1}})
+	lineage := []RecordLineage{arrivalLineage(10, 2, ""), arrivalLineage(11, 3, ""), arrivalLineage(12, 5, "")}
+	lineage[0].Hops = append(lineage[0].Hops, Hop{Parent: 1, Seq: 4, Kind: instrument.KindEgress, Component: "batch", Pipeline: "logs"})
+	b, err := Batch(BatchInput{
+		Processor: "batch", Pipeline: "logs", Signal: "logs",
+		Settings: BatchSettings{Type: TypeQueueBatch, SendBatchSize: 8, Timeout: "200ms", MetadataKeys: []string{"tenant"}, CacheSize: 1, MetadataCardinalityLimit: 1},
+		Timeout:  200 * time.Millisecond, Events: events, Lineage: lineage,
+		InputHeaders: map[int]map[string][]string{10: {"tenant": {"a"}}, 11: {"tenant": {"b"}}, 12: {"tenant": {"a"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f := b.Flushes[0]; f.Trigger != TriggerEvicted || f.Batcher != 0 {
+		t.Fatalf("flush = %+v, want an eviction of batcher 0 (notes %v)", f, b.Notes)
+	}
+	var got []int
+	for _, a := range b.Arrivals {
+		got = append(got, a.Batcher)
+	}
+	if want := []int{0, 1, 2}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("arrival batchers = %v, want %v", got, want)
+	}
+	if !b.Batchers[0].Evicted || !b.Batchers[1].Evicted || b.Batchers[2].Evicted || b.Batchers[1].Refused {
+		t.Fatalf("batchers = %+v", b.Batchers)
+	}
+	if !strings.Contains(strings.Join(b.Notes, "\n"), "cache_size 1") {
+		t.Fatalf("notes = %v", b.Notes)
+	}
+}

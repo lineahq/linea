@@ -55,6 +55,7 @@ in `coverage`.
 | `config.memory_limiter_not_first` | risk | a memory_limiter is not the first processor of a pipeline | `swap` moving it first |
 | `config.unused_component` | redundancy | a component is in `topology.unused` | none |
 | `batch.chained` | redundancy | a pipeline has two or more batch processors | none |
+| `batch.exporter_batches` | redundancy | (static) a batching processor runs in a pipeline whose every exporter batches in its own sending queue (`sending_queue::batch`) | none; the summary says the processor is the one that can go |
 | `filter.no_effect` | untested | a filter processor received records, dropped none and no request failed | none |
 | `filter.condition_never_matched` | untested | in verified requests of a filter that dropped something, a condition was evaluated and never matched, without errors | none |
 | `filter.after_batch` | ordering | a filter that dropped records runs after a batch processor in the same pipeline | `swap` moving the filter before the batch; a blocker names the first processor between them the filter's placement checks (below) do not clear |
@@ -99,6 +100,31 @@ Details the rules hold to:
   time, it states the input's rate, how long `send_batch_size` takes to fill
   at that rate and the average batch the timeout sent. When everything
   arrived at once, it says the rate cannot decide between the settings.
+- The `batch.*` and `grouping.after_batch` rules treat `queue_batch`
+  (0.165, `batching.md`) as a batching processor and name its own options
+  in their text and changes (`batch::min_size`, `batch::flush_timeout`,
+  `batch::partition::metadata_keys`). A `queue_batch` without batching
+  (`batch: {enabled: false}`, reported `unbatched`) sends every request as
+  it arrives, so these rules skip it (`batches` in `recommend.go`).
+  `batch.size_never_reached` gives no rate for the `bytes` sizer, and
+  `batch.tiny_batchers` does not replay it or a processor whose partition
+  cache evicted batchers. The replay follows queue_batch's timer: it
+  restarts when a request reaches an empty batcher and is not reset by a
+  size send that leaves nothing pending. `batch.drops_client_context`
+  applies only to its sends that join several requests.
+- `batch.exporter_batches` reads each exporter's `sending_queue::batch`
+  from the resolved configuration (`exporterBatches` in
+  `internal/debugger/engine/exporterbatch.go`). Verified against
+  exporterhelper v0.162.0 and v0.165.0: `NewDefaultQueueConfig` leaves the
+  batch section a `configoptional.Default`, so an exporter batches only when
+  its configuration sets `sending_queue::batch` (without `enabled: false`)
+  or the alpha gate `pkg.exporterhelper.queueBatchEnabled` is on, and a
+  disabled `sending_queue` turns it off too. A pipeline with any exporter
+  that does not batch, or a connector, is left alone. The run cannot show
+  the exporters' batches (network exporters are replaced by a capture), so
+  the rule stays static and its coverage says so; it notes when the
+  processor's `metadata_keys` kept values apart that the exporter's batches
+  would mix.
 - `sampling.late_spans` cites at most ten traces as evidence; so do the other
   sampling rules. `sampling.policy_never_decides` also cites its policy and
   `sampling.policy_shadowed` both policies (`#policy[<name>]`).

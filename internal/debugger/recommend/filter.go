@@ -138,8 +138,9 @@ func conditionNeverMatched(in Input) []Recommendation {
 	return out
 }
 
-// filterAfterBatch: a filter after batch drops records the batch processor
-// already buffered and sent.
+// filterAfterBatch: a filter after a batching processor (batch or
+// queue_batch) drops records the batching processor already buffered and
+// sent.
 func filterAfterBatch(in Input) []Recommendation {
 	var out []Recommendation
 	for _, r := range filterRuns(in.Filtering, true) {
@@ -154,7 +155,7 @@ func filterAfterBatch(in Input) []Recommendation {
 		at := slices.Index(ids, r.processor)
 		batch := -1
 		for i := range at {
-			if componentType(ids[i]) == "batch" {
+			if batches(in, r.pipeline, ids[i]) {
 				batch = i
 				break
 			}

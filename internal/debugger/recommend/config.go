@@ -46,29 +46,29 @@ func unusedComponent(in Input) []Recommendation {
 	return out
 }
 
-// batchChained: a second batch processor in one pipeline regroups what the
-// first already sent and adds its own wait.
+// batchChained: a second batching processor (batch or queue_batch) in one
+// pipeline regroups what the first already sent and adds its own wait.
 func batchChained(in Input) []Recommendation {
 	var out []Recommendation
 	for _, p := range in.Topology.Pipelines {
-		var batches []string
+		var chain []string
 		for _, id := range pipelineIDs(p) {
-			if componentType(id) == "batch" {
-				batches = append(batches, id)
+			if batches(in, p.ID, id) {
+				chain = append(chain, id)
 			}
 		}
-		if len(batches) < 2 {
+		if len(chain) < 2 {
 			continue
 		}
-		refs := make([]string, len(batches))
-		for i, id := range batches {
+		refs := make([]string, len(chain))
+		for i, id := range chain {
 			refs[i] = processorRef(id)
 		}
 		out = append(out, Recommendation{
 			Kind: KindRedundancy, Confidence: ConfidenceStatic, Pipeline: p.ID,
 			Components: refs,
-			Summary: fmt.Sprintf("Pipeline %s batches %d times (%s): each later batch processor regroups what the one before it sent and adds its own wait. One batch processor, usually the last, is enough.",
-				p.ID, len(batches), strings.Join(batches, ", ")),
+			Summary: fmt.Sprintf("Pipeline %s batches %d times (%s): each later batching processor regroups what the one before it sent and adds its own wait. One batching processor, usually the last, is enough.",
+				p.ID, len(chain), strings.Join(chain, ", ")),
 			Evidence: []Evidence{{SectionTopology, "pipeline/" + p.ID}},
 		})
 	}

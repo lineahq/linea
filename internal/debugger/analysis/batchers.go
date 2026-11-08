@@ -9,24 +9,30 @@ import (
 	"github.com/lineahq/linea/internal/debugger/instrument"
 )
 
-// shard is one batcher of the replay: its pending items and timer.
+// shard is one batcher of the replay: its pending items, their size in the
+// sizer's unit (items or bytes) and its timer.
 type shard struct {
 	key      string
 	metadata map[string][]string
 	unknown  bool
 	refused  bool
+	evicted  bool
 	pending  int
+	size     int
 	nextTick time.Time
 	arrivals int
 	items    int
 	flushes  int
 }
 
-// shards replays the batchers of one batch processor. Without
+// shards replays the batchers of one batching processor. Without
 // metadata_keys there is one, whose timer starts with the processor; with
 // them, batchprocessor v0.162.0 (multiShardBatcher) creates a batcher, and
 // starts its timer, at the first request carrying a new combination of
-// the listed keys' values from client.Info.Metadata.
+// the listed keys' values from client.Info.Metadata. queue_batch
+// (v0.165.0 multiBatcher) does the same per partition, without a
+// cardinality limit: beyond batch::partition::cache_size partitions it
+// flushes and removes the least recently used one.
 type shards struct {
 	in      BatchInput
 	keys    []string
@@ -35,10 +41,17 @@ type shards struct {
 	list    []shard
 	roots   map[int][]int
 	refused int
+	// lru holds the indexes of queue_batch's live partitions, least
+	// recently used first.
+	lru     []int
+	evicted int
 }
 
 func newShards(in BatchInput, start time.Time) *shards {
 	s := &shards{in: in, byKey: map[string]int{}, limit: in.Settings.MetadataCardinalityLimit}
+	if in.Settings.QueueBatch() {
+		s.limit = 0
+	}
 	for _, k := range in.Settings.MetadataKeys {
 		s.keys = append(s.keys, strings.ToLower(k))
 	}
@@ -56,9 +69,12 @@ func newShards(in BatchInput, start time.Time) *shards {
 	return s
 }
 
-// arrive assigns an arrival to its batcher and returns the batcher index.
-func (s *shards) arrive(e instrument.Event, items int) int {
+// arrive assigns an arrival of items, size in the sizer's unit, to its
+// batcher and returns the batcher index.
+func (s *shards) arrive(e instrument.Event, items, size int) int {
 	i := 0
+	timed := s.in.Timeout > 0 && s.in.Settings.SendBatchSize > 0 && !e.Time.IsZero()
+	qb := s.in.Settings.QueueBatch()
 	if len(s.keys) > 0 {
 		key, md, unknown := s.keyOf(e.Seq)
 		var ok bool
@@ -67,14 +83,21 @@ func (s *shards) arrive(e instrument.Event, items int) int {
 			if s.limit > 0 && len(s.byKey) >= s.limit && !unknown {
 				sh.refused = true
 			}
-			if s.in.Timeout > 0 && s.in.Settings.SendBatchSize > 0 && !e.Time.IsZero() {
+			if timed {
 				sh.nextTick = e.Time.Add(s.in.Timeout)
+			}
+			if qb && s.in.Settings.CacheSize > 0 && len(s.lru) >= s.in.Settings.CacheSize {
+				s.evict()
 			}
 			i = len(s.list)
 			s.list = append(s.list, sh)
 			if !sh.refused {
 				s.byKey[key] = i
 			}
+		}
+		if qb {
+			s.lru = slices.DeleteFunc(s.lru, func(j int) bool { return j == i })
+			s.lru = append(s.lru, i)
 		}
 	}
 	sh := &s.list[i]
@@ -83,9 +106,27 @@ func (s *shards) arrive(e instrument.Event, items int) int {
 		s.refused++
 		return i
 	}
+	if qb && timed && sh.pending == 0 {
+		// The request starts a pending batch, which restarts the timer.
+		sh.nextTick = e.Time.Add(s.in.Timeout)
+	}
 	sh.items += items
 	sh.pending += items
+	sh.size += size
 	return i
+}
+
+// evict removes queue_batch's least recently used partition, which flushes
+// what it holds; a later request with its values starts a new one.
+func (s *shards) evict() {
+	if len(s.lru) == 0 {
+		return
+	}
+	i := s.lru[0]
+	s.lru = s.lru[1:]
+	s.list[i].evicted = true
+	delete(s.byKey, s.list[i].key)
+	s.evicted++
 }
 
 // of returns the batcher a flush came from: the batcher of the arrivals
@@ -154,7 +195,7 @@ func (s *shards) report(notes []string) ([]BatchBatcher, []string) {
 		if md == nil {
 			md = map[string][]string{}
 		}
-		out = append(out, BatchBatcher{Metadata: md, Unknown: sh.unknown, Refused: sh.refused, Arrivals: sh.arrivals, Items: sh.items, Flushes: sh.flushes})
+		out = append(out, BatchBatcher{Metadata: md, Unknown: sh.unknown, Refused: sh.refused, Evicted: sh.evicted, Arrivals: sh.arrivals, Items: sh.items, Flushes: sh.flushes})
 		if sh.unknown {
 			unknown += sh.arrivals
 		}
@@ -164,6 +205,9 @@ func (s *shards) report(notes []string) ([]BatchBatcher, []string) {
 	}
 	if s.refused > 0 {
 		notes = append(notes, strconv.Itoa(s.refused)+" requests carried a new combination of metadata values beyond metadata_cardinality_limit "+strconv.Itoa(s.limit)+"; the processor refuses them with a permanent error")
+	}
+	if s.evicted > 0 {
+		notes = append(notes, strconv.Itoa(s.evicted)+" partitions were flushed and removed to stay within batch::partition::cache_size "+strconv.Itoa(s.in.Settings.CacheSize)+"; partitions queue_batch removes after batch::partition::idle_timeout are not replayed")
 	}
 	return out, notes
 }

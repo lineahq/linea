@@ -19,9 +19,9 @@ import (
 func configuredAccess(typ string, cfg component.Config, signal pipeline.Signal) (reads, writes []features.FieldRead, reason string) {
 	rec, res, scope := features.LevelRecord, features.LevelResource, features.LevelScope
 	switch typ {
-	case "batch", "memory_limiter":
+	case "batch", "queue_batch", "memory_limiter":
 		// They pass records on unchanged and look at none of their fields
-		// (batch's metadata_keys read the request's client metadata).
+		// (the batchers' metadata_keys read the request's client metadata).
 		return nil, nil, ""
 	case "filter":
 		// A filter removes records and changes none.

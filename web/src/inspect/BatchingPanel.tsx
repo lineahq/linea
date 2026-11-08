@@ -7,8 +7,8 @@ import {
   verificationText, type BatchRow, type Trigger,
 } from './batching';
 
-const TONES: Record<Trigger, GlyphTone> = { size: 'keep', timeout: 'mod', shutdown: 'none', immediate: 'none' };
-const FILTERS: [Trigger | 'all', string][] = [['all', 'All'], ['size', 'Size reached'], ['timeout', 'Timer'], ['shutdown', 'Shutdown'], ['immediate', 'Right away']];
+const TONES: Record<Trigger, GlyphTone> = { size: 'keep', timeout: 'mod', shutdown: 'none', immediate: 'none', evicted: 'none' };
+const FILTERS: [Trigger | 'all', string][] = [['all', 'All'], ['size', 'Size reached'], ['timeout', 'Timer'], ['shutdown', 'Shutdown'], ['immediate', 'Right away'], ['evicted', 'Partition evicted']];
 const filters: RecordFilter<BatchRow>[] = FILTERS.map(([id, label]) => ({ id, label, match: (r) => id === 'all' || r.trigger === id }));
 
 /**
@@ -52,7 +52,7 @@ export function BatchingPanel({ batching, live }: { batching?: Batching; live?: 
                 <td className="bt-num">{x.requests}</td>
                 <td className="bt-num">{x.items}</td>
                 <td className="bt-num">{x.batches}</td>
-                <td>{x.refused ? 'refused: over metadata_cardinality_limit' : x.reasons.map(([t, n]) => `${n} ${TRIGGER_LABELS[t]}`).join(', ') || 'nothing sent'}</td>
+                <td>{x.why}</td>
               </tr>
             ))}
           </tbody>
