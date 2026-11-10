@@ -22,9 +22,9 @@ const (
 	// oldest make room for a new token.
 	maxTokens       = 1000
 	maxStoredTokens = 10 * maxTokens
-	maxSessions    = 10000
-	maxTokenField  = 256
-	maxTokenGroups = 64
+	maxSessions     = 10000
+	maxTokenField   = 256
+	maxTokenGroups  = 64
 	// tokenRetention is how long an expired token is kept for listing.
 	tokenRetention = 30 * 24 * time.Hour
 )
