@@ -151,15 +151,16 @@ permission applies on top (see [team server](team-server.md#fleet-and-live-captu
 - The web client offers raw points with a "needs fleet permission" label and
   fleet refuses the capture if the credential lacks the grant; the refusal
   says so and names `raw_principals`.
-- The debugger's deployments grant it with a setting, off by default:
-  `LINEA_CAPTURE_RAW=true` in the Compose stack's `.env` or
-  `fleet.deploy.livecapture.rawCapture: true` in the Helm chart. Either puts
+- The debugger's deployments grant it with a setting, off by default: in
+  the Compose stack's `livecapture.json`, `raw_principals` with the
+  server's fleet credential ID (the middle field of `secrets/fleet_token`), or
+  `fleet.deploy.livecapture.rawCapture: true` in the Helm chart, which puts
   the server's own fleet credential into `raw_principals`. For a fleet you
   run yourself, add the server credential's ID to the plugin's
   `raw_principals`.
 - The default selection permits only points the Collector marks redacted.
-- On the Compose stack, whose one user is an admin, that user sees and controls
-  every capture.
+- On the Compose stack with only the built-in admin account, that account is
+  an admin and sees and controls every capture.
 
 A [team server](team-server.md#fleet-and-live-capture) authorizes each person
 (see [the roles](team-server.md#roles)):

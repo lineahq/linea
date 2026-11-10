@@ -238,8 +238,8 @@ go run ./cmd/linea run --config <yaml> --scenario <yaml> [--compare] [--normaliz
 go run ./cmd/linea test --config samples/<id>/config.yaml --scenario samples/<id>/scenario.yaml
 # The web client, HTTP API and MCP need a team server; locally that is the
 # Compose stack (docs/debugger/deploy-compose.md). `linea-server` refuses to
-# start without --config.
-LINEA_VERSION=dev docker compose -f deploy/compose/linea/compose.yaml up -d --build   # after a .env in deploy/compose/linea/ with LINEA_AUTH (docs/debugger/deploy-compose.md)
+# start without a config (--config or LINEA_* variables).
+LINEA_VERSION=dev docker compose -f deploy/compose/linea/compose.yaml up -d --build   # after creating deploy/compose/linea/secrets/ (docs/debugger/deploy-compose.md)
 scripts/debugger/compose-fleet.sh             # the same stack plus fleet and live capture on its PostgreSQL (compose.fleet.yaml)
 go generate ./internal/debugger/registry      # after an OCB manifest change
 go generate ./internal/debugger/workersrc     # before building a binary that builds runtimes

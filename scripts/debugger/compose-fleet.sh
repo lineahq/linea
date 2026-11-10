@@ -5,15 +5,25 @@
 #   1. creates the fleet and livecapture databases and roles (idempotent);
 #   2. stops fleet and the plugin and migrates both schemas (migrations stay
 #      explicit, and the plugin refuses to migrate while it runs);
-#   3. installs linea-server's fleet token, generated once and never printed,
-#      as the first fleet admin (no change once it is);
+#   3. installs the fleet token as the first fleet admin (no change once
+#      it is);
 #   4. starts the whole stack.
+# Nothing is generated: the secrets are files in the stack's secrets/
+# directory (LINEA_SECRETS_DIR), which the header of compose.fleet.yaml
+# lists with the commands that make them. This script names a missing one
+# before Compose starts anything, because Docker would make a directory in
+# its place.
 # --build builds the fleet and plugin images first. Set LINEA_VERSION as for
 # the stack itself (dev with --build to build from source).
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
 dir="$(cd "$(dirname "$0")/../../deploy/compose/linea" && { pwd -W 2>/dev/null || pwd; })"
 compose() { docker compose --project-directory "$dir" -f "$dir/compose.yaml" -f "$dir/compose.fleet.yaml" "$@"; }
+# Every secret and config file must exist.
+config="$(compose config)"
+while IFS= read -r f; do
+  [ -f "$f" ] || { echo "missing $f: create it as the header of compose.fleet.yaml shows" >&2; exit 1; }
+done < <(sed -n 's/^    file: //p' <<<"$config")
 case "${1:-}" in
   --build) compose build fleet livecapture-plugin ;;
   '') ;;

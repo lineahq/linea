@@ -7,6 +7,94 @@ change APIs, report schemas and persisted formats; the release notes say how.
 
 ## Unreleased
 
+**Upgrading from 0.2.0:** a Docker Compose stack moves its secrets from `.env`
+into files, changes a few `.env` settings and needs one cleanup, described in
+the first item below.
+
+- The Docker Compose stack is one stack for one person and for a team; they
+  differ only in `.env`. It runs five services (`postgres`, `seaweedfs`,
+  `linea`, `pool`, `builder`). There are no `LINEA_AUTH` modes, no HAProxy,
+  no `setup` or `bucket` service, no `LINEA_REPLICAS`, no fixed subnet and no
+  stand-in TLS certificate. The secrets are files in a `secrets/` directory
+  beside `compose.yaml`, which reach each service as Compose secrets (Compose
+  cannot create a secret from the environment or inline content in a
+  read-only service, and these are read-only); `.env` is optional and holds
+  only settings. `pool` and `builder` wait for the server's healthcheck. The
+  stack serves plain HTTP on `127.0.0.1:7070` (`LINEA_BIND`, `LINEA_PORT`);
+  for other machines, put your HTTPS reverse proxy in front of it
+  (`docs/debugger/deploy-compose.md` has a Caddy example). It runs one
+  instance; several are the Helm chart's job. It needs Docker Engine 25 and
+  Compose v2.24 or later.
+
+  **Upgrading a stack from 0.2.0:**
+
+  1. Fetch the new `compose.yaml` and `.env.example` (with
+     `compose.fleet.yaml`, also `livecapture.json` and `fleet-plugins.json`).
+  2. Move each secret from `.env` into its file, keeping the values:
+     `LINEA_POSTGRES_PASSWORD` is fixed in PostgreSQL's volume, so it must
+     stay exactly as it is. Then remove those lines from `.env`. The admin
+     password is new (at least 16 characters); a stack without OIDC gets an
+     empty `oidc_client_secret`.
+
+     ```sh
+     mkdir secrets && chmod 700 secrets
+     for name in postgres_password s3_access_key s3_secret_key worker_token builder_token; do
+       sed -n "s/^LINEA_$(echo $name | tr a-z A-Z)=//p" .env > secrets/$name
+     done
+     sed -n 's/^LINEA_OIDC_CLIENT_SECRET=//p' .env > secrets/oidc_client_secret
+     openssl rand -hex 32 > secrets/admin_password
+     sed -i.bak '/^LINEA_\(POSTGRES_PASSWORD\|S3_ACCESS_KEY\|S3_SECRET_KEY\|WORKER_TOKEN\|BUILDER_TOKEN\|OIDC_CLIENT_SECRET\)=/d' .env
+     rm .env.bak
+     ```
+
+     Check that each file holds the value without quotes. All seven files
+     must exist, `oidc_client_secret` empty without OIDC.
+  3. Remove `LINEA_AUTH` and `LINEA_REPLICAS`, and move the settings of the
+     old mode to their new names:
+
+     | 0.2.0 | Now |
+     | --- | --- |
+     | `LINEA_POSTGRES_PASSWORD`, `LINEA_S3_ACCESS_KEY`, `LINEA_S3_SECRET_KEY`, `LINEA_WORKER_TOKEN`, `LINEA_BUILDER_TOKEN` | The files `secrets/postgres_password`, `s3_access_key`, `s3_secret_key`, `worker_token`, `builder_token` (step 2) |
+     | `LINEA_AUTH=local` | Nothing: sign in as `admin` with the contents of `secrets/admin_password` |
+     | `LINEA_PUBLIC_URL` (oidc) | `LINEA_AUTHENTICATION_OIDC_REDIRECT_URL`, the full URL: `<LINEA_PUBLIC_URL>/auth/callback` |
+     | `LINEA_OIDC_ISSUER`, `LINEA_OIDC_CLIENT_ID`, `LINEA_OIDC_CLI_CLIENT_ID`, `LINEA_OIDC_GROUPS_CLAIM` | `LINEA_AUTHENTICATION_OIDC_ISSUER`, `_CLIENT_ID`, `_CLI_CLIENT_ID`, `_GROUPS_CLAIM` |
+     | `LINEA_OIDC_SCOPES` (comma-separated) | `LINEA_AUTHENTICATION_OIDC_SCOPES` as a YAML list, such as `[openid, profile, email, groups]` |
+     | `LINEA_OIDC_CLIENT_SECRET` | The file `secrets/oidc_client_secret` (step 2), read once `LINEA_AUTHENTICATION_OIDC_ISSUER` is set |
+     | `LINEA_ADMIN_GROUP`, `LINEA_ENGINEER_GROUP`, `LINEA_VIEWER_GROUP` | One `LINEA_BINDINGS`, such as `[{group: admins, role: admin, scope: "*"}, {group: engineers, role: engineer, scope: "*"}]` |
+     | `LINEA_TRUSTED_PROXIES` (proxy) | `LINEA_AUTHENTICATION_TRUSTED_HEADERS_PROXIES` as a YAML list, such as `[10.0.0.0/8]`. The server now checks the address it sees itself; HAProxy no longer filters. |
+     | `LINEA_PROXY_ISSUER` | `LINEA_AUTHENTICATION_TRUSTED_HEADERS_ISSUER`; set the old value (`proxy` when unset) to keep principal IDs |
+     | `LINEA_USER_HEADER`, `LINEA_GROUPS_HEADER`, `LINEA_NAME_HEADER` | `LINEA_AUTHENTICATION_TRUSTED_HEADERS_USER`, `_GROUPS`, `_NAME` |
+     | `LINEA_STORAGE_LIMIT`, `LINEA_RUN_LIMIT` | `LINEA_STORE_STORAGE_LIMIT`, `LINEA_STORE_RUN_LIMIT` |
+     | `LINEA_RETENTION_RUNS`, `LINEA_RETENTION_AGE` | Unchanged |
+     | `LINEA_QUEUE_LIMIT` | `LINEA_LIMITS_QUEUE` |
+     | `LINEA_BUILD_EXPORT` | `LINEA_BUILDS_EXPORT_REPOSITORY` |
+     | `LINEA_TLS_CERT_FILE`, `LINEA_TLS_KEY_FILE` | Removed: terminate TLS in your reverse proxy |
+     | `LINEA_BIND`, `LINEA_PORT`, `LINEA_VERSION` and the resource settings | Unchanged |
+
+  4. With `compose.fleet.yaml`: the 0.2.0 overlay kept its secrets in the
+     `linea_setup` volume, which the next step removes, and the new one reads
+     files. Copy the three that must not change before removing it: the fleet
+     token, because fleet keeps its first admin, and the plugin's certificate
+     and key, because Collectors trust that certificate. Create the other
+     fleet files as in `docs/debugger/deploy-compose.md#fleet-and-live-capture`,
+     and replace `LINEA_CAPTURE_RAW=true` by the server's credential ID in
+     `raw_principals` of `livecapture.json`.
+
+     ```sh
+     for f in linea/fleet_token:fleet_token livecapture/tls_cert.pem:capture_tls.crt livecapture/tls_key.pem:capture_tls.key; do
+       docker run --rm -v linea_setup:/setup:ro busybox cat "/setup/${f%%:*}" > "secrets/${f##*:}"
+     done
+     chmod 644 secrets/capture_tls.key
+     ```
+  5. Run `docker compose up -d --remove-orphans`, which removes the `setup`,
+     `bucket` and `proxy` containers, then `docker volume rm linea_setup`. If
+     Compose stops on the `edge` network, which no longer has a fixed subnet,
+     run `docker compose down` first; it keeps the volumes.
+
+  After this, `docker compose up -d` applies a change to `.env`, and
+  `docker compose restart` applies a changed secret file. A stack with
+  `compose.fleet.yaml` reads its secrets from files in the same directory
+  (`docs/debugger/deploy-compose.md#fleet-and-live-capture`).
 - `linea-server` is configured from the environment: `LINEA_` plus the config
   key's path in capitals, joined by `_` (`store.storage_limit` is
   `LINEA_STORE_STORAGE_LIMIT`). Secrets are read from files named by the

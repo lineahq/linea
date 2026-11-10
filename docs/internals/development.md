@@ -110,8 +110,9 @@ in-process fleet fake (`internal/debugger/fleetcapture/fleetcapturetest`).
   `internal/debugger/webui/static/app/`, which `go build` embeds. With
   `--binary` it also builds `dist/linea-server`
   (`dist/linea-server.exe` on Windows).
-- In `web/`: `pnpm dev` (Vite with `/api` proxied to 127.0.0.1:7070, the
-  Compose stack's proxy; start the stack first), `pnpm test` (Vitest),
+- In `web/`: `pnpm dev` (Vite with `/api` and `/auth` proxied to
+  127.0.0.1:7070, the Compose stack's server; start the stack first and sign
+  in as `admin`), `pnpm test` (Vitest),
   `pnpm typecheck`, `pnpm lint` (ESLint: TypeScript's recommended rules and
   React's rules of hooks; a disable comment says why), `pnpm gen:api`.
 
@@ -265,7 +266,7 @@ server.
 
 ## The team server and the Compose stack
 
-`go run ./cmd/linea-server --config <file> [--addr 127.0.0.1:7070] [--tls-cert-file
+`go run ./cmd/linea-server [--config <file>] [--addr 127.0.0.1:7070] [--tls-cert-file
 F --tls-key-file F | --allow-http] [--drain-timeout D] [--metrics-listen ADDR]
 [--mcp] [--fleet-url URL --fleet-token-file F] [--verbose]` serves the HTTP API
 and embedded web client of a team server.
@@ -274,7 +275,7 @@ and embedded web client of a team server.
   present an API token.
 - `--metrics-listen` serves the build queue's counts for a builder autoscaler
   at `http://ADDR/metrics` on a listener of its own, without credentials.
-- This is the only server mode: `linea-server` without `--config` is refused, and there
+- This is the only server mode: `linea-server` with neither `--config` nor a `LINEA_*` config variable is refused, and there
   is no in-memory or loopback-only mode and no `linea up`.
 - The server config names the PostgreSQL and object storage, the storage limits
   (`store.storage_limit`, `store.run_limit`), run retention (`retention.runs`,
@@ -288,14 +289,14 @@ and embedded web client of a team server.
 - `.linea/` is ignored for optional local state; do not put source code or
   fixtures there.
 
-On one machine the server is the Compose stack: two `linea-server --config`
-instances behind HAProxy, PostgreSQL, SeaweedFS, a pool worker that runs the
+On one machine the server is the Compose stack: one `linea-server`, configured
+through `LINEA_*` variables, PostgreSQL, SeaweedFS, a pool worker that runs the
 built-in runtime, and a builder; nothing to register. Details are in
 `docs/debugger/deploy-compose.md`. It is the only way to run the web client,
 HTTP API and MCP on one machine (`pnpm dev` in `web/` proxies to it):
 
 ```sh
-# once: .env in deploy/compose/linea/ with LINEA_AUTH=local (docs/debugger/deploy-compose.md#starting-it)
+# once: create the secret files in deploy/compose/linea/secrets/ (docs/debugger/deploy-compose.md#quick-start); .env is optional
 LINEA_VERSION=dev docker compose -f deploy/compose/linea/compose.yaml up -d --build
 docker compose -f deploy/compose/linea/compose.yaml down -v   # remove it and its data
 ```
@@ -368,14 +369,20 @@ docker compose -f deploy/compose/linea/compose.yaml down -v   # remove it and it
     other instance (submit to started, finished to seen done). It fails when a
     median exceeds 500 ms, as it would if change hints were lost.
 - The fan-out gate, `scripts/debugger/fanout-compose.sh`, starts the Compose
-  stack as a disposable project (two instances, `FANOUT_POOLS` pools of
-  capacity 4, nothing registered), sends `FANOUT_RUNS` runs through
+  stack as a disposable project with the test-only override
+  `scripts/debugger/fanout-compose.yaml` (two instances behind an HAProxy
+  load balancer, configured by `scripts/debugger/fanout-haproxy.cfg`, that the
+  workers dial too, `FANOUT_POOLS` pools of capacity 4, nothing registered),
+  writes the stack's secret files into its own temporary directory and passes
+  it as `LINEA_SECRETS_DIR` (a local `deploy/compose/linea/secrets/` and
+  `.env` stay out of the gate), signs in as the built-in admin account, sends
+  `FANOUT_RUNS` runs through
   `FANOUT_CLIENTS` concurrent `linea test --server`, restarts one instance
   gracefully once half of the runs were submitted, and fails unless every run
   passes. Defaults: 200 runs, 8 clients, 4 pools, port 7079, sample
   `logs-cleanup` (`FANOUT_RUNS`, `FANOUT_CLIENTS`, `FANOUT_POOLS`,
-  `FANOUT_PORT`, `FANOUT_SAMPLE`). It needs Docker and Go, uses the stack's
-  fixed `10.207.70.0/24` network (stop a running local stack first), and
+  `FANOUT_PORT`, `FANOUT_SAMPLE`). It needs Docker and Go, publishes only
+  `127.0.0.1:FANOUT_PORT` (stop whatever uses that port first), and
   removes its project, volumes and secrets on exit. Run it before a
   release.
 - `scripts/measure-performance.sh [--repeat 5] [--out <file>]` (Windows:

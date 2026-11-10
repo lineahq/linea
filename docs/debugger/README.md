@@ -124,12 +124,12 @@ the untracked `dist/linea-runtime/`:
 | `access list\|grant\|revoke --server <url>` | List a team server's role bindings, and grant or revoke the ones it manages beside the server config. Needs `access.manage`. |
 | `project list\|create\|update\|archive\|unarchive --server <url>` | List a team server's projects, and create, change or archive one. Changes need `project.manage`. |
 | `library list\|publish\|share\|copy --server <url>` | List the library shared with `--project`; publish saved work to it and choose who it is shared with (`library.publish`), or copy an item into a project. |
-| `login --server <url> [--ca <pem>]` / `logout --server <url>` | Sign in to a team server's identity provider with the device flow, or forget the sign-in; later `--server` commands present it and trust the kept `--ca`. |
+| `login --server <url> [--ca <pem>]` / `logout --server <url>` | Sign in to a team server with the identity provider's device flow or the built-in admin account's password (`--admin`, `--password-stdin`), or forget the sign-in; later `--server` commands present it and trust the kept `--ca`. |
 | `build --manifest <yaml> [--docker] [--os <os> --arch <arch>]` | Compile a `linea` CLI whose in-process Collector has the manifest's release and components ([A CLI with your components](custom-cli.md)). |
 | `version` | Show debugger, Collector, schema and component versions. |
 | `completion bash\|zsh\|fish\|powershell` | Print a shell completion script for commands, subcommands, flags and flag values ([shell completion](#shell-completion)). |
 
-The team server is a separate binary, `linea-server --config <file> [--addr <host:port>] [--tls-cert-file <pem> --tls-key-file <pem> | --allow-http] [--mcp]`: web client, HTTP API and optionally MCP, every request authenticated and authorized by role bindings, on connected workers only (it links no Collector). `linea-server` without `--config` is refused. See [team server](team-server.md).
+The team server is a separate binary, `linea-server [--config <file>] [--addr <host:port>] [--tls-cert-file <pem> --tls-key-file <pem> | --allow-http] [--mcp]`: web client, HTTP API and optionally MCP, every request authenticated and authorized by role bindings, on connected workers only (it links no Collector). The server config is a file, `LINEA_*` environment variables, or both; `linea-server` with neither is refused. See [team server](team-server.md).
 
 Run `linea <command> -h` for flags. `inspect`, `run`, `test` and `diff`:
 
@@ -272,28 +272,30 @@ linea run --config traces-redact/config.yaml \
 ## Web client, HTTP API and MCP
 
 These belong to the team server. `linea-server` always serves one, composed by a
-server config (`--config`); there is no single-process mode. The config, not
+server config (a `--config` file, `LINEA_*` environment variables, or both); there is no single-process mode. The config, not
 where the server runs, decides how people sign in, where it listens and what it
-keeps. The Docker Compose stack runs it on one machine: an instance (or more) behind a
-load balancer, PostgreSQL, object storage, a pool worker that runs the built-in
+keeps. The Docker Compose stack runs it on one machine: an instance with
+PostgreSQL, object storage, a pool worker that runs the built-in
 runtime, and a runtime builder. Nothing needs registering.
 
-The stack is one file, `deploy/compose/linea/compose.yaml`, and a `.env`
-beside it with five random values and the sign-in mode. `LINEA_AUTH=local`
-is one admin on `127.0.0.1` with no sign-in; `oidc` and `proxy` serve a team
-([sign-in](deploy-compose.md#sign-in)). In a directory holding the file from
-a release's tag:
+The stack is one file, `deploy/compose/linea/compose.yaml`, with its secrets
+as files in a `secrets/` directory beside it and an optional `.env`, started
+from `.env.example`, for settings. One person and a team use the same stack; a
+team adds an identity provider and a reverse proxy to `.env`
+([sign-in](deploy-compose.md#signing-in)). In a directory holding
+`compose.yaml` from a release's tag:
 
 ```sh
-for name in POSTGRES_PASSWORD S3_ACCESS_KEY S3_SECRET_KEY WORKER_TOKEN BUILDER_TOKEN; do
-  echo "LINEA_$name=$(openssl rand -hex 32)"
-done > .env
-echo LINEA_AUTH=local >> .env
+mkdir secrets && for name in postgres_password s3_access_key s3_secret_key worker_token builder_token admin_password; do
+  openssl rand -hex 32 > secrets/$name
+done && touch secrets/oidc_client_secret
 docker compose up -d
 ```
 
-This pulls the published images of that release. To build them from a
-checkout instead, put `.env` in `deploy/compose/linea/` and run
+Open the web client and sign in as `admin` with the contents of
+`secrets/admin_password`. This pulls the published images of that release. To
+build them from a checkout instead, create `secrets/` in
+`deploy/compose/linea/` and run
 `LINEA_VERSION=dev docker compose -f deploy/compose/linea/compose.yaml up -d --build`
 from its root.
 
@@ -301,9 +303,10 @@ from its root.
 | --- | --- |
 | Web client | `http://127.0.0.1:7070` |
 | MCP | `http://127.0.0.1:7070/mcp` |
-| CLI | `--server http://127.0.0.1:7070` |
+| CLI | `--server http://127.0.0.1:7070`, after `linea login --server http://127.0.0.1:7070` |
 
-These are the defaults; `.env` sets another address, port and TLS. See
+These are the defaults; `.env` sets another port, and a reverse proxy serves
+other machines over HTTPS. See
 [deploy-compose.md](deploy-compose.md), or the [Kubernetes
 chart](deploy-kubernetes.md) to run it on a cluster. Each instance serves, on one listener
 and one platform:
@@ -397,7 +400,7 @@ CI](ci.md) and [`examples/ci/github-actions.yml`](../../examples/ci/github-actio
 | --- | --- |
 | [Glossary](glossary.md) | The words the interfaces show |
 | [Running a team server](team-server.md) | The server config, role bindings, projects and the library, sign-in, API tokens and what a team server refuses |
-| [Docker Compose](deploy-compose.md) | A team server with one or more instances, PostgreSQL, object storage and a worker on one machine, configured by `.env` |
+| [Docker Compose](deploy-compose.md) | A team server with PostgreSQL, object storage, a pool worker and a builder on one machine, configured by secret files and an optional `.env` |
 | [Kubernetes](deploy-kubernetes.md) | The server image and the Helm chart |
 | [Collector checks in CI](ci.md) | `test` and `diff` in a pipeline, with their exit codes and the GitHub Actions example in `examples/ci/` |
 | [Building debug Collectors](runtime-builds.md) | Runtimes for another verified release or your own component modules: supported releases, manifests from the catalog, module sources; `upgrade-check` compares one configuration on two runtimes |

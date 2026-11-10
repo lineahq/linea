@@ -1,0 +1,71 @@
+# The fan-out gate's override of deploy/compose/linea/compose.yaml
+# (scripts/debugger/fanout-compose.sh). A test fixture, not a deployment:
+# the base file runs one server, and the gate needs two behind a load
+# balancer so that one can restart while the other keeps serving. The gate
+# passes both files to docker compose.
+
+# Paths are relative to deploy/compose/linea, the project directory.
+configs:
+  lb:
+    file: ../../../scripts/debugger/fanout-haproxy.cfg
+
+services:
+  # Two instances. The load balancer publishes the port, so the base file's
+  # mapping goes.
+  linea:
+    deploy:
+      replicas: 2
+    ports: !reset []
+
+  lb:
+    image: haproxy:3.4@sha256:f6d2ee87b47192d9cc8c22e88fef405122ff339859644883edc2a7d1827f87b3
+    # The image's own user (haproxy, 99); the port is above 1024.
+    configs:
+      - source: lb
+        target: /usr/local/etc/haproxy/haproxy.cfg
+    ports:
+      - "127.0.0.1:${LINEA_PORT:-7070}:7070"
+    networks: [ingress, edge]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    # The image stops gracefully on SIGUSR1, which waits for the workers'
+    # open WebSockets.
+    stop_signal: SIGTERM
+    cpus: 1
+    mem_limit: 256m
+    pids_limit: 128
+    healthcheck:
+      # Ready once one instance is in rotation: /readyz through the balancer.
+      test:
+        - CMD
+        - bash
+        - -c
+        - 'exec 3<>/dev/tcp/127.0.0.1/7070 && printf "GET /readyz HTTP/1.0\r\n\r\n" >&3 && read -r status <&3 && [[ "$$status" == *" 200 "* ]]'
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 60s
+      start_interval: 1s
+    logging:
+      options:
+        max-size: 10m
+        max-file: "3"
+    depends_on:
+      linea:
+        condition: service_healthy
+
+  # The workers dial the balancer, so a restarting instance does not strand
+  # them: they reconnect to the other one.
+  pool:
+    command: [--connect, "http://lb:7070", --pool, --name, pool, --capacity, "${LINEA_POOL_CAPACITY:-4}", --cache-dir, /cache, --token-file, /run/secrets/worker_token]
+    depends_on:
+      lb:
+        condition: service_healthy
+
+  builder:
+    command: [--connect, "http://lb:7070", --name, builder, --capacity, "1", --cpus, "${LINEA_BUILDER_CPUS:-4}", --token-file, /run/secrets/builder_token, --work-dir, /work]
+    depends_on:
+      lb:
+        condition: service_healthy
