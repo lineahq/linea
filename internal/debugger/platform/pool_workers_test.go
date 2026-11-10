@@ -123,6 +123,11 @@ func poolPlatformOn(t *testing.T, data *memory.Data, shared bool) (*Service, art
 // Its own build is this test binary, which serves as a worker.
 func servePool(t *testing.T, s *Service) {
 	t.Helper()
+	if os.Geteuid() == 0 {
+		// A pool running as root refuses to start without a child user;
+		// TestAPoolContainersChildCannotReachItsSecrets covers that setup.
+		t.Skip("pool tests need a non-root user: a pool running as root needs a child user")
+	}
 	ctx := context.Background()
 	t.Setenv(poolChild, "serve")
 	cache := t.TempDir()

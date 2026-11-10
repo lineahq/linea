@@ -327,6 +327,11 @@ docker compose -f deploy/compose/linea/compose.yaml down -v   # remove it and it
     `mingw64-x86_64-gcc-core` package (`x86_64-w64-mingw32-gcc.exe`; Cygwin's
     plain `gcc` is refused by Go). Pass `-CC` or set `CC_RACE` when it is not
     in the default Cygwin location.
+  - Without a C compiler, run it in the Go image of `deploy/docker`
+    (`golang:1.27.3-bookworm`) with the repository mounted, as a non-root
+    user (`docker run --user 1000:1000 -e HOME=/tmp ...`): the platform's
+    pool tests skip as root, because a pool running as root needs a child
+    user.
   - The full suite takes about 20 minutes.
 - Connected workers, one package at a time:
 
