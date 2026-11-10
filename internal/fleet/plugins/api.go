@@ -13,6 +13,10 @@ import (
 	"github.com/lineahq/linea/pluginsdk"
 )
 
+// apiBodyTimeout bounds reading a public API request body, matching the time
+// allowed for the upstream plugin call.
+const apiBodyTimeout = 2 * time.Second
+
 func validAPIPath(path string) bool {
 	if len(path) == 0 || len(path) > 512 {
 		return false
@@ -65,6 +69,17 @@ func (r *Registry) ServeAPI(w http.ResponseWriter, request *http.Request, id, pa
 		fail(503)
 		return
 	}
+	// Read the capped body before taking a slot, under a deadline, so a slow or
+	// stalled client cannot pin plugin API slots. The listener sets only a
+	// header timeout. Servers without per-request deadlines ignore this call.
+	controller := http.NewResponseController(w)
+	_ = controller.SetReadDeadline(time.Now().Add(apiBodyTimeout))
+	body, err := io.ReadAll(http.MaxBytesReader(w, request.Body, 64<<10))
+	_ = controller.SetReadDeadline(time.Time{})
+	if err != nil {
+		fail(413)
+		return
+	}
 	gate := e.apiReads
 	if request.Method != "GET" {
 		gate = e.apiWrites
@@ -75,11 +90,6 @@ func (r *Registry) ServeAPI(w http.ResponseWriter, request *http.Request, id, pa
 	default:
 		r.apiRefused.Add(1)
 		fail(429)
-		return
-	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, request.Body, 64<<10))
-	if err != nil {
-		fail(413)
 		return
 	}
 	if len(body) != 0 && !json.Valid(body) {

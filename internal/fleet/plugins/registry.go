@@ -31,20 +31,24 @@ type Info struct {
 	APIVersion      string     `json:"api_version,omitempty"`
 }
 
+// probeClient and probes serve only the manifest probe, so status calls
+// (client and calls) can never take its connection or its slot.
 type entry struct {
-	config    Config
-	host      auth.Bearer
-	client    *http.Client
-	calls     chan struct{}
-	reads     chan struct{}
-	mu        sync.RWMutex
-	info      Info
-	work      chan struct{}
-	lease     context.Context
-	endLease  context.CancelFunc
-	apiReads  chan struct{}
-	apiWrites chan struct{}
-	apiClient *http.Client
+	config      Config
+	host        auth.Bearer
+	client      *http.Client
+	probeClient *http.Client
+	probes      chan struct{}
+	calls       chan struct{}
+	reads       chan struct{}
+	mu          sync.RWMutex
+	info        Info
+	work        chan struct{}
+	lease       context.Context
+	endLease    context.CancelFunc
+	apiReads    chan struct{}
+	apiWrites   chan struct{}
+	apiClient   *http.Client
 }
 
 type Registry struct {
@@ -78,7 +82,7 @@ func New(ctx context.Context, configs []Config, store fleet.Repository) *Registr
 			desired = "disabled"
 		}
 		lease, endLease := context.WithCancel(ctx)
-		e := &entry{config: config, host: host, client: pluginsdk.NewHTTPClient(), calls: make(chan struct{}, 2), reads: make(chan struct{}, 2), work: make(chan struct{}, 1), lease: lease, endLease: endLease, info: Info{
+		e := &entry{config: config, host: host, client: pluginsdk.NewHTTPClient(), probeClient: pluginsdk.NewHTTPClient(), probes: make(chan struct{}, 1), calls: make(chan struct{}, 2), reads: make(chan struct{}, 2), work: make(chan struct{}, 1), lease: lease, endLease: endLease, info: Info{
 			ID: config.ID, Version: config.Version, ProtocolVersion: pluginsdk.ProtocolVersion,
 			Enabled: config.Enabled, Permissions: slices.Clone(config.Permissions), State: state,
 			Desired: desired, Epoch: pluginsdk.RandomID(),
@@ -123,6 +127,7 @@ func (r *Registry) Close() {
 		r.wg.Wait()
 		for _, e := range r.entries {
 			e.client.CloseIdleConnections()
+			e.probeClient.CloseIdleConnections()
 			e.apiClient.CloseIdleConnections()
 		}
 	})
@@ -183,9 +188,15 @@ func (r *Registry) call(ctx context.Context, e *entry, path string, headers http
 }
 
 func (r *Registry) rpc(ctx context.Context, e *entry, method, path string, headers http.Header, body []byte, max int64, result any) error {
+	// The manifest probe has a dedicated slot and connection pool; every other
+	// call shares a bounded pool of its own and is refused when it is full.
+	slots, client := e.calls, e.client
+	if path == pluginsdk.ManifestPath {
+		slots, client = e.probes, e.probeClient
+	}
 	select {
-	case e.calls <- struct{}{}:
-		defer func() { <-e.calls }()
+	case slots <- struct{}{}:
+		defer func() { <-slots }()
 	default:
 		return fleet.ErrUnavailable
 	}
@@ -200,7 +211,7 @@ func (r *Registry) rpc(ctx context.Context, e *entry, method, path string, heade
 		stopLease := context.AfterFunc(lease, cancel)
 		defer stopLease()
 	}
-	if err := pluginsdk.RequestJSON(ctx, e.client, method, e.config.Endpoint+path, e.config.serviceToken, headers, body, max, result); err != nil {
+	if err := pluginsdk.RequestJSON(ctx, client, method, e.config.Endpoint+path, e.config.serviceToken, headers, body, max, result); err != nil {
 		var failure *pluginsdk.HTTPError
 		if errors.As(err, &failure) {
 			switch failure.Status {

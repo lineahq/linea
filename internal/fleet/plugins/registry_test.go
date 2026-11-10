@@ -291,3 +291,54 @@ func TestRegistrationConfigurationRejectsUnsafeInputs(t *testing.T) {
 		t.Fatal("registrations shared host/service credentials")
 	}
 }
+
+func TestSaturatedStatusCallsDoNotStarveManifestProbe(t *testing.T) {
+	entered := make(chan struct{}, 4)
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == pluginsdk.StatusPath {
+			entered <- struct{}{}
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return
+			}
+			_, _ = w.Write([]byte(`{"ok":true}`))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(pluginsdk.Manifest{ID: "inventory-example", Version: "0.1.0", ProtocolVersion: pluginsdk.ProtocolVersion, InstanceID: strings.Repeat("c", 32)})
+	}))
+	defer server.Close()
+	registry := New(context.Background(), []Config{fixtureConfig(server.URL)}, fleet.NewStore(1))
+	defer registry.Close()
+	e := registry.entries[0]
+	registry.probe(e)
+	if e.snapshot().State != "ready" {
+		t.Fatal("plugin did not become ready")
+	}
+	epoch := e.snapshot().Epoch
+	caller := auth.Principal{ID: "caller-id", Role: "reader"}
+	results := make(chan error, cap(e.calls))
+	for i := 0; i < cap(e.calls); i++ {
+		go func() {
+			_, err := registry.Status(context.Background(), e.config.ID, caller)
+			results <- err
+		}()
+	}
+	for i := 0; i < cap(e.calls); i++ {
+		<-entered
+	}
+	if _, err := registry.Status(context.Background(), e.config.ID, caller); !errors.Is(err, fleet.ErrUnavailable) {
+		t.Fatal("status calls beyond their own pool were not refused")
+	}
+	registry.probe(e)
+	if info := e.snapshot(); info.State != "ready" || info.Epoch != epoch {
+		t.Fatalf("saturated status calls disturbed the probe: state %s", info.State)
+	}
+	close(release)
+	for i := 0; i < cap(e.calls); i++ {
+		if err := <-results; err != nil {
+			t.Fatal("admitted status call failed:", err)
+		}
+	}
+}
