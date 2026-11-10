@@ -111,6 +111,9 @@ type Handle struct {
 	// state, so a cache may drop the handle and read it again.
 	ordinal uint64
 	stored  bool
+	// publishing is set while the service writes the run's outcome without
+	// holding mu (Service.finish); the run stays running until it is written.
+	publishing bool
 	// used is when the service last read the run (Service.uses), under the
 	// service's mu.
 	used uint64
@@ -176,6 +179,27 @@ func (r *Handle) finishLocked(state State, report *engine.Report, err error) err
 	r.notifyLocked()
 	close(r.done)
 	return publicationErr
+}
+
+// endingLocked is the run's publication as ending in state records it.
+func (r *Handle) endingLocked(state State, report *engine.Report, err error) runPublication {
+	p := r.publicationLocked()
+	p.state, p.report, p.err, p.finished = state, report, err, time.Now().UTC()
+	if r.runLog != nil && keepsLog(state, report) {
+		p.log, p.logTruncated = r.runLog.Tail()
+	}
+	return p
+}
+
+// endLocked ends the run as p records it and wakes its observers.
+func (r *Handle) endLocked(p runPublication) {
+	r.state, r.report, r.err, r.finished = p.state, p.report, p.err, p.finished
+	r.log, r.logTruncated, r.runLog = p.log, p.logTruncated, nil
+	if r.ended != nil {
+		r.ended()
+	}
+	r.notifyLocked()
+	close(r.done)
 }
 
 // View includes snapshot stores only when full is true. Neither view changes
@@ -249,7 +273,7 @@ func (r *Handle) recordLocked(attempt int) (func(instrument.Event), *engine.LogT
 	observer := r.observer
 	return func(e instrument.Event) {
 		r.mu.Lock()
-		if r.recording != attempt || r.terminalLocked() {
+		if r.recording != attempt || r.terminalLocked() || r.publishing {
 			r.mu.Unlock()
 			return
 		}
@@ -317,6 +341,10 @@ func (r *Handle) cancelRequest(cause error) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.terminalLocked() {
+		return false, nil
+	}
+	if r.publishing {
+		// The run has ended and its outcome is being written.
 		return false, nil
 	}
 	held := r.state != StateQueued

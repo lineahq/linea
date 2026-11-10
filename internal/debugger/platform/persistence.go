@@ -57,20 +57,74 @@ type evidenceArchive struct {
 	LogTruncated bool   `json:"log_truncated,omitempty"`
 }
 
+// runPublication is what persistRun writes of a run: the handle's fields,
+// copied under its mu so they can be written without holding it.
+type runPublication struct {
+	id           string
+	project      string
+	mode         InputMode
+	caller       Actor
+	state        State
+	err          error
+	created      time.Time
+	started      time.Time
+	finished     time.Time
+	interrupted  bool
+	attempt      int
+	bundleInfo   *engine.BundleInfo
+	events       []instrument.Event
+	report       *engine.Report
+	log          string
+	logTruncated bool
+	generation   uint64
+	// Admission only.
+	bundle     []byte
+	runtimeKey string
+	binary     *artifact.RunBinary
+}
+
+func (r *Handle) publicationLocked() runPublication {
+	return runPublication{id: r.id, project: r.project, mode: r.mode, caller: r.caller, state: r.state, err: r.err,
+		created: r.created, started: r.started, finished: r.finished, interrupted: r.interrupted, attempt: r.attempt,
+		bundleInfo: r.bundleInfo, events: r.events, report: r.report, log: r.log, logTruncated: r.logTruncated,
+		generation: r.generation, bundle: r.bundle, runtimeKey: r.runtimeKey, binary: r.binary}
+}
+
+// storedLocked records that the repository holds record.
+func (r *Handle) storedLocked(record *artifact.RunRecord) {
+	r.generation, r.ordinal = record.Generation, record.Ordinal
+	r.stored = r.terminalLocked()
+}
+
 func (s *Service) persistRun(r *Handle, includeEvidence bool) error {
-	m := runMetadata{Schema: 2, ID: r.id, Mode: r.mode, State: r.state, Created: r.created, Started: r.started, Finished: r.finished, Interrupted: r.interrupted, Attempt: r.attempt}
-	if r.caller != (Actor{}) {
-		caller := r.caller
+	p := r.publicationLocked()
+	record, err := s.savePublication(context.Background(), &p, includeEvidence)
+	if err != nil {
+		return err
+	}
+	r.report = p.report
+	r.storedLocked(record)
+	return nil
+}
+
+// savePublication writes p: its admission when p has no generation yet,
+// otherwise its record, with its evidence when includeEvidence is set. When
+// the report's analysis outgrows the evidence budget, p.report becomes the
+// reduced report that was written.
+func (s *Service) savePublication(ctx context.Context, p *runPublication, includeEvidence bool) (*artifact.RunRecord, error) {
+	m := runMetadata{Schema: 2, ID: p.id, Mode: p.mode, State: p.state, Created: p.created, Started: p.started, Finished: p.finished, Interrupted: p.interrupted, Attempt: p.attempt}
+	if p.caller != (Actor{}) {
+		caller := p.caller
 		m.Caller = &caller
 	}
-	m.Bundle = r.bundleInfo
-	if r.err != nil {
-		m.Error = r.err.Error()
-		if errors.Is(r.err, ErrPersistence) {
+	m.Bundle = p.bundleInfo
+	if p.err != nil {
+		m.Error = p.err.Error()
+		if errors.Is(p.err, ErrPersistence) {
 			m.Failure = "persistence"
-		} else if errors.Is(r.err, ErrInterrupted) {
+		} else if errors.Is(p.err, ErrInterrupted) {
 			m.Failure = "interrupted"
-		} else if errors.Is(r.err, ErrLost) {
+		} else if errors.Is(p.err, ErrLost) {
 			m.Failure = "lost"
 		}
 		if len(m.Error) > 4096 {
@@ -79,49 +133,45 @@ func (s *Service) persistRun(r *Handle, includeEvidence bool) error {
 	}
 	metadata, err := json.Marshal(m)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// Escaped control characters can use six JSON bytes per input byte.
 	for len(metadata) > 8192 && len(m.Error) > 128 {
 		m.Error = m.Error[:len(m.Error)/2] + " (truncated)"
 		metadata, err = json.Marshal(m)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 	var evidence []byte
-	if includeEvidence && (r.report != nil || len(r.events) != 0 || r.log != "") {
+	if includeEvidence && (p.report != nil || len(p.events) != 0 || p.log != "") {
 		limit := s.repository.Limits().RunBytes
 		var decoded int64
-		if evidence, decoded, err = encodeEvidence(r.events, r.report, r.log, r.logTruncated); err != nil {
-			return err
+		if evidence, decoded, err = encodeEvidence(p.events, p.report, p.log, p.logTruncated); err != nil {
+			return nil, err
 		}
 		// The evidence budget leaves headroom for the report's analysis; when
 		// the analysis outgrows it, keep the run without its derived sections
 		// rather than losing it. The handle keeps the same reduced report, so
 		// answers agree before and after a restart.
-		if !archiveFits(int64(len(evidence)), decoded, limit) && r.report != nil && r.report.Result != nil {
-			reduced := withoutAnalysis(r.report)
-			if smaller, size, err := encodeEvidence(r.events, reduced, r.log, r.logTruncated); err == nil && archiveFits(int64(len(smaller)), size, limit) {
-				r.report, evidence = reduced, smaller
+		if !archiveFits(int64(len(evidence)), decoded, limit) && p.report != nil && p.report.Result != nil {
+			reduced := withoutAnalysis(p.report)
+			if smaller, size, err := encodeEvidence(p.events, reduced, p.log, p.logTruncated); err == nil && archiveFits(int64(len(smaller)), size, limit) {
+				p.report, evidence = reduced, smaller
 			}
 		}
 	}
 	var record *artifact.RunRecord
-	if r.generation == 0 {
-		record, err = s.repository.AdmitRun(context.Background(), artifact.Admission{
-			ID: r.id, Project: r.project, Metadata: metadata, Bundle: r.bundle, Runtime: r.runtimeKey, Binary: r.binary, Index: runIndex(r.state, r.report)})
-	} else {
-		record, err = s.repository.SaveRun(context.Background(), r.id, r.project, r.generation, r.terminalLocked(), runIndex(r.state, r.report), metadata, evidence)
-	}
-	if err == nil {
-		if r.generation == 0 {
+	if p.generation == 0 {
+		record, err = s.repository.AdmitRun(ctx, artifact.Admission{
+			ID: p.id, Project: p.project, Metadata: metadata, Bundle: p.bundle, Runtime: p.runtimeKey, Binary: p.binary, Index: runIndex(p.state, p.report)})
+		if err == nil {
 			s.nudgeRetention()
 		}
-		r.generation, r.ordinal = record.Generation, record.Ordinal
-		r.stored = r.terminalLocked()
+	} else {
+		record, err = s.repository.SaveRun(ctx, p.id, p.project, p.generation, p.state.Terminal(), runIndex(p.state, p.report), metadata, evidence)
 	}
-	return err
+	return record, err
 }
 
 // Evidence archives are schema 2: the archive JSON, gzip-compressed, with its

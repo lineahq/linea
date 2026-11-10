@@ -136,7 +136,12 @@ The root Go module is declared in `go.mod`.
   a scheduler (`scheduler.go`) that claims runs from the repository's queue
   (`artifact.Queue`; an ephemeral service uses `memory.Queue`) under a renewed
   lease (`Options.Lease`, clock `Options.Now`) and executes through executors
-  (the service itself, one run at a time, and each connected worker, below),
+  (the service itself, one run at a time, and each connected worker, below).
+  The heartbeat renews leases in a loop of its own that never takes the
+  service lock, and `finish` writes a run's outcome without holding it (each
+  write within two minutes), so a slow repository does not stop renewals; the
+  run reads as running, and its executor stays busy, until the write
+  completes. The service also offers
   bounded admission, run handles, cancellation through the queue, events,
   ephemeral or repository-backed history (`platform.Open`), source artifacts,
   captured input bundles, the environment capture policy
@@ -277,8 +282,9 @@ The root Go module is declared in `go.mod`.
   `Service.Drain` (called by `linea-server --config` on SIGTERM with
   `--drain-timeout`) stops claiming runs and jobs, waits for the runs of its
   workers, then hands the rest back with `Queue.Release`, which does not spend
-  an attempt (`runs.released`; the requeue limit counts `attempt - released`). A
-  killed instance's runs expire with their leases and another instance's
+  an attempt (`runs.released`; the requeue limit counts `attempt - released`);
+  `Close` hands back what it still executes before waiting for those
+  executions to stop. A killed instance's runs expire with their leases and another instance's
   heartbeat requeues them. Each instance records its connected workers in the
   repository (`artifact.Presence`, `presence.go`) under its own ID, valid for
   one lease, on every connection, disconnection and heartbeat; Close removes the

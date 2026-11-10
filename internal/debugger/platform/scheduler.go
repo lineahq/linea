@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -26,6 +27,9 @@ import (
 const (
 	// DefaultLease is how long a claim lasts without a heartbeat.
 	DefaultLease = 30 * time.Second
+	// publishTimeout bounds each write of a run's outcome. The run's lease
+	// is renewed while it is written.
+	publishTimeout = 2 * time.Minute
 	// maxAttempts bounds a run's assignments: one requeue after its worker
 	// stopped renewing.
 	maxAttempts = 2
@@ -444,31 +448,83 @@ func (s *Service) releaseUnstartedLocked(job *pendingRun) bool {
 // finish publishes a job's outcome unless a requeue superseded its attempt.
 // A connected worker's run whose connection ended is left to its lease,
 // which requeues it.
+//
+// The outcome is written without holding s.mu or the run's mu, so a slow
+// repository does not hold up lease renewal or other runs. Until it is
+// written the run stays running and its executor busy; expire leaves it to
+// this call.
 func (s *Service) finish(job *pendingRun, report *engine.Report, err error) {
 	r := job.handle
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.releaseLocked(job)
 	if connectionLost(job, err) || s.closed && s.shared {
 		// Another instance takes the run over when its lease ends.
+		s.releaseLocked(job)
 		return
 	}
 	r.mu.Lock()
 	if r.terminalLocked() || r.state != StateRunning || r.attempt != job.assignment.Attempt {
 		r.mu.Unlock()
+		s.releaseLocked(job)
 		return
 	}
 	if err == nil && report == nil {
 		err = errors.New("engine returned neither a report nor an error")
 	}
+	state := StateDone
 	if err != nil {
-		r.finishLocked(StateError, nil, err)
-	} else {
-		r.finishLocked(StateDone, report, nil)
+		state, report = StateError, nil
 	}
-	r.mu.Unlock()
+	if r.persist == nil {
+		r.finishLocked(state, report, err)
+		r.mu.Unlock()
+	} else {
+		p, shared := r.endingLocked(state, report, err), r.shared
+		r.publishing = true
+		r.mu.Unlock()
+		s.mu.Unlock()
+		record, conflict := s.publishEnd(&p, shared)
+		s.mu.Lock()
+		r.mu.Lock()
+		r.publishing = false
+		switch {
+		case conflict || r.terminalLocked():
+			// Another instance published the run first, or the change feed
+			// already brought this publication: the handle catches up on
+			// what the repository holds.
+		case record != nil:
+			r.endLocked(p)
+			r.storedLocked(record)
+		case r.state == StateRunning && r.attempt == p.attempt:
+			r.endLocked(p)
+		}
+		r.mu.Unlock()
+	}
+	s.releaseLocked(job)
 	s.dropJobLocked(job)
 	s.evictLocked()
+}
+
+// publishEnd writes a run's outcome p with its evidence, within
+// publishTimeout. When that fails, p becomes an error without a report and
+// is written without evidence, best effort: an uncertain repository refuses
+// this write too. It returns the record written, if any, and whether
+// another instance published the run first, which leaves p unwritten.
+func (s *Service) publishEnd(p *runPublication, shared bool) (*artifact.RunRecord, bool) {
+	save := func(evidence bool) (*artifact.RunRecord, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), publishTimeout)
+		defer cancel()
+		return s.savePublication(ctx, p, evidence)
+	}
+	record, err := save(true)
+	if shared && errors.Is(err, artifact.ErrConflict) {
+		return nil, true
+	}
+	if err != nil {
+		p.state, p.report, p.err = StateError, nil, persistenceError(err)
+		record, _ = save(false)
+	}
+	return record, false
 }
 
 func (s *Service) dropJobLocked(job *pendingRun) {
@@ -477,31 +533,88 @@ func (s *Service) dropJobLocked(job *pendingRun) {
 	}
 }
 
-// heartbeats renews the executors' leases and handles expired ones until the
-// service closes.
+// leaseRenewal is an executor's lease renewal: renewLeases writes it
+// without s.mu, so a slow holder of s.mu does not stop leases from being
+// renewed, and tendLeases acts on it under s.mu.
+type leaseRenewal struct {
+	mu sync.Mutex
+	// renewed is the last successful renewal.
+	renewed time.Time
+	// fresh is set by a renewal tendLeases has not handled yet, which returned
+	// held or failed with err.
+	fresh bool
+	held  []artifact.Assignment
+	err   error
+}
+
+// leasedLocked publishes the executor list to lease renewal. s.mu is held.
+func (s *Service) leasedLocked() {
+	executors := slices.Clone(s.executors)
+	s.leased.Store(&executors)
+}
+
+// heartbeats renews the executors' leases, and separately handles renewals
+// and expired leases, until the service closes.
 func (s *Service) heartbeats() {
 	defer close(s.beating)
-	t := time.NewTicker(s.lease / 3)
+	renewing := make(chan struct{})
+	go func() {
+		defer close(renewing)
+		s.every(s.lease/3, s.renewLeases)
+	}()
+	s.every(s.lease/3, s.tendLeases)
+	<-renewing
+}
+
+func (s *Service) every(d time.Duration, f func(time.Time)) {
+	t := time.NewTicker(d)
 	defer t.Stop()
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
 		case <-t.C:
-			s.heartbeat(s.now())
+			f(s.now())
 		}
 	}
 }
 
-// heartbeat renews every executor's leases, has a shared service's next
+// heartbeat renews every executor's leases and handles the renewals and
+// expired leases.
+func (s *Service) heartbeat(now time.Time) {
+	s.renewLeases(now)
+	s.tendLeases(now)
+}
+
+// renewLeases renews every executor's leases, each within a third of the
+// lease, and records the outcome for tendLeases.
+func (s *Service) renewLeases(now time.Time) {
+	leased := s.leased.Load()
+	if leased == nil {
+		return
+	}
+	for _, e := range *leased {
+		ctx, cancel := context.WithTimeout(s.ctx, s.lease/3)
+		held, err := s.runQueue.Renew(ctx, e.id, now.Add(s.lease))
+		cancel()
+		e.lease.mu.Lock()
+		if err == nil {
+			e.lease.renewed = now
+		}
+		e.lease.fresh, e.lease.held, e.lease.err = true, held, err
+		e.lease.mu.Unlock()
+	}
+}
+
+// tendLeases handles every executor's last renewal, has a shared service's next
 // dispatch sweep (sweepKeysLocked), then requeues or ends runs whose lease
 // ended.
-func (s *Service) heartbeat(now time.Time) {
+func (s *Service) tendLeases(now time.Time) {
 	s.mu.Lock()
 	executors := slices.Clone(s.executors)
 	s.mu.Unlock()
 	for _, e := range executors {
-		s.renew(e, now)
+		s.renewed(e, now)
 	}
 	s.publishWorkers(s.ctx, now)
 	if s.shared {
@@ -533,26 +646,27 @@ func (s *Service) heartbeat(now time.Time) {
 	}
 }
 
-// renew renews an executor's leases, stops its runs when cancellation was
-// requested or the leases could not be renewed in time, and publishes again
-// a terminal state a failed write left held.
-func (s *Service) renew(e *executor, now time.Time) {
-	held, err := s.runQueue.Renew(s.ctx, e.id, now.Add(s.lease))
+// renewed handles an executor's last renewal: it stops the executor's runs
+// when cancellation was requested or the leases were not renewed in time,
+// and publishes again a terminal state a failed write left held.
+func (s *Service) renewed(e *executor, now time.Time) {
+	e.lease.mu.Lock()
+	fresh, held, err, renewed := e.lease.fresh, e.lease.held, e.lease.err, e.lease.renewed
+	e.lease.fresh, e.lease.held, e.lease.err = false, nil, nil
+	e.lease.mu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err != nil {
+	if fresh && err != nil {
 		s.logError("renewing leases", err)
-		if now.After(e.renewed.Add(s.lease)) {
-			for _, job := range s.jobs {
-				if job.exec == e {
-					job.handle.mu.Lock()
-					job.handle.cancel(errLeaseLost)
-					job.handle.mu.Unlock()
-				}
+	}
+	if now.After(renewed.Add(s.lease)) {
+		for _, job := range s.jobs {
+			if job.exec == e {
+				job.handle.mu.Lock()
+				job.handle.cancel(errLeaseLost)
+				job.handle.mu.Unlock()
 			}
 		}
-	} else {
-		e.renewed = now
 	}
 	for _, a := range held {
 		r := s.runs[a.RunID]
@@ -586,6 +700,11 @@ func (s *Service) expire(a artifact.Assignment, now time.Time) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.publishing {
+		// finish is writing the run's outcome; a lease still ended after
+		// that write is listed again.
+		return
+	}
 	if job := s.jobs[r.id]; job != nil && job.exec != nil {
 		// This service's own lease ended: whatever its executor publishes
 		// now is stale.

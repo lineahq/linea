@@ -60,8 +60,8 @@ type executor struct {
 	capacity int
 	// busy counts the slots taken: claimed runs, a claim's reservation
 	// while it is in progress, and interactive requests.
-	busy    int
-	renewed time.Time
+	busy  int
+	lease leaseRenewal
 	// conn is a connected worker; nil for the service's own executor.
 	conn *connectedWorker
 	gone bool
@@ -183,7 +183,8 @@ func (s *Service) ConnectWorker(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	e := &executor{id: newExecutorID(), capacity: h.Capacity, renewed: s.now(), conn: &connectedWorker{client: c, hello: h, since: s.now()}}
+	e := &executor{id: newExecutorID(), capacity: h.Capacity, conn: &connectedWorker{client: c, hello: h, since: s.now()}}
+	e.lease.renewed = s.now()
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -191,6 +192,7 @@ func (s *Service) ConnectWorker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.executors = append(s.executors, e)
+	s.leasedLocked()
 	s.wakeLocked()
 	s.mu.Unlock()
 	if p := e.pool(); p != "" {
@@ -211,6 +213,7 @@ func (s *Service) ConnectWorker(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	e.gone = true
 	s.executors = slices.DeleteFunc(s.executors, func(x *executor) bool { return x == e })
+	s.leasedLocked()
 	s.freedLocked()
 	s.mu.Unlock()
 	s.logWorker("worker disconnected", r.RemoteAddr, h.Name, nil, zap.String("worker", e.id))

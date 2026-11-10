@@ -271,8 +271,10 @@ type Service struct {
 	buildCounts buildCountCache
 	lease       time.Duration
 	now         func() time.Time
-	// beating is closed when the heartbeat loop stops.
+	// beating is closed when the heartbeat loops stop.
 	beating chan struct{}
+	// leased is a copy of executors that lease renewal reads without mu.
+	leased atomic.Pointer[[]*executor]
 	// auditLog is the repository's audit log, or an in-memory one.
 	auditLog artifact.Audit
 	// policy is Options.Environment and Options.Paths for operations that
@@ -386,7 +388,7 @@ func New(opts Options) *Service {
 
 // startWorker starts the scheduler and its heartbeat.
 func (s *Service) startWorker() {
-	s.executors[0].renewed = s.now()
+	s.executors[0].lease.renewed = s.now()
 	go s.work()
 	go s.heartbeats()
 	if s.shared {
@@ -496,6 +498,7 @@ func newService(opts Options, repository artifact.Repository) *Service {
 	}
 	s.effective.Store(access)
 	s.executors = []*executor{{id: s.instanceID, capacity: 1}}
+	s.leasedLocked()
 	s.collectors.repository = repository
 	s.collectors.perPrincipal = opts.Limits.Captures
 	s.auditLog = &memoryAudit{}
@@ -960,13 +963,18 @@ func (s *Service) Close() {
 			// The runs belong to every instance: stop only what this service
 			// executes, publish nothing (finish) and hand the runs back.
 			for id, job := range s.jobs {
-				if job.exec != nil {
-					held = append(held, job.assignment)
-					r := s.runs[id]
-					r.mu.Lock()
-					r.cancel(context.Canceled)
-					r.mu.Unlock()
+				if job.exec == nil {
+					continue
 				}
+				r := s.runs[id]
+				r.mu.Lock()
+				// A run whose outcome finish is writing is left to that
+				// write.
+				if !r.publishing {
+					held = append(held, job.assignment)
+					r.cancel(context.Canceled)
+				}
+				r.mu.Unlock()
 			}
 		} else {
 			for _, r := range s.runs {
@@ -976,13 +984,15 @@ func (s *Service) Close() {
 		clear(s.jobs)
 	}
 	s.mu.Unlock()
+	// Handed back first, the runs wait for another instance only as long as
+	// their executions take to stop, not for a lease to end.
+	s.releaseHeld(held)
 	s.collectors.wait()
 	<-s.done
 	s.executing.Wait()
 	<-s.beating
 	<-s.following
 	<-s.retaining
-	s.releaseHeld(held)
 	s.closeConnections()
 	s.withdrawWorkers()
 	s.preparations.Wait()
