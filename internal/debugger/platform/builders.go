@@ -271,18 +271,20 @@ func (s *Service) runBuild(ctx context.Context, l *builderLink, r artifact.Build
 	stopDeadline()
 	<-flushed
 	s.flushBuildLog(context.WithoutCancel(ctx), l, r, log, func() {})
-	switch {
-	case err != nil:
-		s.logWorker("build lost its builder", l.conn.Endpoint(), l.conn.Hello().Name, err, zap.String("build", r.ID))
-		return
-	case errors.Is(cause, errBuildCancelRequested):
+	switch buildEndOf(err, cause) {
+	case buildEndCancelled:
 		s.finishBuild(l, r, artifact.BuildCancelled, serverBuildResult{Error: errBuildCancelRequested.Error()}, nil)
 		return
-	case errors.Is(cause, errBuildTimeout):
+	case buildEndTimedOut:
 		fail(errBuildTimeout.Error())
 		return
-	case cause != nil:
+	case buildEndBuilderLost:
+		s.logWorker("build lost its builder", l.conn.Endpoint(), l.conn.Hello().Name, err, zap.String("build", r.ID))
+		return
+	case buildEndAbandoned:
 		return // the lease was lost, the builder went or the server stops
+	}
+	switch {
 	case result.Error != "":
 		fail(artifact.ClipBuildLine(result.Error))
 		return
@@ -314,6 +316,36 @@ func (s *Service) runBuild(ctx context.Context, l *builderLink, r artifact.Build
 	done.Image, done.ExportError = checkExport(result, s.buildExport)
 	s.finishBuild(l, r, artifact.BuildDone, done,
 		&artifact.RuntimeBinary{Digest: result.BinaryDigest, Bytes: result.BinarySize, OS: result.OS, Arch: result.Arch})
+}
+
+// buildEnd is how a build's exchange with its builder ended, before its
+// result is looked at.
+type buildEnd int
+
+const (
+	buildEndAnswered buildEnd = iota
+	buildEndCancelled
+	buildEndTimedOut
+	buildEndBuilderLost
+	buildEndAbandoned
+)
+
+// buildEndOf classifies a build from the builder's error and the cause of
+// the build context. A cancel or a deadline decides the outcome even when
+// the builder ignored it and its connection then ended with an error, so
+// such a build never stays running.
+func buildEndOf(err, cause error) buildEnd {
+	switch {
+	case errors.Is(cause, errBuildCancelRequested):
+		return buildEndCancelled
+	case errors.Is(cause, errBuildTimeout):
+		return buildEndTimedOut
+	case err != nil:
+		return buildEndBuilderLost
+	case cause != nil:
+		return buildEndAbandoned
+	}
+	return buildEndAnswered
 }
 
 // buildJob is the build as the builder receives it: presigned URLs for its

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -493,5 +494,29 @@ func TestABuildExportsItsImageWhenConfigured(t *testing.T) {
 				t.Fatalf("build = %+v", done)
 			}
 		})
+	}
+}
+
+// TestBuildEndPrefersCancelAndDeadline: a build whose builder ignored a
+// cancel or its deadline, and whose connection then failed, ends cancelled
+// or failed instead of being left to a lease its holder keeps renewing.
+func TestBuildEndPrefersCancelAndDeadline(t *testing.T) {
+	lost := errors.New("builder did not answer a cancelled build")
+	for _, tc := range []struct {
+		name       string
+		err, cause error
+		want       buildEnd
+	}{
+		{"answered", nil, nil, buildEndAnswered},
+		{"cancelled and answered", nil, errBuildCancelRequested, buildEndCancelled},
+		{"cancelled and ignored", lost, errBuildCancelRequested, buildEndCancelled},
+		{"timed out and answered", nil, errBuildTimeout, buildEndTimedOut},
+		{"timed out and ignored", lost, errBuildTimeout, buildEndTimedOut},
+		{"builder went", lost, nil, buildEndBuilderLost},
+		{"lease lost", nil, errBuildLeaseLost, buildEndAbandoned},
+	} {
+		if got := buildEndOf(tc.err, tc.cause); got != tc.want {
+			t.Errorf("%s: buildEndOf = %d, want %d", tc.name, got, tc.want)
+		}
 	}
 }
