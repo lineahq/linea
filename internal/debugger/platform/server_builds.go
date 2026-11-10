@@ -92,6 +92,9 @@ func (s *Service) queueServerBuild(ctx context.Context, caller Caller, builds ar
 	if src.Path != "" {
 		return nil, &Error{Code: CodeInvalidRequest, Message: "a team server reads no manifest file: send the manifest's text or a saved manifest"}
 	}
+	if err := s.mayTakeRuntimeName(ctx, caller, req.Name); err != nil {
+		return nil, err
+	}
 	if _, err := s.resolveSource(ctx, caller, &src, artifact.Manifest, "manifest"); err != nil {
 		return nil, err
 	}

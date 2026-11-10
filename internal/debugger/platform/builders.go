@@ -427,6 +427,17 @@ func checkBuiltRuntime(r worker.BuildResult, spec serverBuildSpec) string {
 // build as it is.
 func (s *Service) finishBuild(l *builderLink, r artifact.BuildRecord, state artifact.BuildState, result serverBuildResult, binary *artifact.RuntimeBinary) {
 	ctx := context.WithoutCancel(s.ctx)
+	if state == artifact.BuildDone {
+		// The name was checked when the build was requested; another
+		// principal may have registered it since.
+		taken, err := s.takenSince(ctx, r.Name, r.Principal, r.Created)
+		if err != nil {
+			s.logWorker("reading a runtime's catalog entry failed", l.conn.Endpoint(), l.conn.Hello().Name, err, zap.String("build", r.ID))
+		} else if taken {
+			state, binary = artifact.BuildFailed, nil
+			result = serverBuildResult{Error: fmt.Sprintf("runtime %s was registered by another principal while this build ran; build under another name", r.Name)}
+		}
+	}
 	raw, err := json.Marshal(result)
 	if err != nil {
 		return

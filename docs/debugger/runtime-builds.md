@@ -282,7 +282,7 @@ returns the binary through presigned URLs.
 
 | Topic | Behavior |
 | --- | --- |
-| Permissions | Queueing needs `runtime.build` (engineers and admins). You see and cancel your own builds; `runtime.manage` sees and cancels all. |
+| Permissions | Queueing needs `runtime.build` (engineers and admins). A name already registered by someone else needs `runtime.manage` too; the replacement is audited as `ReplaceRuntime`. A build whose name another principal registers while it runs fails instead of replacing it. You see and cancel your own builds; `runtime.manage` sees and cancels all. |
 | Web client | The Runtimes page queues, lists, follows and cancels builds with the same API. The server returns no manifest, so Rebuild starts from what that browser remembered. |
 | Limits | At most 2 unfinished builds per principal and 20 on the server. The last 100 finished builds keep their logs. |
 | Storage | A built binary counts toward `store.storage_limit`. Each queued or running build reserves an eighth of it, at most 128 MiB, so a build is refused at queueing (`limit`) rather than after compiling. |
