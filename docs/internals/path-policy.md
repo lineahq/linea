@@ -121,9 +121,12 @@ A server reads no host file for a request. Its HTTP and MCP requests have no
 path fields: a request that names one is `invalid_request` (HTTP 400). A file
 a scenario still names is refused as `forbidden`, and a `${file:}` reference
 stands in with reason `outside_roots`. Runtime sources are git repositories
-the server clones; without an unrestricted policy `git clone` runs with
-`protocol.file.allow=never`, so a local repository (a path or `file://`) is
-refused. The connected CLI and the web client send files inline. Startup
+the server clones over `https://` only: without an unrestricted policy `git`
+runs with `protocol.allow=never` and `protocol.https.allow=always`, so a local
+repository (a path or `file://`), `ssh://`, `git://` and `ext::` are refused.
+It also runs in a minimal environment: no system or global git configuration,
+`HOME` set to the temp directory, and only `PATH`, temp, proxy, CA bundle and
+Windows system variables passed from the server's environment. The connected CLI and the web client send files inline. Startup
 prints that requests read no host file or host environment variable.
 
 Roots are absolute, existing directories, fixed when the service is composed;

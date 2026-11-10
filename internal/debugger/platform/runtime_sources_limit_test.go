@@ -40,3 +40,26 @@ func TestGitCloneLimitStopsLargeRepositories(t *testing.T) {
 		}
 	}
 }
+
+// TestServerClonesOverHTTPSOnly: a server's clone refuses every transport
+// but https before it connects, and its git sees none of the server's
+// other environment or git config.
+func TestServerClonesOverHTTPSOnly(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	for _, url := range []string{"git://127.0.0.1:1/repo", "ssh://git@127.0.0.1:1/repo", "ext::sh -c touch% /tmp/pwned", t.TempDir()} {
+		_, _, err := fetchGit(context.Background(), SourceOverride{Git: url}, false, 0)
+		if err == nil || !strings.Contains(err.Error(), "not allowed") && !strings.Contains(err.Error(), "https:// repositories only") {
+			t.Errorf("server clone of %q = %v, want refused as a transport", url, err)
+		}
+	}
+	t.Setenv("LINEA_TEST_SECRET", "s3cret")
+	env := strings.Join(gitEnv(false), "\n")
+	if strings.Contains(env, "s3cret") || !strings.Contains(env, "GIT_CONFIG_NOSYSTEM=1") {
+		t.Errorf("server git environment carries the host's: %q", env)
+	}
+	if !strings.Contains(strings.Join(gitEnv(true), "\n"), "s3cret") {
+		t.Error("the CLI's git lost the user's environment")
+	}
+}

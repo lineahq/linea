@@ -258,15 +258,21 @@ func fetchGit(ctx context.Context, o SourceOverride, local bool, limit int64) (m
 	}
 	defer os.RemoveAll(dir)
 	clone := filepath.Join(dir, "repo")
+	env := gitEnv(local)
 	// The build compiles the commit's bytes: no line-ending conversion.
-	file := "never"
+	// A server clones over https only, never over the host's other
+	// transports (file, git, ssh, ext) and without the host's git config.
+	protocols := []string{"-c", "protocol.allow=never", "-c", "protocol.https.allow=always"}
 	if local {
-		file = "always"
+		protocols = []string{"-c", "protocol.file.allow=always"}
 	}
-	bounded := func(args ...string) (string, error) { return gitBounded(ctx, dir, limit, args...) }
-	if _, err := bounded("-c", "protocol.file.allow="+file, "clone", "--quiet", "--no-checkout", "--config", "core.autocrlf=false", "--", o.Git, clone); err != nil {
+	bounded := func(args ...string) (string, error) { return gitBounded(ctx, env, dir, limit, args...) }
+	if _, err := bounded(append(protocols, "clone", "--quiet", "--no-checkout", "--config", "core.autocrlf=false", "--", o.Git, clone)...); err != nil {
 		if !local && strings.Contains(err.Error(), "transport 'file' not allowed") {
 			return nil, "", errors.New("a local repository is not allowed: the server reads no host file, so it clones remote repositories only")
+		}
+		if !local && strings.Contains(err.Error(), "not allowed") {
+			return nil, "", errors.New("the server clones https:// repositories only")
 		}
 		return nil, "", err
 	}
@@ -274,10 +280,10 @@ func fetchGit(ctx context.Context, o SourceOverride, local bool, limit int64) (m
 	if ref == "" {
 		ref = "HEAD"
 	}
-	commit, err := git(ctx, clone, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+	commit, err := git(ctx, env, clone, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
 	if err != nil {
 		// A branch other than the default exists only as a remote branch.
-		if commit, err = git(ctx, clone, "rev-parse", "--verify", "--quiet", "origin/"+ref+"^{commit}"); err != nil {
+		if commit, err = git(ctx, env, clone, "rev-parse", "--verify", "--quiet", "origin/"+ref+"^{commit}"); err != nil {
 			return nil, "", fmt.Errorf("the repository has no ref %s", ref)
 		}
 	}
@@ -300,9 +306,9 @@ func fetchGit(ctx context.Context, o SourceOverride, local bool, limit int64) (m
 
 // gitBounded runs git as git does, stopping it when the directory watch
 // grows past limit bytes; a limit of zero or less does not watch.
-func gitBounded(ctx context.Context, watch string, limit int64, args ...string) (string, error) {
+func gitBounded(ctx context.Context, env []string, watch string, limit int64, args ...string) (string, error) {
 	if limit <= 0 {
-		return git(ctx, "", args...)
+		return git(ctx, env, "", args...)
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -325,7 +331,7 @@ func gitBounded(ctx context.Context, watch string, limit int64, args ...string) 
 			}
 		}
 	}()
-	out, err := git(ctx, "", args...)
+	out, err := git(ctx, env, "", args...)
 	cancel()
 	<-done
 	if exceeded.Load() || err == nil && dirSize(watch) > limit {
@@ -355,14 +361,41 @@ func dirSize(dir string) int64 {
 	return n
 }
 
-// git runs the host's git without prompting for credentials it lacks. A
+// gitEnv is the environment git runs with. A local clone (the CLI) has the
+// user's environment and git config. A server's git gets only what it needs
+// to reach an https remote, through a proxy and with the host's CA
+// certificates: not the server's other variables, credentials or config.
+func gitEnv(local bool) []string {
+	base := []string{"GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never"}
+	if local {
+		return append(os.Environ(), base...)
+	}
+	env := append(base, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull, "HOME="+os.TempDir())
+	for _, name := range gitPassedVariables {
+		if v, ok := os.LookupEnv(name); ok {
+			env = append(env, name+"="+v)
+		}
+	}
+	return env
+}
+
+// gitPassedVariables are the host variables a server's git keeps: where
+// git is, the platform's temporary and system directories, proxies and CA
+// certificates.
+var gitPassedVariables = []string{
+	"PATH", "TMPDIR", "TEMP", "TMP", "SYSTEMROOT", "SystemRoot", "WINDIR", "COMSPEC",
+	"HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy",
+	"SSL_CERT_FILE", "SSL_CERT_DIR", "GIT_SSL_CAINFO", "GIT_SSL_CAPATH",
+}
+
+// git runs git with env, without prompting for credentials it lacks. A
 // cancelled git's helpers (git-remote-https) may hold its output open, so
 // waiting for them is bounded.
-func git(ctx context.Context, dir string, args ...string) (string, error) {
+func git(ctx context.Context, env []string, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.WaitDelay = 5 * time.Second
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never")
+	cmd.Env = env
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
