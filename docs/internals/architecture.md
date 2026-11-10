@@ -27,7 +27,9 @@ The root Go module is declared in `go.mod`.
   a temporary directory in `TestMain`; `cmd/linea` never imports
   `internal/debugger/container` (its Docker tests do, for image names).
 - `cmd/linea-server/` — the team server binary: a thin `main` that calls
-  `server.Main`. It takes `--config <file>` (required) and the flags
+  `server.Main`. It takes `--config <file>` (optional: the `LINEA_*` variables of
+  `internal/debugger/server/envconfig.go` set the same keys and override the
+  file) and the flags
   `--addr`, `--tls-cert-file`/`--tls-key-file` or `--allow-http`,
   `--drain-timeout`, `--metrics-listen`, `--mcp`, `--fleet-url`,
   `--fleet-token-file`, `--fleet-allow-http` and `--verbose` (debug logs), and

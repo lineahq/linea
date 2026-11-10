@@ -26,6 +26,10 @@ func Open(repository artifact.Repository, opts Options) (*Service, error) {
 		}
 		opts.BuildExport = name
 	}
+	if err := checkAdminOptions(opts); err != nil {
+		repository.Close()
+		return nil, err
+	}
 	if err := repository.EnableRuns(context.Background()); err != nil {
 		repository.Close()
 		return nil, err

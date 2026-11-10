@@ -70,6 +70,7 @@ import type {
 import type { AuditPage, RoleBindingRequest, RoleBindings, Session } from './types';
 import type { CopyRequest, LibraryPage, ProjectRequest, Projects, SavedArtifact as Copied, Sharing } from './types';
 import { withProject } from '../ui/project';
+import type { SignInMethods } from '../ui/signin';
 import type { components, operations } from './schema';
 
 /** FleetAgentQuery is the agent list's fleet filters. */
@@ -176,6 +177,14 @@ export const api = {
   session: () => call<Session>('GET', '/api/v1/session'),
   /** signOut ends the web session; the server needs the session's CSRF token. */
   signOut: () => call<void>('POST', '/auth/logout'),
+  /** signInMethods lists what the server signs in with (GET /auth/methods); it needs no session. */
+  signInMethods: () => call<SignInMethods>('GET', '/auth/methods'),
+  /**
+   * signInWithPassword signs the built-in admin account in and starts the web
+   * session (cookie): 204, 401 for a wrong user name or password, 429 after too
+   * many failed ones. The /auth endpoints are not in the OpenAPI contract.
+   */
+  signInWithPassword: (user: string, password: string) => call<void>('POST', '/auth/password', { user, password }),
   auditEvents: (q: AuditQuery = {}) => call<AuditPage>('GET', '/api/v1/audit-events' + query({ ...q })),
   roleBindings: () => call<RoleBindings>('GET', '/api/v1/role-bindings'),
   /** addRoleBinding grants a role at the managed bindings' revision; 409 when it moved. */

@@ -92,3 +92,20 @@ func runServer(t *testing.T, args ...string) (int, string, string) {
 	code := Main(context.Background(), args, &stdout, &stderr)
 	return code, stdout.String(), stderr.String()
 }
+
+// noEnv is an environment that sets nothing, so a test's config comes from
+// its file alone.
+func noEnv(string) (string, bool) { return "", false }
+
+// mapEnv is an environment of the given variables.
+func mapEnv(vars map[string]string) envLookup {
+	return func(name string) (string, bool) {
+		v, ok := vars[name]
+		return v, ok
+	}
+}
+
+// loadTest loads the server config file at path with no environment.
+func loadTest(path string) (*team, error) {
+	return loadConfig(path, environment{lookup: noEnv})
+}

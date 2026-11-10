@@ -157,13 +157,19 @@ protocols in [debugger-workers.md](debugger-workers.md).
 ### Verification
 
 `scripts/debugger/fanout-compose.sh` is the gate of the shared platform. It
-starts the Compose stack as a disposable project (two instances and
-`FANOUT_POOLS` pools of capacity 4), registers nothing, waits until a pool has
+starts the Compose stack as a disposable project with the test-only override
+`scripts/debugger/fanout-compose.yaml`: two instances behind an HAProxy load
+balancer (`scripts/debugger/fanout-haproxy.cfg`), which checks `GET /readyz`
+and which the workers dial too, and
+`FANOUT_POOLS` pools of capacity 4. It registers nothing, signs in as the
+built-in admin account (an API token from `POST /auth/password`, sent as
+`LINEA_TOKEN`), waits until a pool has
 registered the built-in runtime and it is the only one, then sends
 `FANOUT_RUNS` runs that name no runtime through `FANOUT_CLIENTS` concurrent
 `linea test --server`. It restarts one instance gracefully once half of the
-runs are submitted and fails unless every run passes. It removes the project,
-volumes and its `.env` on exit. Run it before a release
+runs are submitted and fails unless every run passes. It writes fresh secret
+files and an `.env` that sets `LINEA_SECRETS_DIR` into a temporary directory,
+and removes that directory, the project and its volumes on exit. Run it before a release
 ([development.md](development.md#before-a-release)).
 
 | Variable | Default |
@@ -174,8 +180,10 @@ volumes and its `.env` on exit. Run it before a release
 | `FANOUT_PORT` | 7079 |
 | `FANOUT_SAMPLE` | `logs-cleanup` |
 
-The edge network is fixed at `10.207.70.0/24`, so stop a running local stack
-before running it. The script starts only `proxy` and `pool`.
+The gate publishes only `127.0.0.1:FANOUT_PORT`, so stop whatever uses that
+port. It starts the load balancer and the pools with what they depend on,
+not the builder. The Compose deployment itself runs one instance; the load
+balancer exists only in the gate.
 
 ## Fleet attribution
 

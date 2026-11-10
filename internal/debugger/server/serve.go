@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -185,20 +186,31 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 		Logger: logger,
 		Access: tm.access, BuiltInOnWorkers: true, WorkerToken: tm.workerToken, BuilderToken: tm.buildToken, BuildExport: tm.buildExport,
 		QueueCapacity: tm.queue, Limits: tm.principals, Retention: tm.retention, Shared: true, Capture: captureOptions,
-		GitCloneBytes: tm.gitClone,
+		GitCloneBytes: tm.gitClone, AdminPassword: tm.adminPassword,
 	})
 	if err != nil {
 		return err
 	}
 	defer service.Close()
 	chain := platform.Authenticators{service.TokenAuthenticator()}
-	var signIn *platform.OIDC
+	// A browser reaching plain HTTP on loopback drops Secure cookies; behind
+	// a TLS-terminating proxy it speaks https.
+	insecureCookie := tlsConfig == nil && !tm.allowHTTP
+	var oidc *platform.OIDC
+	sessionTTL := time.Duration(0)
 	if tm.oidc != nil {
 		o := *tm.oidc
-		// A browser reaching plain HTTP on loopback drops Secure cookies;
-		// behind a TLS-terminating proxy it speaks https.
-		o.InsecureCookie = tlsConfig == nil && !tm.allowHTTP
-		if signIn, err = service.OIDC(ctx, o); err != nil {
+		o.InsecureCookie = insecureCookie
+		if oidc, err = service.OIDC(ctx, o); err != nil {
+			return err
+		}
+		sessionTTL = o.SessionTTL
+	}
+	// Sign-in serves OIDC and the built-in admin account under /auth/ and
+	// authenticates the web sessions both start.
+	var signIn *platform.SignIn
+	if oidc != nil || tm.adminPassword != "" {
+		if signIn, err = service.SignIn(platform.SignInOptions{OIDC: oidc, SessionTTL: sessionTTL, InsecureCookie: insecureCookie}); err != nil {
 			return err
 		}
 		chain = append(chain, signIn)
@@ -226,7 +238,8 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 			mux.Handle("/mcp", mcp.New(mcp.Options{Platform: service, Logger: logger, Authenticator: auth}))
 		}
 	}
-	srv := newTeamHTTPServer(securityHeaders(handler))
+	var draining atomic.Bool
+	srv := newTeamHTTPServer(securityHeaders(health(handler, &draining)))
 	srv.TLSConfig = tlsConfig
 	stopped := make(chan struct{})
 	defer close(stopped)
@@ -245,7 +258,9 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 			return
 		}
 		// Claim nothing more and let running work finish while the API
-		// still answers; Close hands the rest to another instance.
+		// still answers; Close hands the rest to another instance. Readiness
+		// fails first, so a load balancer sends new requests elsewhere.
+		draining.Store(true)
 		drainCtx, cancel := context.WithTimeout(context.Background(), tm.drain)
 		if err := service.Drain(drainCtx); err != nil {
 			fmt.Fprintf(stderr, "drain: work still running after %s is handed back to the queue\n", tm.drain)
@@ -264,7 +279,10 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 		fmt.Fprintf(stderr, "serving MCP on %s://%s/mcp\n", scheme, ln.Addr())
 	}
 	methods := []string{"API token"}
-	if signIn != nil {
+	if tm.adminPassword != "" {
+		methods = append(methods, "the built-in admin account")
+	}
+	if oidc != nil {
 		methods = append(methods, "OIDC sign-in with "+tm.oidc.Issuer)
 	}
 	if tm.headers != nil {
@@ -275,7 +293,11 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 	if captureOptions.Fleet.Endpoint != "" {
 		fmt.Fprintf(stderr, "live capture through fleet at %s\n", captureOptions.Fleet.Endpoint)
 	}
-	fmt.Fprintf(stderr, "storage: PostgreSQL, payloads in object storage bucket %s\n", tm.store.S3.Bucket)
+	created := ""
+	if tm.store.S3.CreateBucket {
+		created = " (created at startup if missing)"
+	}
+	fmt.Fprintf(stderr, "storage: PostgreSQL, payloads in object storage bucket %s%s\n", tm.store.S3.Bucket, created)
 	fmt.Fprintln(stderr, "requests read no host file or host environment variable: they send their files inline or name saved ones, and ${env:...} reads declared values only")
 	serve := srv.Serve
 	if tlsConfig != nil {
@@ -308,24 +330,33 @@ const (
 )
 
 // usage is how the server is started.
-const usage = "--config <file> [--addr 127.0.0.1:7070] [--tls-cert-file FILE --tls-key-file FILE | --allow-http] [--drain-timeout D] [--metrics-listen ADDR] [--mcp] [--fleet-url URL --fleet-token-file FILE [--fleet-allow-http]] [--verbose]"
+const usage = "[--config <file>] [--addr 127.0.0.1:7070] [--tls-cert-file FILE --tls-key-file FILE | --allow-http] [--drain-timeout D] [--metrics-listen ADDR] [--mcp] [--fleet-url URL --fleet-token-file FILE [--fleet-allow-http]] [--verbose]"
 
-// noConfig refuses a start without a server config.
-const noConfig = "linea-server needs --config <file>: run a team server on Kubernetes (docs/debugger/deploy-kubernetes.md) or locally with Docker Compose (docs/debugger/deploy-compose.md)"
+// noConfig refuses a start with no server config at all: neither a file nor
+// a LINEA_* variable that sets a key.
+const noConfig = "linea-server has no configuration: set LINEA_STORE_DATABASE_URL_FILE, LINEA_STORE_OBJECTS_BUCKET and the other LINEA_* variables, or pass --config <file> (docs/debugger/team-server.md). Run a team server on Kubernetes (docs/debugger/deploy-kubernetes.md) or locally with Docker Compose (docs/debugger/deploy-compose.md)"
 
 // Main serves the team server's HTTP API until ctx ends and returns the
 // process's exit code. The server config composes it; there is no other
 // server mode.
 func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	return run(ctx, args, stdout, stderr, processEnvironment())
+}
+
+// run is Main with the environment that overrides the server config.
+func run(ctx context.Context, args []string, stdout, stderr io.Writer, env environment) int {
+	if len(args) > 0 && args[0] == "probe" {
+		return probe(ctx, args[1:], stderr)
+	}
 	fs := flag.NewFlagSet("linea-server", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
-		fmt.Fprintf(stderr, "usage: linea-server %s\n", usage)
+		fmt.Fprintf(stderr, "usage: linea-server %s\n       linea-server probe [--url http://127.0.0.1:7070/readyz]\n", usage)
 		fs.PrintDefaults()
-		fmt.Fprintln(stderr, "\nThe server config names the storage (PostgreSQL and object storage), authentication, role bindings and worker registration; see docs/debugger/team-server.md.\nRequests read no host file or host environment variable: they send their files inline or name saved ones, and ${env:NAME} reads only scenario/setup values and URI defaults; any other name gets a stand-in.")
+		fmt.Fprintln(stderr, "\nThe server config, a file and the LINEA_* environment variables that override it, names the storage (PostgreSQL and object storage), authentication, role bindings and worker registration; see docs/debugger/team-server.md.\nRequests read no host file or host environment variable: they send their files inline or name saved ones, and ${env:NAME} reads only scenario/setup values and URI defaults; any other name gets a stand-in.")
 	}
 	addr := fs.String("addr", "127.0.0.1:7070", "address to listen on")
-	configPath := fs.String("config", "", "the server config that composes the server: storage, secrets, authentication, role bindings, retention and limits (required)")
+	configPath := fs.String("config", "", "a server config file: storage, secrets, authentication, role bindings, retention and limits; optional, and every key in it can be set or overridden by its LINEA_* environment variable")
 	var tm teamServe
 	fs.StringVar(&tm.certFile, "tls-cert-file", "", "serve TLS with this PEM certificate chain")
 	fs.StringVar(&tm.keyFile, "tls-key-file", "", "the PEM private key of --tls-cert-file")
@@ -352,14 +383,15 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	switch {
 	case fs.NArg() > 0:
 		return refuse(fmt.Sprintf("unexpected argument %q", fs.Arg(0)))
-	case *configPath == "":
-		return refuse(noConfig)
 	case (tm.certFile == "") != (tm.keyFile == ""):
 		return refuse("--tls-cert-file and --tls-key-file go together")
 	case tm.certFile != "" && tm.allowHTTP:
 		return refuse("--allow-http cannot be used with --tls-cert-file")
 	}
-	t, err := loadConfig(*configPath)
+	t, err := loadConfig(*configPath, env)
+	if errors.Is(err, errNoConfig) {
+		return refuse(noConfig)
+	}
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitError

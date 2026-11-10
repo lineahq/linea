@@ -1,7 +1,9 @@
 # Running a team server
 
 A team server is one `linea-server` that a platform team shares. It is the only
-server mode: `linea-server` without `--config` is refused. It authenticates every
+server mode. It is configured by a [server config](#the-server-config), a file
+(`--config`), [environment variables](#environment-variables) or both;
+`linea-server` with neither is refused. It authenticates every
 request, authorizes it by role bindings, and can be reached from other
 machines. It runs the same platform as the CLI, web client and MCP, so every
 capability works the same way in all three.
@@ -9,8 +11,9 @@ capability works the same way in all three.
 Run it on one machine with the [Docker Compose stack](deploy-compose.md), or on
 a cluster with the [Kubernetes chart](deploy-kubernetes.md). Both run the same
 server with the same config: sign-in, roles, storage and limits do not depend
-on which you choose. Compose writes the config from `.env`, the chart from its
-values. The mechanisms
+on which you choose. Compose sets the config through [environment
+variables](#environment-variables) from `.env` and reads its secrets from
+files, the chart writes it from its values. The mechanisms
 behind this page are in [team server
 mechanisms](../internals/debugger-team-server.md).
 
@@ -18,7 +21,7 @@ mechanisms](../internals/debugger-team-server.md).
 
 | Need | Detail |
 | --- | --- |
-| PostgreSQL and an S3-compatible bucket | The server creates its tables, but neither the database nor the bucket. |
+| PostgreSQL and an S3-compatible bucket | The server creates its tables, but not the database. It creates the bucket only with `store.objects.create_bucket: true`. |
 | Sign-in | An OIDC identity provider, or an authenticating proxy that sends identity headers. |
 | Runtime workers | At least one, which dials the server. Add a runtime builder if people build runtimes on the server. The server itself runs no Collector. |
 | One release | Server, workers and builders of one release. Each release publishes the `linea-server`, `linea-worker` and `linea-builder` images to `ghcr.io/lineahq/`; you can also build them from `deploy/docker/`. A builder of another release is refused. |
@@ -53,16 +56,23 @@ linea-server --config config.yaml --addr 0.0.0.0:7070 \
 
 ## The server config
 
-The server config is the only source of host state for a team server. Relative
-paths resolve against the file's directory. Unknown keys are refused.
+The server config is the only source of host state for a team server. It is a
+YAML file, `--config <file>`, or [environment variables](#environment-variables)
+that set the same keys, or both. A file's relative paths resolve against the
+file's directory. Unknown keys in the file are refused.
 
 ```yaml
 version: 1
 store:                                  # required: PostgreSQL and object storage
-  database_url_file: /etc/linea/store/database-url   # holds a postgres:// URL
+  database_url_file: /etc/linea/store/database-url   # holds a postgres:// URL, password included
+  # Or give the URL without a password and the password apart, so the URL
+  # can be plain configuration; give one of the two ways, not both:
+  # database_url: postgres://linea@postgres:5432/linea?sslmode=disable
+  # database_password_file: /etc/linea/store/database-password
   objects:
     endpoint: https://s3.example.internal   # http:// or https://
     bucket: linea
+    create_bucket: false  # true: create the bucket at startup if it is missing (default false)
     prefix: ""            # optional key prefix
     region: ""            # optional
     path_style: true      # SeaweedFS and most self-hosted stores need it
@@ -84,7 +94,9 @@ builds:
   token_file: builder-token
   # export:                 # optional: builders also push each built runtime as an image
   #   repository: registry.example.com/team/linea-runtimes
-authentication:             # at least one of oidc and trusted_headers
+authentication:             # at least one of admin, oidc and trusted_headers
+  admin:                    # the built-in admin account (Signing in)
+    password_file: admin-password  # one line, at least 16 characters; read at startup
   oidc:
     issuer: https://dex.example.com
     client_id: linea           # the web client, a confidential client
@@ -102,7 +114,7 @@ authentication:             # at least one of oidc and trusted_headers
     user: X-Forwarded-User
     groups: X-Forwarded-Groups      # optional, comma-separated
     name: X-Forwarded-Preferred-Username  # optional, for display
-bindings:                   # required; without a binding nothing is allowed
+bindings:                   # required unless only the admin account signs in
   - group: platform
     role: engineer
     scope: "*"              # "*" or project:<id>
@@ -118,6 +130,82 @@ limits:                     # optional; the counts below each 1 to 1024
   captures_per_principal: 1 # captures not yet ended per person or service
   connections: 1024         # open API connections, 16 to 65536
   git_clone_size: 256MiB    # each git source the server clones
+```
+
+### Environment variables
+
+Every key of the server config has an environment variable. The name is
+`LINEA_` plus the key's path in upper case, the segments joined by `_`:
+
+| Key | Variable |
+| --- | --- |
+| `store.storage_limit` | `LINEA_STORE_STORAGE_LIMIT` |
+| `store.objects.bucket` | `LINEA_STORE_OBJECTS_BUCKET` |
+| `store.objects.create_bucket` | `LINEA_STORE_OBJECTS_CREATE_BUCKET` |
+| `store.database_url_file` | `LINEA_STORE_DATABASE_URL_FILE` |
+| `authentication.oidc.issuer` | `LINEA_AUTHENTICATION_OIDC_ISSUER` |
+| `retention.age` | `LINEA_RETENTION_AGE` |
+| `bindings` | `LINEA_BINDINGS` |
+
+- **Values.** A string is taken as written. A number, `true` or `false` is
+  read as YAML, as the file reads it, and the sizes and durations are the
+  file's (`64MiB`, `7d`, `12h`). A list or an object is one YAML flow value:
+  `LINEA_BINDINGS='[{group: admins, role: admin, scope: "*"}]'` or
+  `LINEA_AUTHENTICATION_OIDC_SCOPES='[openid, profile, groups]'`. A flow list
+  replaces the file's list; it does not add to it.
+- **Secrets are files.** A secret has no variable of its own: its `*_file` key
+  is the variable that names the file (`LINEA_STORE_DATABASE_URL_FILE`,
+  `LINEA_STORE_OBJECTS_SECRET_KEY_FILE`, `LINEA_BUILDS_TOKEN_FILE`,
+  `LINEA_AUTHENTICATION_OIDC_CLIENT_SECRET_FILE`), as with the official
+  PostgreSQL image's `POSTGRES_PASSWORD_FILE`. A relative path in a variable
+  resolves against the server's working directory; a file's relative paths
+  still resolve against the file.
+- **Precedence.** A variable overrides the same key in the file. A variable
+  that is empty, or only blanks, counts as not set: it does not override the
+  file and does not switch a section on (`LINEA_AUTHENTICATION_OIDC_ISSUER=`
+  leaves OIDC off), so Compose may pass `${NAME:-}`. Keys combine one by
+  one: a variable can change one OIDC key of the file's `oidc` section.
+- **No file.** Without `--config` the whole server config comes from the
+  environment. `linea-server` with no file and no variable that sets a key is
+  refused; one that lacks a required key says which variables to set.
+- **Not keys.** The file's `version` has no variable, and other `LINEA_*`
+  variables, such as `LINEA_VERSION` of the images, are ignored: a misspelled
+  variable of an optional key is not reported, so check the startup notices.
+- **Errors** about a value that came from a variable name the variable, not
+  the key: `server config (environment): LINEA_STORE_STORAGE_LIMIT: invalid size "lots"...`.
+  A message about a value from the file names its key.
+- **Database URL.** `store.database_url` (`LINEA_STORE_DATABASE_URL`) is a
+  `postgres://` URL that must not carry a password, nor a `password`
+  parameter. `store.database_password_file` supplies it: the file's content
+  without its trailing line breaks, set as the URL's password and escaped
+  (the URL needs a user name for that). Give exactly one of `database_url_file`
+  and `database_url`; `database_password_file` goes only with `database_url`.
+
+An example for Docker Compose, with the secrets mounted as files:
+
+```yaml
+services:
+  linea:
+    image: ghcr.io/lineahq/linea-server:${LINEA_VERSION}
+    command: ["--addr", "0.0.0.0:7070", "--allow-http", "--mcp"]
+    environment:
+      LINEA_STORE_DATABASE_URL: postgres://linea@postgres:5432/linea?sslmode=disable
+      LINEA_STORE_DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
+      LINEA_STORE_OBJECTS_ENDPOINT: http://seaweedfs:8333
+      LINEA_STORE_OBJECTS_BUCKET: linea
+      LINEA_STORE_OBJECTS_CREATE_BUCKET: "true"
+      LINEA_STORE_OBJECTS_PATH_STYLE: "true"
+      LINEA_STORE_OBJECTS_ACCESS_KEY_FILE: /run/secrets/s3_access_key
+      LINEA_STORE_OBJECTS_SECRET_KEY_FILE: /run/secrets/s3_secret_key
+      LINEA_STORE_STORAGE_LIMIT: 4GiB
+      LINEA_WORKER_TOKEN_FILE: /run/secrets/worker_token
+      LINEA_BUILDS_TOKEN_FILE: /run/secrets/builder_token
+      LINEA_AUTHENTICATION_OIDC_ISSUER: https://dex.example.com
+      LINEA_AUTHENTICATION_OIDC_CLIENT_ID: linea
+      LINEA_AUTHENTICATION_OIDC_CLIENT_SECRET_FILE: /run/secrets/oidc_client_secret
+      LINEA_AUTHENTICATION_OIDC_REDIRECT_URL: https://linea.example.com/auth/callback
+      LINEA_BINDINGS: '[{group: platform-admins, role: admin, scope: "*"}]'
+    secrets: [postgres_password, s3_access_key, s3_secret_key, worker_token, builder_token, oidc_client_secret]
 ```
 
 ### Roles
@@ -304,10 +392,15 @@ The `store` block is required.
 
 - Each `*_file` names a file whose trimmed content is the secret: a
   `postgres://` URL, the access key, the secret key (static credentials only).
-  A file that cannot be read, or is empty, refuses startup.
+  A file that cannot be read, or is empty, refuses startup. The database
+  password of `database_password_file` loses only trailing line breaks.
 - At startup the server applies its embedded migrations and checks that the
-  bucket exists. The database and the bucket are yours to run, back up and
-  secure.
+  bucket exists. With `objects.create_bucket: true` it creates a missing bucket
+  (`HeadBucket` answers not found, then `CreateBucket`; a start of another
+  instance that wins the race is accepted). Any other failure, such as access
+  denied or an unreachable endpoint, never creates anything and refuses
+  startup. Without it a missing bucket refuses startup. The database, and the
+  bucket unless it is created, are yours to run, back up and secure.
 - The layout and limits are in [artifact
   storage](../internals/artifact-storage.md).
 
@@ -419,9 +512,8 @@ instance. One instance at a time does housekeeping and run retention.
 | CLI waits | The connected CLI retries a report wait that gets a lost connection, or a 502, 503 or 504 without an operation error code, for up to 30 s of such failures, so it reaches another instance. |
 | Builder autoscaling | `--metrics-listen ADDR` serves the build queue's counts at `GET /metrics` on its own listener, without credentials ([scaling builders](deploy-kubernetes.md#scaling-builders)). |
 
-[Docker Compose](deploy-compose.md) runs `LINEA_REPLICAS` instances (1) behind
-HAProxy on one machine; the [Kubernetes chart](deploy-kubernetes.md) runs
-`server.replicas` instances.
+[Docker Compose](deploy-compose.md) runs one instance on one machine; the
+[Kubernetes chart](deploy-kubernetes.md) runs `server.replicas` instances.
 
 ## Limits
 
@@ -499,8 +591,25 @@ A Collector serves one capture at a time:
 
 ## Signing in
 
+The server has a built-in account, `admin`, when
+`authentication.admin.password_file` (`LINEA_AUTHENTICATION_ADMIN_PASSWORD_FILE`)
+names a file with its password. It holds the `admin` role on `*` without a
+binding, so a server whose only sign-in method is this account needs no
+`bindings`. The web client's sign-in page, `/sign-in`, asks for its user name
+and password; `linea login` asks for the password and stores an API token.
+
+- The password is never stored: the server compares it with the file's, read
+  at startup, in constant time.
+- Each instance accepts 5 failed sign-ins a minute per client address and 20
+  in total, then answers 429 for the rest of the minute. A refusal is logged
+  with the client address, never the attempt.
+- Remove the setting once a group from your identity provider holds `admin`:
+  the server then refuses the password, and the account's sessions and API
+  tokens stop working.
+
 With `oidc`, people open the web client and sign in at the identity provider.
-Register `redirect_url` at the provider.
+Register `redirect_url` at the provider. With both, the sign-in page offers
+the password form and "Sign in with" the provider.
 
 - The server keeps the session in its database and the browser holds only a
   random cookie, so signing out ends it at once.
@@ -512,11 +621,13 @@ Register `redirect_url` at the provider.
   without `access.manage`). The server still checks every request.
 - Someone signed in whom no binding names sees a "No access yet" page.
 - The settings menu names the signed-in user and signs them out.
-- A 401 shows a sign-in page whose button opens `/auth/login`, which exists only
-  with `oidc`. Browser access therefore needs `oidc` or an authenticating proxy
-  that sends trusted headers. API tokens serve the CLI and CI, not browsers.
+- A 401 shows a sign-in prompt whose button opens `/auth/login`: the provider
+  when `oidc` is the only method, otherwise the sign-in page. Without `admin`
+  or `oidc`, browser access needs an authenticating proxy that sends trusted
+  headers. API tokens serve the CLI and CI, not browsers.
 
-The CLI signs in with the device flow when `cli_client_id` is set:
+The CLI signs in with the device flow when `cli_client_id` is set, or with the
+built-in admin account's password when the server accepts it:
 
 ```sh
 linea login --server https://debugger.example.com
@@ -525,11 +636,29 @@ linea runs --server https://debugger.example.com
 linea logout --server https://debugger.example.com
 ```
 
-- `login` keeps the refresh token in `linea/credentials.json` under the user's
+- `login` keeps the sign-in in `linea/credentials.json` under the user's
   config directory, readable by the user only, one sign-in per server.
 - Later `--server` commands present the ID token and renew it when it expires.
 - `logout` forgets the sign-in on this machine; it does not revoke the refresh
   token at the provider.
+- Admin password: `linea login` asks the server (`GET /auth/cli`) which methods
+  it offers. With the device flow it uses the device flow; with only the
+  admin password it prompts for the password on the terminal without echo.
+  When the server offers both, `--admin` picks the password, and
+  `--password-stdin` (which implies `--admin`) reads it from the first line of
+  standard input for scripts:
+
+  ```sh
+  linea login --server https://debugger.example.com --admin
+  printf '%s\n' "$LINEA_ADMIN_PASSWORD" | linea login --server https://debugger.example.com --password-stdin
+  ```
+
+  Without a terminal and without `--password-stdin`, `login` fails rather than
+  read the password silently. The server answers an API token for the admin
+  account (`POST /auth/password`); `login` stores that token and its expiry, with
+  no refresh token, so later commands present it until it expires and you then
+  sign in again. A wrong password, or too many failed sign-ins (the error names
+  how many seconds to wait), exits 1 and stores nothing.
 - `$LINEA_TOKEN` takes precedence over a stored sign-in.
 - For a server or identity provider whose certificate a private CA signs, pass
   `--ca FILE` (PEM) to `login`. The CLI trusts it beside the system roots, keeps
@@ -537,7 +666,7 @@ linea logout --server https://debugger.example.com
   server, also when `$LINEA_TOKEN` supplies the token. A later `login` without
   `--ca` keeps the stored CA.
 - Against a server without CLI sign-in, `login` stores nothing. If the server
-  already signs requests in, as the Compose stack's proxy does, it says that no
+  already signs requests in, as an authenticating proxy does, it says that no
   sign-in is needed and exits 0; otherwise it asks for an API token in
   `$LINEA_TOKEN` and exits 1.
 

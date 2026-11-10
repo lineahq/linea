@@ -6,13 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	"github.com/lineahq/linea/internal/debugger/artifact"
 )
@@ -169,10 +172,91 @@ func newS3(ctx context.Context, c S3Config) (ObjectStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(c.Bucket)}); err != nil {
-		return nil, fmt.Errorf("%w: object storage bucket %q: %w", artifact.ErrStorage, c.Bucket, err)
+	region := c.Region
+	if region == "" {
+		region = "us-east-1"
+	}
+	if err := ensureBucketExists(ctx, client, c.Bucket, region, c.CreateBucket); err != nil {
+		return nil, err
 	}
 	return &s3Store{client: client, presign: s3.NewPresignClient(client), bucket: c.Bucket}, nil
+}
+
+// bucketAPI is the part of the S3 client that opening a bucket uses.
+type bucketAPI interface {
+	HeadBucket(context.Context, *s3.HeadBucketInput, ...func(*s3.Options)) (*s3.HeadBucketOutput, error)
+	CreateBucket(context.Context, *s3.CreateBucketInput, ...func(*s3.Options)) (*s3.CreateBucketOutput, error)
+}
+
+// ensureBucketExists checks that the bucket exists and, when create is set,
+// makes it if HeadBucket says it is missing. Any other HeadBucket failure
+// (access denied, a network error) is returned as it is: it never triggers a
+// create. Instances that start together may race: a create that finds the
+// bucket already there is accepted once a second HeadBucket confirms the
+// credentials can reach it.
+func ensureBucketExists(ctx context.Context, api bucketAPI, bucket, region string, create bool) error {
+	head := func() error {
+		_, err := api.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(bucket)})
+		return err
+	}
+	err := head()
+	if err == nil {
+		return nil
+	}
+	if !create || !bucketMissing(err) {
+		return fmt.Errorf("%w: object storage bucket %q: %w", artifact.ErrStorage, bucket, err)
+	}
+	in := &s3.CreateBucketInput{Bucket: aws.String(bucket)}
+	if region != "us-east-1" {
+		in.CreateBucketConfiguration = &s3types.CreateBucketConfiguration{LocationConstraint: s3types.BucketLocationConstraint(region)}
+	}
+	if _, err := api.CreateBucket(ctx, in); err != nil {
+		if !bucketExists(err) {
+			return fmt.Errorf("%w: create object storage bucket %q: %w", artifact.ErrStorage, bucket, err)
+		}
+		if err := head(); err != nil {
+			return fmt.Errorf("%w: object storage bucket %q: %w", artifact.ErrStorage, bucket, err)
+		}
+	}
+	return nil
+}
+
+// bucketMissing reports whether a HeadBucket error says the bucket does not
+// exist. S3-compatible servers answer a HEAD without a body, so besides the
+// typed errors it accepts the generic codes and a bare HTTP 404.
+func bucketMissing(err error) bool {
+	var notFound *s3types.NotFound
+	var noBucket *s3types.NoSuchBucket
+	if errors.As(err, &notFound) || errors.As(err, &noBucket) {
+		return true
+	}
+	var api smithy.APIError
+	if errors.As(err, &api) {
+		switch api.ErrorCode() {
+		case "NotFound", "NoSuchBucket", "404":
+			return true
+		}
+	}
+	var resp *awshttp.ResponseError
+	return errors.As(err, &resp) && resp.HTTPStatusCode() == http.StatusNotFound
+}
+
+// bucketExists reports whether a CreateBucket error says the bucket is
+// already there, which a concurrent start of another instance causes.
+func bucketExists(err error) bool {
+	var owned *s3types.BucketAlreadyOwnedByYou
+	var exists *s3types.BucketAlreadyExists
+	if errors.As(err, &owned) || errors.As(err, &exists) {
+		return true
+	}
+	var api smithy.APIError
+	if errors.As(err, &api) {
+		switch api.ErrorCode() {
+		case "BucketAlreadyOwnedByYou", "BucketAlreadyExists":
+			return true
+		}
+	}
+	return false
 }
 
 func (m *s3Store) Put(ctx context.Context, key string, data []byte) error {

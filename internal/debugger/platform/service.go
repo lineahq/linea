@@ -101,6 +101,11 @@ type Options struct {
 	// Access decides what each principal may do; nil is local
 	// mode's policy, where the local owner is admin everywhere.
 	Access *Policy
+	// AdminPassword turns on the built-in admin account (admin.go): its
+	// password, at least MinAdminPassword characters; empty turns the account
+	// off and refuses its sessions and tokens. It needs a workspace (Open)
+	// and Access, which gains the account's admin binding on scope *.
+	AdminPassword string
 	// Limits bound what one principal holds at once (team mode);
 	// zero fields are unlimited.
 	Limits PrincipalLimits
@@ -275,6 +280,8 @@ type Service struct {
 	// extended by the managed role bindings, managed (role_bindings.go).
 	access    *authz.Policy
 	effective atomic.Pointer[authz.Policy]
+	// admin is the built-in admin account, nil when it is off.
+	admin     *adminAccount
 	bindingMu sync.Mutex
 	managed   artifact.RoleBindingSet
 	// projectSet is the repository's project set (projects.go); projectMu
@@ -410,6 +417,12 @@ func newService(opts Options, repository artifact.Repository) *Service {
 	if access == nil {
 		access = authz.Local(LocalOwner)
 	}
+	var admin *adminAccount
+	if opts.AdminPassword != "" && opts.Access != nil {
+		// Open has checked the password and that the binding extends Access.
+		admin = newAdminAccount(opts.AdminPassword)
+		access, _ = access.Extend([]authz.Binding{adminBinding})
+	}
 	var runBytes int64
 	if repository != nil {
 		runBytes = repository.Limits().RunBytes
@@ -468,6 +481,7 @@ func newService(opts Options, repository artifact.Repository) *Service {
 		policy:           policy,
 		remotePolicy:     remotePolicy,
 		access:           access,
+		admin:            admin,
 		prepareRemote:    prepareRemote,
 		budgets:          budgets,
 		runtimes:         opts.Runtimes,

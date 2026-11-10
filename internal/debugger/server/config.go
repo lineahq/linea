@@ -20,12 +20,14 @@ import (
 	"github.com/lineahq/linea/internal/debugger/store/pg"
 )
 
-// The server config composes linea-server --config: a shared server that
+// The server config composes linea-server: a shared server that
 // authenticates every request and authorizes it by role bindings. It is the
 // only source of host state on a team server: the store, the secrets and the
-// sign-in are named here. Requests read no host file and no host
-// environment variable. Relative paths are resolved against the file's
-// directory.
+// sign-in are named here, in a file (--config), in LINEA_* environment
+// variables (envconfig.go), or both, where the environment wins. Requests
+// read no host file and no host environment variable. A file's relative
+// paths are resolved against its directory, an environment variable's against
+// the working directory.
 
 const (
 	serverConfigVersion = 1
@@ -57,13 +59,21 @@ type serverConfig struct {
 	// Store is PostgreSQL for records and S3-compatible object storage for
 	// payloads; secrets are read from files.
 	Store struct {
-		DatabaseURLFile string `yaml:"database_url_file"`
-		Objects         struct {
-			Endpoint      string `yaml:"endpoint"`
-			Bucket        string `yaml:"bucket"`
-			Prefix        string `yaml:"prefix"`
-			Region        string `yaml:"region"`
-			PathStyle     bool   `yaml:"path_style"`
+		// DatabaseURLFile holds the whole URL, password included.
+		// DatabaseURL is a URL without a password that
+		// DatabasePasswordFile completes: give one of the two ways.
+		DatabaseURLFile      string `yaml:"database_url_file"`
+		DatabaseURL          string `yaml:"database_url"`
+		DatabasePasswordFile string `yaml:"database_password_file"`
+		Objects              struct {
+			Endpoint  string `yaml:"endpoint"`
+			Bucket    string `yaml:"bucket"`
+			Prefix    string `yaml:"prefix"`
+			Region    string `yaml:"region"`
+			PathStyle bool   `yaml:"path_style"`
+			// CreateBucket makes the bucket at startup when it is
+			// missing and the credentials allow it.
+			CreateBucket  bool   `yaml:"create_bucket"`
 			AccessKeyFile string `yaml:"access_key_file"`
 			SecretKeyFile string `yaml:"secret_key_file"`
 		} `yaml:"objects"`
@@ -104,6 +114,10 @@ type serverConfig struct {
 			NameClaim        string   `yaml:"name_claim"`
 			SessionTTL       string   `yaml:"session_ttl"`
 		} `yaml:"oidc"`
+		// Admin is the built-in admin account, on when it has a password.
+		Admin *struct {
+			PasswordFile string `yaml:"password_file"`
+		} `yaml:"admin"`
 	} `yaml:"authentication"`
 	Bindings []struct {
 		Group     string `yaml:"group"`
@@ -136,54 +150,92 @@ type team struct {
 	access      *platform.Policy
 	headers     *platform.TrustedHeaders
 	oidc        *platform.OIDCOptions
-	queue       int
-	principals  platform.PrincipalLimits
-	retention   platform.RetentionPolicy
-	connections int
-	gitClone    int64
+	// adminPassword turns on the built-in admin account; empty is off.
+	adminPassword string
+	queue         int
+	principals    platform.PrincipalLimits
+	retention     platform.RetentionPolicy
+	connections   int
+	gitClone      int64
 }
 
-// loadConfig reads and checks a server config; every error names the file.
-func loadConfig(path string) (*team, error) {
-	t, err := readConfig(path)
+// errNoConfig is loadConfig's answer to neither a file nor a single
+// environment variable that sets a key.
+var errNoConfig = errors.New("no server config")
+
+// loadConfig reads and checks a server config from the file at path, which
+// may be empty, and the environment, which overrides it. Every error names
+// the file, or the environment when there is none, and a key that a variable
+// set is named by its variable.
+func loadConfig(path string, env environment) (*team, error) {
+	where := "server config " + path
+	if path == "" {
+		where = "server config (environment)"
+	}
+	var file serverConfig
+	if path != "" {
+		var err error
+		if file, err = readConfigFile(path); err != nil {
+			return nil, fmt.Errorf("%s: %w", where, err)
+		}
+	}
+	set, err := env.apply(&file)
 	if err != nil {
-		return nil, fmt.Errorf("server config %s: %w", path, err)
+		return nil, fmt.Errorf("%s: %w", where, err)
+	}
+	if path == "" && len(set) == 0 {
+		return nil, errNoConfig
+	}
+	resolve := func(p string) string { return p }
+	if path != "" {
+		base, err := filepath.Abs(filepath.Dir(path))
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", where, err)
+		}
+		resolve = func(p string) string {
+			if p == "" || filepath.IsAbs(p) {
+				return p
+			}
+			return filepath.Join(base, p)
+		}
+	}
+	t, err := composeTeam(file, resolve)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %s", where, nameVariables(err.Error(), set))
 	}
 	return t, nil
 }
 
-func readConfig(path string) (*team, error) {
+// readConfigFile reads the server config file at path.
+func readConfigFile(path string) (serverConfig, error) {
+	var file serverConfig
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return file, err
 	}
 	defer f.Close()
 	raw, err := io.ReadAll(io.LimitReader(f, maxServerConfig+1))
 	if err != nil {
-		return nil, err
+		return file, err
 	}
 	if len(raw) > maxServerConfig {
-		return nil, errors.New("larger than 1 MiB")
+		return file, errors.New("larger than 1 MiB")
 	}
-	var file serverConfig
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)
 	if err := dec.Decode(&file); err != nil {
-		return nil, err
+		return file, err
 	}
 	if file.Version != serverConfigVersion {
-		return nil, fmt.Errorf("version %d: want version: %d", file.Version, serverConfigVersion)
+		return file, fmt.Errorf("version %d: want version: %d", file.Version, serverConfigVersion)
 	}
-	base, err := filepath.Abs(filepath.Dir(path))
-	if err != nil {
-		return nil, err
-	}
-	resolve := func(p string) string {
-		if p == "" || filepath.IsAbs(p) {
-			return p
-		}
-		return filepath.Join(base, p)
-	}
+	return file, nil
+}
+
+// composeTeam checks a server config, from whichever source, and reads the
+// secret files it names through resolve.
+func composeTeam(file serverConfig, resolve func(string) string) (*team, error) {
+	var err error
 	t := &team{}
 	if t.store, err = teamStore(file, resolve); err != nil {
 		return nil, err
@@ -222,7 +274,8 @@ func readConfig(path string) (*team, error) {
 
 	if h := file.Authentication.TrustedHeaders; h != nil {
 		if len(h.Proxies) == 0 || h.Issuer == "" || h.User == "" {
-			return nil, errors.New("authentication.trusted_headers needs proxies, issuer and user")
+			return nil, fmt.Errorf("authentication.trusted_headers needs proxies, issuer and user (%s, %s, %s)",
+				envName("authentication.trusted_headers.proxies"), envName("authentication.trusted_headers.issuer"), envName("authentication.trusted_headers.user"))
 		}
 		th := &platform.TrustedHeaders{Issuer: h.Issuer, User: h.User, Groups: h.Groups, Name: h.Name}
 		for _, p := range h.Proxies {
@@ -240,12 +293,18 @@ func readConfig(path string) (*team, error) {
 	}
 	if o := file.Authentication.OIDC; o != nil {
 		if t.oidc, err = teamOIDC(o.Issuer, o.ClientID, resolve(o.ClientSecretFile), o.RedirectURL, o.CLIClientID, o.SessionTTL); err != nil {
-			return nil, fmt.Errorf("authentication.oidc: %w", err)
+			return nil, err
 		}
 		t.oidc.Audiences, t.oidc.Scopes, t.oidc.GroupsClaim, t.oidc.NameClaim = o.Audiences, o.Scopes, o.GroupsClaim, o.NameClaim
 	}
-	if t.headers == nil && t.oidc == nil {
-		return nil, errors.New("authentication needs a sign-in method, oidc or trusted_headers; API tokens are created by signed-in users")
+	if a := file.Authentication.Admin; a != nil && a.PasswordFile != "" {
+		if t.adminPassword, err = teamAdminPassword(resolve(a.PasswordFile)); err != nil {
+			return nil, fmt.Errorf("authentication.admin.password_file: %w", err)
+		}
+	}
+	if t.headers == nil && t.oidc == nil && t.adminPassword == "" {
+		return nil, fmt.Errorf("authentication needs a sign-in method, the built-in admin account (%s), oidc (%s) or trusted_headers (%s); API tokens are created by signed-in users",
+			envName("authentication.admin.password_file"), envName("authentication.oidc.issuer"), envName("authentication.trusted_headers.proxies"))
 	}
 
 	bindings := make([]platform.Binding, 0, len(file.Bindings))
@@ -256,8 +315,9 @@ func readConfig(path string) (*team, error) {
 		}
 		bindings = append(bindings, platform.Binding{Subject: platform.Subject{Group: b.Group, Principal: b.Principal}, Role: b.Role, Scope: scope})
 	}
-	if len(bindings) == 0 {
-		return nil, errors.New("bindings are required: without one, nobody may do anything")
+	// The admin account's own binding is the platform's.
+	if len(bindings) == 0 && t.adminPassword == "" {
+		return nil, fmt.Errorf("bindings are required (%s): without one, nobody may do anything", envName("bindings"))
 	}
 	if t.access, err = platform.NewPolicy(bindings); err != nil {
 		return nil, fmt.Errorf("bindings: %w", err)
@@ -344,48 +404,80 @@ func teamWorkerToken(path string) (string, error) {
 	return token, nil
 }
 
+// teamAdminPassword reads the built-in admin account's password: the file's
+// first line, without its line ending, as the postgres image reads
+// POSTGRES_PASSWORD_FILE.
+func teamAdminPassword(path string) (string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	password := strings.TrimRight(string(raw), "\r\n")
+	if strings.ContainsAny(password, "\r\n") || len(password) < platform.MinAdminPassword {
+		return "", fmt.Errorf("the password is one line of at least %d characters", platform.MinAdminPassword)
+	}
+	return password, nil
+}
+
 // teamOIDC checks the OIDC settings; the provider itself is read at
 // startup. The client secret is read from its file, never the server config.
 func teamOIDC(issuer, clientID, secretFile, redirect, cliClientID, sessionTTL string) (*platform.OIDCOptions, error) {
 	if issuer == "" || clientID == "" || redirect == "" {
-		return nil, errors.New("issuer, client_id and redirect_url are required")
+		return nil, fmt.Errorf("authentication.oidc: issuer, client_id and redirect_url are required (%s, %s, %s)",
+			envName("authentication.oidc.issuer"), envName("authentication.oidc.client_id"), envName("authentication.oidc.redirect_url"))
 	}
 	for name, v := range map[string]string{"issuer": issuer, "redirect_url": redirect} {
 		u, err := url.Parse(v)
 		if err != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && loopbackHost(u.Hostname()))) {
-			return nil, fmt.Errorf("%s %q: give an https URL, or http on loopback", name, v)
+			return nil, fmt.Errorf("authentication.oidc.%s %q: give an https URL, or http on loopback", name, v)
 		}
 	}
 	if u, _ := url.Parse(redirect); u.Path != "/auth/callback" || u.RawQuery != "" || u.Fragment != "" {
-		return nil, fmt.Errorf("redirect_url %q: give this server's URL ending in /auth/callback", redirect)
+		return nil, fmt.Errorf("authentication.oidc.redirect_url %q: give this server's URL ending in /auth/callback", redirect)
 	}
 	o := &platform.OIDCOptions{Issuer: issuer, ClientID: clientID, RedirectURL: redirect, CLIClientID: cliClientID}
 	if secretFile != "" {
 		raw, err := os.ReadFile(secretFile)
 		if err != nil {
-			return nil, fmt.Errorf("client_secret_file: %w", err)
+			return nil, fmt.Errorf("authentication.oidc.client_secret_file: %w", err)
 		}
 		if o.ClientSecret = strings.TrimSpace(string(raw)); o.ClientSecret == "" {
-			return nil, fmt.Errorf("client_secret_file %s is empty", secretFile)
+			return nil, fmt.Errorf("authentication.oidc.client_secret_file %s is empty", secretFile)
 		}
 	}
 	if sessionTTL != "" {
 		d, err := time.ParseDuration(sessionTTL)
 		if err != nil || d <= 0 || d > platform.MaxSessionTTL {
-			return nil, fmt.Errorf("session_ttl %q: give a duration up to %s, such as 12h", sessionTTL, platform.MaxSessionTTL)
+			return nil, fmt.Errorf("authentication.oidc.session_ttl %q: give a duration up to %s, such as 12h", sessionTTL, platform.MaxSessionTTL)
 		}
 		o.SessionTTL = d
 	}
 	return o, nil
 }
 
-// teamStore reads store's connection settings. The database URL and the
-// object storage keys hold secrets, so the server config names files holding
-// them; each is read once, at startup.
+// teamStore reads store's connection settings. The database URL's password
+// and the object storage keys are secrets, so the server config names files
+// holding them; each is read once, at startup.
 func teamStore(file serverConfig, resolve func(string) string) (pg.Config, error) {
 	st, o := file.Store, file.Store.Objects
-	if st.DatabaseURLFile == "" || o.Bucket == "" || o.AccessKeyFile == "" || o.SecretKeyFile == "" {
-		return pg.Config{}, errors.New("store needs database_url_file and objects with bucket, access_key_file and secret_key_file: a team server keeps its records in PostgreSQL and its payloads in object storage")
+	var missing []string
+	if st.DatabaseURLFile == "" && st.DatabaseURL == "" {
+		missing = append(missing, "database_url_file ("+envName("store.database_url_file")+"), or database_url with database_password_file ("+
+			envName("store.database_url")+", "+envName("store.database_password_file")+")")
+	}
+	for _, k := range []struct{ key, v string }{{"bucket", o.Bucket}, {"access_key_file", o.AccessKeyFile}, {"secret_key_file", o.SecretKeyFile}} {
+		if k.v == "" {
+			missing = append(missing, "objects."+k.key+" ("+envName("store.objects."+k.key)+")")
+		}
+	}
+	if len(missing) > 0 {
+		return pg.Config{}, fmt.Errorf("store needs %s: a team server keeps its records in PostgreSQL and its payloads in object storage", strings.Join(missing, "; "))
+	}
+	switch {
+	case st.DatabaseURLFile != "" && st.DatabaseURL != "":
+		return pg.Config{}, errors.New("store.database_url_file and store.database_url are alternatives: give one")
+	case st.DatabasePasswordFile != "" && st.DatabaseURL == "":
+		return pg.Config{}, errors.New("store.database_password_file completes store.database_url; a store.database_url_file holds the password itself")
 	}
 	secret := func(name, path string) (string, error) {
 		raw, err := os.ReadFile(resolve(path))
@@ -400,7 +492,12 @@ func teamStore(file serverConfig, resolve func(string) string) (pg.Config, error
 	}
 	var c pg.Config
 	var err error
-	if c.DatabaseURL, err = secret("database_url_file", st.DatabaseURLFile); err != nil {
+	if st.DatabaseURL != "" {
+		c.DatabaseURL, err = databaseURL(st.DatabaseURL, st.DatabasePasswordFile, resolve)
+	} else {
+		c.DatabaseURL, err = secret("database_url_file", st.DatabaseURLFile)
+	}
+	if err != nil {
 		return pg.Config{}, err
 	}
 	if c.S3.AccessKey, err = secret("objects.access_key_file", o.AccessKeyFile); err != nil {
@@ -409,7 +506,7 @@ func teamStore(file serverConfig, resolve func(string) string) (pg.Config, error
 	if c.S3.SecretKey, err = secret("objects.secret_key_file", o.SecretKeyFile); err != nil {
 		return pg.Config{}, err
 	}
-	c.S3.Bucket, c.S3.Prefix, c.S3.Region, c.S3.UsePathStyle = o.Bucket, o.Prefix, o.Region, o.PathStyle
+	c.S3.Bucket, c.S3.Prefix, c.S3.Region, c.S3.UsePathStyle, c.S3.CreateBucket = o.Bucket, o.Prefix, o.Region, o.PathStyle, o.CreateBucket
 	if o.Endpoint != "" {
 		u, err := url.Parse(o.Endpoint)
 		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
@@ -418,4 +515,36 @@ func teamStore(file serverConfig, resolve func(string) string) (pg.Config, error
 		c.S3.Endpoint, c.S3.UseTLS = o.Endpoint, u.Scheme == "https"
 	}
 	return c, nil
+}
+
+// databaseURL is store.database_url with the password in passwordFile, if
+// any, set as the URL's password. The URL names no secret, so it is plain
+// configuration and must not carry one; messages never repeat it, for a
+// mistaken password in it would otherwise reach the logs. The password's
+// trailing line breaks are dropped, as the postgres image does for
+// POSTGRES_PASSWORD_FILE, and net/url escapes the rest.
+func databaseURL(raw, passwordFile string, resolve func(string) string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
+		return "", errors.New("store.database_url: give a postgres:// URL without a password, such as postgres://linea@postgres:5432/linea")
+	}
+	if _, has := u.User.Password(); has || u.Query().Has("password") {
+		return "", errors.New("store.database_url must not carry a password: give it in store.database_password_file")
+	}
+	if passwordFile == "" {
+		return raw, nil
+	}
+	if u.User.Username() == "" {
+		return "", errors.New("store.database_url needs a user name when store.database_password_file gives the password")
+	}
+	pw, err := os.ReadFile(resolve(passwordFile))
+	if err != nil {
+		return "", fmt.Errorf("store.database_password_file: %w", err)
+	}
+	password := strings.TrimRight(string(pw), "\r\n")
+	if password == "" {
+		return "", fmt.Errorf("store.database_password_file: %s is empty", passwordFile)
+	}
+	u.User = url.UserPassword(u.User.Username(), password)
+	return u.String(), nil
 }

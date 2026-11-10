@@ -234,5 +234,8 @@ func (s *Service) AuthenticateToken(ctx context.Context, secret string) (Princip
 	if err != nil {
 		return Principal{}, err
 	}
+	if err := s.enabledPrincipal(r.Principal); err != nil {
+		return Principal{}, err
+	}
 	return Principal{ID: r.Principal, Kind: PrincipalKind(r.Kind), Name: r.Name, Groups: slices.Clone(r.Groups)}, nil
 }

@@ -47,9 +47,10 @@ debugger database `linea`; fleet uses its own database and role in the same
 cluster and the two never share tables.
 
 The server config's `store` block names the connection (`database_url_file`, a
-file holding a `postgres://` URL) and the object storage (`objects`:
-`endpoint`, `bucket`, `prefix`, `region`, `path_style`, `access_key_file`,
-`secret_key_file`); see [team-server.md](../debugger/team-server.md). The client is the
+file holding a `postgres://` URL, or `database_url` without a password plus
+`database_password_file`) and the object storage (`objects`:
+`endpoint`, `bucket`, `create_bucket`, `prefix`, `region`, `path_style`,
+`access_key_file`, `secret_key_file`); see [team-server.md](../debugger/team-server.md). The client is the
 AWS SDK for Go v2 with static credentials and checksums only where S3 requires
 them, so AWS S3, Ceph RGW, SeaweedFS and other S3-compatible services work.
 Self-hosted stores usually need `path_style: true`.

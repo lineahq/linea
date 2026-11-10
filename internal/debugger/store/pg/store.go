@@ -48,6 +48,9 @@ type S3Config struct {
 	// UsePathStyle addresses buckets as endpoint/bucket/key instead of
 	// bucket.endpoint/key, which most S3-compatible servers need.
 	UsePathStyle bool
+	// CreateBucket makes the bucket at open when it does not exist, for a
+	// server whose credentials may. Without it a missing bucket is an error.
+	CreateBucket bool
 }
 
 // Config opens a Store.

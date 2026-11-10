@@ -7,6 +7,30 @@ change APIs, report schemas and persisted formats; the release notes say how.
 
 ## Unreleased
 
+- `linea-server` is configured from the environment: `LINEA_` plus the config
+  key's path in capitals, joined by `_` (`store.storage_limit` is
+  `LINEA_STORE_STORAGE_LIMIT`). Secrets are read from files named by the
+  `*_FILE` variables, lists and objects are YAML flow values, and a variable
+  overrides the same key of the optional `--config` file. The database URL may
+  be given without its password, with `store.database_password_file`.
+  `docs/debugger/team-server.md` lists them.
+- The server has a built-in admin account: the user `admin`, with the password
+  in `LINEA_AUTHENTICATION_ADMIN_PASSWORD_FILE` (at least 16 characters), the
+  admin role on everything and no binding to write. The web client has a
+  `/sign-in` page with the password form and, with OIDC, "Sign in with" the
+  provider; `linea login` asks for the password (`--password-stdin` for
+  scripts) and stores an API token. Failed attempts are limited to 5 a minute
+  per client address and 20 a minute in total, per instance. Unsetting the
+  password turns the account off, and its sessions and tokens stop working.
+  The server needs at least one sign-in method (the admin password, OIDC or
+  trusted headers). The trusted-header "local" sign-in the Compose stack used
+  is gone.
+- The server creates its bucket at start when `store.objects.create_bucket` is
+  true (off by default; the Compose stack turns it on).
+- `GET /healthz` and `GET /readyz` answer without a credential: the second
+  answers 503 once the server drains. `linea-server probe` checks `/readyz`
+  (`--url` picks another) and is the Compose healthcheck.
+
 ## [0.2.0]
 
 **Upgrading from 0.1:** a Docker Compose stack needs `LINEA_AUTH=local` in

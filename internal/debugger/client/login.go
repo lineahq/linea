@@ -37,7 +37,9 @@ const (
 	maxCredentials    = 1 << 20
 )
 
-// Credential is the CLI's sign-in to one team server.
+// Credential is the CLI's sign-in to one team server. A password sign-in
+// (PasswordLogin) keeps the server's API token in IDToken, with no Issuer or
+// refresh token.
 type Credential struct {
 	Issuer       string    `json:"issuer"`
 	ClientID     string    `json:"client_id"`
@@ -166,6 +168,9 @@ func Login(ctx context.Context, server string, opts LoginOptions) (*Credential, 
 	if err != nil {
 		return nil, err
 	}
+	if info.Issuer == "" {
+		return nil, fmt.Errorf("%s offers no identity provider sign-in; sign in with the admin password", base)
+	}
 	if u, err := url.Parse(info.Issuer); err != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && loopbackName(u.Hostname()))) {
 		return nil, fmt.Errorf("the server names identity provider %q, which is not an https URL", info.Issuer)
 	}
@@ -281,7 +286,7 @@ func cliSignIn(ctx context.Context, base string, ca []byte) (*platform.CLISignIn
 		return nil, fmt.Errorf("%s: %w", base, ErrNoCLISignIn)
 	}
 	var info platform.CLISignIn
-	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&info) != nil || info.Issuer == "" || info.ClientID == "" {
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&info) != nil || !info.Password && (info.Issuer == "" || info.ClientID == "") {
 		return nil, fmt.Errorf("%s did not describe its sign-in (%s)", base, resp.Status)
 	}
 	return &info, nil
