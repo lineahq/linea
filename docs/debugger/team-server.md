@@ -381,6 +381,27 @@ with "Share...". In a project the runtime is not available to:
 - Listing runtimes needs `runtime.read`, which only a binding in scope `*`
   grants. A team bound only to its project can still run on a runtime by name.
 
+### What a project isolates
+
+Projects organize work and access to it; they do not isolate runtime code.
+**One team server is one trust boundary.** Use a separate server for teams
+that must not trust each other's Collector components.
+
+- Every `engineer` can build a runtime, and the components it names run as
+  code on the server's workers.
+- The server checks the project on every read of runs, artifacts and
+  captures. Code inside a runtime is not bound by those checks.
+
+Where runtime code runs, and what it is kept from:
+
+| Tier | Setup | Runtime code cannot reach | It shares |
+| --- | --- | --- | --- |
+| Shared pool (default in the chart and Compose) | A [pool worker](remote-workers.md#pool-workers) with `--child-user` | The registration token and the pool's cache | The child user, with every other run in the pool |
+| Dedicated worker | A runtime image as its own `--connect` worker, in its own container or pod | The processes and files of other workers | The registration token, which the worker process holds: with it the code could connect as another worker |
+| Separate server | One team server per trust boundary | Anything of the other servers | Nothing |
+
+A sandbox per child (a user namespace or gVisor) is not available yet.
+
 ## Storage
 
 The `store` block is required.

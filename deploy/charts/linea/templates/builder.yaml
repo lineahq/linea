@@ -220,7 +220,7 @@ spec:
 # The builder accepts no connection. It reaches the server, DNS to find it
 # and the object store, like a worker, and it alone reaches the outside
 # world: the module proxy and the git hosts a manifest names
-# (networkPolicy.builderEgress, open to every address by default).
+# (networkPolicy.builderEgress, public addresses only by default).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

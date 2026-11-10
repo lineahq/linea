@@ -81,7 +81,12 @@ roots, and a public identity provider would then fail verification.
   (`linea.checkObjectStorage`). With `seaweedfs.enabled` the chart adds its own
   egress rule to the bundled gateway (port 8333).
 - A NetworkPolicy matches addresses, not names. The default
-  `builderEgress` (`0.0.0.0/0`) also matches pod and node addresses.
+  `builderEgress` is `0.0.0.0/0` except 10/8, 100.64/10, 127/8, 169.254/16,
+  172.16/12 and 192.168/16, so a manifest cannot point a build at the
+  cluster, the private network or the metadata endpoint. Rules are a union:
+  the server, DNS and object-store rules still reach private addresses.
+  The default has no IPv6 rule, so a builder reaches IPv6 addresses only
+  through the other rules.
 - Bundled PostgreSQL admits only the server on its port, and with
   `fleet.deploy.enabled` also fleet, the plugin and the database Job.
   Bundled SeaweedFS admits the server, pool, worker and builder pods on the

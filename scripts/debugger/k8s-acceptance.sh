@@ -268,10 +268,10 @@ networkPolicy:
     - to:
         - podSelector: {matchLabels: {app: seaweedfs}}
       ports: [{port: 8333}]
-  # The default (every address) and the in-cluster registry, which an
+  # The default (public addresses) and the in-cluster registry, which an
   # ipBlock need not match.
   builderEgress:
-    - to: [{ipBlock: {cidr: 0.0.0.0/0}}]
+    - to: [{ipBlock: {cidr: 0.0.0.0/0, except: [10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16]}}]
     - to: [{podSelector: {matchLabels: {app: registry}}}]
       ports: [{port: 5000}]
 YAML

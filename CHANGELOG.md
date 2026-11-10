@@ -134,6 +134,13 @@ the first item below.
   the password and `store.database_password_file` names it, so the `store`
   Secret has no `database-url` key then. `docs/debugger/deploy-kubernetes.md`
   has the details.
+- The Helm chart's builders reach public addresses only by default:
+  `networkPolicy.builderEgress` now excludes the private, shared, loopback
+  and link-local ranges, so a manifest cannot point a build at the cluster,
+  the private network or the cloud metadata endpoint. **Upgrading:** a
+  builder that uses an internal module proxy, git host or registry needs a
+  `builderEgress` rule for it. The team server docs say what a project
+  isolates: one server is one trust boundary.
 
 ## [0.2.0]
 

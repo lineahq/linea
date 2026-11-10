@@ -539,10 +539,23 @@ networkPolicy:
   #     ports: [{port: 443}]
   objectStorage: []
   # What builders may reach besides the above: the module proxy and the git
-  # hosts a manifest names. The default is open to every address; narrow it
-  # to your module proxy and git hosts. A NetworkPolicy matches addresses, not
-  # names, so give the CIDRs those hosts resolve to.
+  # hosts a manifest names. The default reaches public addresses only: a
+  # manifest cannot make a build reach the cluster, the private network or
+  # the cloud metadata endpoint. An internal module proxy, git host or
+  # registry is opt-in: replace the list with rules for it, such as
+  #   - to:
+  #       - ipBlock: {cidr: 10.30.0.0/16}
+  #     ports: [{port: 443}]
+  # A NetworkPolicy matches addresses, not names, so give the CIDRs those
+  # hosts resolve to.
   builderEgress:
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.168.0.0/16

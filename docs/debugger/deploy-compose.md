@@ -382,7 +382,11 @@ Workers dial the server at `http://linea:7070` on `edge`, and read and write
 payloads over 1 MiB directly in SeaweedFS through presigned URLs, which name
 `http://seaweedfs:8333`. The pool and the builder have no route out of the
 stack except the builder's `egress`. Compose cannot limit `egress` to chosen
-hosts; a host firewall can.
+hosts; a host firewall can. Through `egress` a build also reaches the host's
+private network and, on a cloud VM, the metadata endpoint
+(`169.254.169.254`). Where that matters, drop the builder's traffic to
+private ranges in the `DOCKER-USER` chain, allowing only your module proxy.
+The Kubernetes chart blocks those ranges by default.
 
 ## The pool worker
 

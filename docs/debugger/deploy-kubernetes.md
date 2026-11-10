@@ -372,8 +372,8 @@ networkPolicy:
   `GONOSUMDB`, `GOINSECURE`, `GOAUTH`).
 - Only these variables and the certificate settings reach a build, so the
   netrc file is the way to give credentials.
-- Narrow `networkPolicy.builderEgress` to the proxy once nothing else is
-  needed.
+- The default `networkPolicy.builderEgress` reaches public addresses only.
+  An internal proxy is opt-in: replace the list with a rule for it, as above.
 
 ## Egress
 
@@ -384,7 +384,7 @@ they may reach:
 | Pods | Egress |
 | --- | --- |
 | Pool and dedicated workers | The server (port `http`), DNS, and the rules in `networkPolicy.objectStorage`. A run's Collector exports nowhere outside the pod, and the pool has no route to the module proxy. |
-| Builders | The same, and `networkPolicy.builderEgress`: the module proxy and the git hosts a manifest names. The default is every address (`0.0.0.0/0`). |
+| Builders | The same, and `networkPolicy.builderEgress`: the module proxy and the git hosts a manifest names. The default is every public address: `0.0.0.0/0` except the private, shared (`100.64.0.0/10`), loopback and link-local ranges, which hold the cluster, the private network and the cloud metadata endpoint. |
 | Server | No egress policy. With the build metrics on (`server.metrics`), an ingress policy admits the metrics port only from `server.metrics.allowFrom` and leaves port `http` open to every client. |
 | Bundled stores | Ingress only: the server reaches PostgreSQL; chart pods reach SeaweedFS ([Stores](#stores)). |
 
@@ -409,10 +409,13 @@ networkPolicy:
       ports: [{port: 443}]
 ```
 
-- Narrow `networkPolicy.builderEgress` to the CIDRs your module proxy and git
-  hosts resolve to: a NetworkPolicy matches addresses, not names.
-- The default also matches pod and node addresses; add `except` ranges to its
-  `ipBlock` to exclude the cluster's.
+- To reach an internal module proxy, git host or registry, replace
+  `networkPolicy.builderEgress` with rules for it. A NetworkPolicy matches
+  addresses, not names, so give the CIDRs those hosts resolve to, or a
+  `podSelector` for one in the cluster. Keep the public rule only if builds
+  still need public hosts.
+- If your cluster's pods or nodes use public addresses, add them to the
+  default rule's `except` list.
 - With `worker.serverURL` pointing outside the release, allow that egress
   yourself.
 - Your cluster's network plugin must enforce NetworkPolicy; k3s, and so k3d,
@@ -444,7 +447,7 @@ builder:
 | --- | --- |
 | Where settings go | `repository` goes to the server config (`builds.export.repository`). Credentials stay with the builder (`--registry-auth`). |
 | Credentials | The Docker config is read as Docker does: `credHelpers`, then `credsStore`, then `auths`. A helper must be on the builder's PATH as `docker-credential-<name>`. The `linea-builder` image ships none, so a helper such as `ecr-login` needs an image built from it. They need push, not delete. |
-| Egress | `networkPolicy.builderEgress` must reach the registry. |
+| Egress | `networkPolicy.builderEgress` must reach the registry; an internal one needs its own rule. |
 | Result | A build records the image by digest. A failed push is the build's export error; the build stays done. |
 | Cleanup | Linea never deletes an exported image. Each export moves the runtime's tag and the previous image stays untagged; the registry's retention of untagged images (ECR lifecycle policy, Harbor retention and garbage collection, GHCR or GitLab cleanup) removes it. |
 
