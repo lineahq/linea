@@ -45,11 +45,13 @@ The root Go module is declared in `go.mod`.
   `internal/debugger/worker/`), or with `--pool` as a pool worker that serves
   any server-built runtime binary for its platform, one child process per
   runtime (`--capacity` default 8, `--warm` 4, `--idle` 10m, `--cache` 5GiB,
-  `--cache-dir`; `--name` defaults to `pool`). It listens on no port: there is
+  `--cache-dir`, and the required `--child-user UID:GID` to start every child
+  as another user; Linux only;
+  `--name` defaults to `pool`). It listens on no port: there is
   no `--listen`, and no TLS flags.
 - `cmd/linea-builder/` — the runtime builder:
   `--connect URL --token-file F [--name N] [--capacity C] [--ca-file F]`
-  `[--work-dir D] [--cpus N]` dials `/v1/builders/connect`
+  `--check-user UID:GID [--work-dir D] [--cpus N]` (Linux only) dials `/v1/builders/connect`
   (`worker.ServeBuilds`) and, per build job, downloads the manifest and uploaded
   sources from presigned URLs (size and SHA-256 checked, sources read with
   `container.ModuleArchive`), picks the verified release's dependency set from

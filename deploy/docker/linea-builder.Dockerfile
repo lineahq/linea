@@ -46,20 +46,18 @@ RUN GOOS= GOARCH= go build -o /tmp/notices ./tools/notices \
 FROM golang:1.27.3-bookworm@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6669f51d3821baf9ec37c9 AS toolchain
 
 FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
-# git for private modules, an unprivileged user and a work directory it
-# owns. A volume mounted on /work (the Compose stack mounts one) must allow
-# executing files: go run starts the gate generator from it, and a build
-# starts the binary it built.
-RUN apk add --no-cache git \
-    && addgroup -g 65532 builder \
-    && adduser -u 65532 -G builder -h /work -H -s /sbin/nologin -D builder \
-    && mkdir /work && chown 65532:65532 /work
+# git for private modules and a work directory. The builder runs as root,
+# kept to CAP_SETUID and CAP_SETGID by the Compose file and the chart, and
+# starts each binary it builds for its hello check as nobody (--check-user).
+# A volume mounted on /work (the Compose stack mounts one) must allow
+# executing files: a build starts the binary it built.
+RUN apk add --no-cache git && mkdir /work
 COPY --from=toolchain /usr/local/go /usr/local/go
 ENV GOTOOLCHAIN=local PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 COPY --from=build /out/linea-builder /usr/local/bin/linea-builder
 COPY --from=build /out/licenses /licenses
 ENV HOME=/work
 WORKDIR /work
-USER 65532:65532
+USER 0:0
 ENTRYPOINT ["linea-builder"]
-CMD ["--work-dir", "/work"]
+CMD ["--work-dir", "/work", "--check-user", "65534:65534"]

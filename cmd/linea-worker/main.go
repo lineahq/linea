@@ -15,7 +15,8 @@
 // runtime the server built for its platform instead of one of its own,
 // downloading each runtime binary into --cache-dir and running one child
 // process per runtime in use, up to --capacity requests at once across them.
-// --warm, --idle and --cache bound the children and the cache.
+// --warm, --idle and --cache bound the children and the cache. A pool runs
+// on Linux only and starts every child as --child-user.
 package main
 
 import (
@@ -62,6 +63,12 @@ func run(ctx context.Context, args []string) error {
 	cacheBytes := sizeFlag(defaultPoolCache)
 	fs.Var(&cacheBytes, "cache", "with --pool: the runtime binary cache's size, such as 5GiB; least recently used binaries not running are evicted")
 	cacheDir := fs.String("cache-dir", filepath.Join(os.TempDir(), "linea-pool-cache"), "with --pool: where runtime binaries are cached; it must allow executing files")
+	var childUser *worker.ChildUser
+	fs.Func("child-user", "with --pool: UID:GID to start every runtime as, so runtime code cannot read the token (required; needs CAP_SETUID and CAP_SETGID)", func(v string) error {
+		u, err := worker.ParseChildUser(v)
+		childUser = u
+		return err
+	})
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -71,8 +78,8 @@ func run(ctx context.Context, args []string) error {
 	set := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
 	if *connect == "" {
-		if *pool || set["warm"] || set["idle"] || set["cache"] || set["cache-dir"] {
-			return errors.New("--pool, --warm, --idle, --cache and --cache-dir need --connect")
+		if *pool || set["warm"] || set["idle"] || set["cache"] || set["cache-dir"] || set["child-user"] {
+			return errors.New("--pool, --warm, --idle, --cache, --cache-dir and --child-user need --connect")
 		}
 		if *name != "" || *caFile != "" || *tokenFile != "" || set["capacity"] {
 			return errors.New("--name, --capacity, --token-file and --ca-file need --connect")
@@ -80,6 +87,12 @@ func run(ctx context.Context, args []string) error {
 		return worker.Serve(ctx, os.Stdin, os.Stdout)
 	}
 	if *pool {
+		switch {
+		case hostOS != "linux":
+			return errors.New("--pool runs on Linux only: the runtimes it starts are Linux binaries")
+		case childUser == nil:
+			return errors.New("--pool needs --child-user: a runtime never runs as the pool's user, which holds the token")
+		}
 		if !set["capacity"] {
 			*capacity = defaultPoolCapacity
 		}
@@ -87,14 +100,17 @@ func run(ctx context.Context, args []string) error {
 			*name = "pool"
 		}
 		return connectPool(ctx, *connect, *tokenFile, *caFile, worker.PoolOptions{
-			Name: *name, Capacity: *capacity, Warm: *warm, Idle: *idle, CacheDir: *cacheDir, CacheBytes: int64(cacheBytes),
+			Name: *name, Capacity: *capacity, Warm: *warm, Idle: *idle, CacheDir: *cacheDir, CacheBytes: int64(cacheBytes), ChildUser: childUser,
 		})
 	}
-	if set["warm"] || set["idle"] || set["cache"] || set["cache-dir"] {
-		return errors.New("--warm, --idle, --cache and --cache-dir need --pool")
+	if set["warm"] || set["idle"] || set["cache"] || set["cache-dir"] || set["child-user"] {
+		return errors.New("--warm, --idle, --cache, --cache-dir and --child-user need --pool")
 	}
 	return connectServer(ctx, *connect, *tokenFile, *name, *capacity, *caFile)
 }
+
+// hostOS is the system the worker runs on; tests set it.
+var hostOS = runtime.GOOS
 
 // A pool worker's defaults.
 const (
@@ -144,6 +160,11 @@ func connectPool(ctx context.Context, url, tokenFile, caFile string, opts worker
 	if caFile != "" {
 		if opts.CA, err = os.ReadFile(caFile); err != nil {
 			return fmt.Errorf("--ca-file: %w", err)
+		}
+	}
+	if tokenFile != "" {
+		if why, err := worker.TokenFileExposed(tokenFile, *opts.ChildUser); err == nil && why != "" {
+			fmt.Fprintf(os.Stderr, "linea-worker: warning: child user %s can read --token-file (%s); make it readable by the pool's user only\n", opts.ChildUser, why)
 		}
 	}
 	opts.URL, opts.Token, opts.Log = url, token, os.Stderr

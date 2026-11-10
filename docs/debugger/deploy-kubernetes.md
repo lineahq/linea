@@ -27,8 +27,8 @@ and push to your registry.
 | Image | Dockerfile | Runs as | What it is |
 | --- | --- | --- | --- |
 | `linea-server` | `deploy/docker/linea-server.Dockerfile` | 65532 | The server: web client and `linea-server` binary in a distroless image. No Collector, no worker source, no toolchain. |
-| `linea-worker` | `deploy/docker/linea-worker.Dockerfile` | 65534 | The pool worker (`pool.image`). Serves any runtime the server builds, downloading each binary on first use. |
-| `linea-builder` | `deploy/docker/linea-builder.Dockerfile` | 65532 | The builder (`builder.image`): pinned Go toolchain and worker source. Compiles natively, no Docker daemon. |
+| `linea-worker` | `deploy/docker/linea-worker.Dockerfile` | 65534; the chart runs the pool as root (below) | The pool worker (`pool.image`). Serves any runtime the server builds, downloading each binary on first use. |
+| `linea-builder` | `deploy/docker/linea-builder.Dockerfile` | 0, kept to `CAP_SETUID` and `CAP_SETGID` by the chart (below) | The builder (`builder.image`): pinned Go toolchain and worker source. Compiles natively, no Docker daemon. |
 
 ```sh
 docker build -f deploy/docker/linea-server.Dockerfile -t registry.example.com/team/linea-server:1.0 .
@@ -325,6 +325,15 @@ guide](remote-workers.md) and its [pool workers](remote-workers.md#pool-workers)
   --server URL`.
 - A runtime binary (about 85 MiB for the default manifest) counts toward
   `config.storageLimit`.
+- The pool and the builder run as root with only `CAP_SETUID` and
+  `CAP_SETGID`, and start what they run as nobody: the pool every runtime
+  (`--child-user 65534:65534`), the builder the worker a build makes, for its
+  hello check (`--check-user 65534:65534`). Both lose the capabilities on
+  exec, so runtime code cannot read the pool's token, its environment or its
+  memory, nor the builder's token, registry and module credentials (mounted
+  mode 0400) or its caches. The release's namespace therefore needs the
+  baseline Pod Security level; restricted refuses root and added
+  capabilities. The builder's hello check still shares the pod's network.
 
 ## Module source
 

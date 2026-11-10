@@ -9,13 +9,15 @@ every key is in [`values.yaml`](../../deploy/charts/linea/values.yaml).
 | Pod | Runs as | Writable volumes | Why |
 | --- | --- | --- | --- |
 | Server | 65532 | `/tmp` (scratch) | The server stores nothing locally: everything is in PostgreSQL and the bucket. |
-| Pool | 65534 | `/cache` (emptyDir, executable), `/tmp` | The pool starts runtime binaries from `/cache`, so it must allow execution. `pool.cache.volumeSizeLimit` (default 6Gi) is a little above the `pool.cache.size` budget (5GiB). |
-| Builder | 65532 | `/work` (emptyDir, executable) | `/work` holds the module cache, the build cache and build directories. It allows execution because a build starts the program it compiles. |
+| Pool | 0, with `CAP_SETUID` and `CAP_SETGID`; children 65534 | `/cache` (emptyDir, executable), `/tmp` | The pool starts runtime binaries from `/cache`, so it must allow execution. `pool.cache.volumeSizeLimit` (default 6Gi) is a little above the `pool.cache.size` budget (5GiB). Children run as 65534 (`--child-user`) and cannot read the token in the pool's environment. |
+| Builder | 0, with `CAP_SETUID` and `CAP_SETGID`; hello checks 65534 | `/work` (emptyDir or claim, executable) | `/work` holds the module cache, the build cache and build directories. It allows execution because a build starts the program it compiles. The secret files are mode 0400 and the caches 0700, so the hello check (`--check-user`) reads neither. |
 | Bundled PostgreSQL | 999 (the image's `postgres` user) | `/var/run/postgresql`, `/tmp`, the data volume | Data lives in `pgdata`, a subdirectory, because the volume's root may hold `lost+found`. |
 | Bundled SeaweedFS | 65532 | `/tmp`, the data volume | |
 
-Every pod has a read-only root filesystem, no capabilities and no service
-account token.
+Every pod has a read-only root filesystem and no service account token. Every
+pod but the pool and the builder has no capabilities; those two keep only
+`CAP_SETUID` and `CAP_SETGID` to start what they run as another user, so their
+namespace needs the baseline Pod Security level, not restricted.
 
 ## Server
 

@@ -60,6 +60,7 @@ The server names the runtime binary in each request it sends.
 | A worker that does not answer a cancelled request within 30 s | Stopped (`worker.ErrCancelIgnored`): that request ends as `error` naming the ignored cancel, and the worker's other requests are lost with it and requeue like any lost worker. |
 | A child that runs a request | Never stopped for `--warm` or `--idle`, and its binary is never evicted. |
 | A child's environment | The pool's without every `LINEA_*` variable, so the registration token never reaches it. Its standard error goes to the pool's log line by line (cut at 4 KiB) with a short runtime prefix. |
+| A child's user (`--child-user UID:GID`, required; a pool runs on Linux only) | Set through `SysProcAttr.Credential` with no supplementary groups; the pool needs `CAP_SETUID` and `CAP_SETGID`, and the child, not root, loses them on exec. The pool calls `prctl(PR_SET_DUMPABLE, 0)`, so `/proc/<pool>/environ` and its memory stay closed to the child, and keeps the cache at 0711 (children run binaries by path and cannot list or write it). `linea-worker` refuses `--pool` without a child user or off Linux; `ServePool` itself refuses only a root pool without one, so its tests run anywhere. `TestAChildUserCannotReadTheParentsSecrets` checks it as root. |
 | Connection lost | The pool cancels what runs, stops every child (closing its input, then killing it after 10 s) and keeps the cache. It reconnects like any worker. |
 
 ## Builders
@@ -76,6 +77,15 @@ and [Docker Compose](../debugger/deploy-compose.md#the-builder).
 - The server reads a dialing worker's or builder's first message, its hello,
   with a 4 MiB limit and the later ones with the 256 MiB frame limit, and
   refuses a hello with a capacity above 1024 or a name over 128 bytes.
+- `--check-user UID:GID` (required; the builder runs on Linux only) starts
+  each built worker for its hello check as that user, in a directory of its
+  own under `tmp`; the work directory, `bin` and `tmp` are 0711 and the build
+  directories and caches 0700, so it reads no sources or caches. No code the
+  build module resolves runs as the builder's user before that: the feature
+  gates' owners are scanned in process (`internal/debugger/gatescan`), not
+  generated with `go run`.
+  The check shares the builder's network: isolating one process needs
+  `CAP_SYS_ADMIN` or user namespaces.
 - Inputs: the manifest and one tar per uploaded module.
 - Build identity: manifest, sources, Go image and builder version.
 - `deploy/docker/linea-builder.Dockerfile` copies the toolchain

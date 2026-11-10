@@ -175,7 +175,7 @@ services:
   # /tmp is noexec and children run from the cache, so /cache, a named
   # volume, allows execution. Its memory and CPUs are shared by the children
   # it keeps warm (--warm, default 4, stops the least recently used idle
-  # ones; --idle, default 10m; --cache, default 5GiB, bounds /cache).
+  # ones; --idle, default 10m; --cache, default 5GiB, bounds the cache).
   pool:
     <<: *hardened
     image: ghcr.io/lineahq/linea-worker:${LINEA_VERSION:-0.2.0}
@@ -186,7 +186,14 @@ services:
     # then killed (5 s more to reap), and cancels what they run, which the
     # server retries; 30 s leaves room for that.
     stop_grace_period: 30s
-    command: [--connect, "http://linea:7070", --pool, --name, pool, --capacity, "${LINEA_POOL_CAPACITY:-4}", --cache-dir, /cache, --token-file, /run/secrets/worker_token]
+    # The pool runs as root with only CAP_SETUID and CAP_SETGID, to start
+    # every runtime as nobody (--child-user), which loses them on exec: a
+    # runtime's code cannot read the token or the pool's memory and
+    # environment. Make secrets/worker_token readable by the server and
+    # group root only (chown 65532:0, chmod 440; docs/debugger/deploy-compose.md).
+    user: "0:0"
+    cap_add: [SETUID, SETGID]
+    command: [--connect, "http://linea:7070", --pool, --name, pool, --capacity, "${LINEA_POOL_CAPACITY:-4}", --cache-dir, /cache, --child-user, "65534:65534", --token-file, /run/secrets/worker_token]
     # No GOMAXPROCS or GOMEMLIMIT: the children inherit the environment, and
     # the container limits below are the bound.
     secrets: [worker_token]
@@ -217,14 +224,19 @@ services:
     build:
       context: ../../..
       dockerfile: deploy/docker/linea-builder.Dockerfile
-    user: "65532:65532"
+    # Root with only CAP_SETUID and CAP_SETGID, like the pool: the binary a
+    # build makes starts for its hello check as nobody (--check-user), so it
+    # cannot read the token. Make secrets/builder_token readable like
+    # secrets/worker_token.
+    user: "0:0"
+    cap_add: [SETUID, SETGID]
     # The first SIGTERM drains: the builder takes no new build and finishes
     # those it runs, which end within 30 minutes (the server's build
     # timeout). 35 minutes covers that, like the chart's
     # terminationGracePeriodSeconds. A build still running at the end is
     # killed and retried once; docker compose kill stops it at once.
     stop_grace_period: 35m
-    command: [--connect, "http://linea:7070", --name, builder, --capacity, "1", --cpus, "${LINEA_BUILDER_CPUS:-4}", --token-file, /run/secrets/builder_token, --work-dir, /work]
+    command: [--connect, "http://linea:7070", --name, builder, --capacity, "1", --cpus, "${LINEA_BUILDER_CPUS:-4}", --token-file, /run/secrets/builder_token, --work-dir, /work, --check-user, "65534:65534"]
     secrets: [builder_token]
     volumes:
       - builder-work:/work
@@ -262,18 +274,6 @@ secrets:
   oidc_client_secret:
     file: ${LINEA_SECRETS_DIR:-./secrets}/oidc_client_secret
 
-volumes:
-  postgres-data:
-  seaweedfs-data:
-  # The builder's module cache, build cache and build directories. Mounted
-  # executable: builds start the programs they compile.
-  builder-work:
-  # The pool worker's runtime binaries, bounded by its --cache. Mounted
-  # executable: its children run from here.
-  pool-cache:
-
-networks:
-  database:
 # The image runs this once, on an empty volume, as the superuser. The server
 # connects as linea, which owns the linea database, is no superuser and
 # has the same password; it can create databases and roles for the fleet
@@ -298,6 +298,18 @@ configs:
           sed -i '1i host all postgres all reject' "$$PGDATA/pg_hba.conf"
       )
 
+volumes:
+  postgres-data:
+  seaweedfs-data:
+  # The builder's module cache, build cache and build directories. Mounted
+  # executable: builds start the programs they compile.
+  builder-work:
+  # The pool worker's runtime binaries, bounded by its --cache. Mounted
+  # executable: its children run from here.
+  pool-cache:
+
+networks:
+  database:
     internal: true
   storage:
     internal: true

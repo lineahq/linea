@@ -46,6 +46,10 @@ type Native struct {
 	GoCache, ModCache string
 	// Go is the go executable; empty means "go" on PATH.
 	Go string
+	// CheckUser, when set, starts the built worker for its hello check as
+	// that user (Linux only), so the built code cannot read the builder's
+	// token or environment.
+	CheckUser *worker.ChildUser
 
 	// Seams for tests.
 	command func(ctx context.Context, args ...string) *exec.Cmd
@@ -102,6 +106,22 @@ func (n *Native) dirs() (nativeDirs, error) {
 	for _, dir := range []string{d.builds, d.bin, d.tmp, d.modCache, d.goCache, d.gopath} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nativeDirs{}, err
+		}
+	}
+	if n.CheckUser != nil {
+		// The check user reaches a built binary and its own directory under
+		// tmp by path, and reads no build's sources or caches.
+		modes := map[string]os.FileMode{root: 0o711, d.bin: 0o711, d.tmp: 0o711, d.builds: 0o700, d.gopath: 0o700}
+		if n.ModCache == "" {
+			modes[d.modCache] = 0o700
+		}
+		if n.GoCache == "" {
+			modes[d.goCache] = 0o700
+		}
+		for dir, mode := range modes {
+			if err := os.Chmod(dir, mode); err != nil {
+				return nativeDirs{}, err
+			}
 		}
 	}
 	return d, nil
@@ -250,6 +270,21 @@ func (n *Native) Build(ctx context.Context, req BuildRequest) (*NativeRuntime, e
 		start = func(ctx context.Context, name, binary string) (worker.Hello, error) {
 			cmd := exec.Command(binary)
 			cmd.Dir, cmd.Env = d.tmp, []string{"TMPDIR=" + d.tmp}
+			if u := n.CheckUser; u != nil {
+				// A directory the check user may write, removed after.
+				tmp, err := os.MkdirTemp(d.tmp, "check-")
+				if err != nil {
+					return worker.Hello{}, err
+				}
+				defer os.RemoveAll(tmp)
+				if err := os.Chmod(tmp, 0o777); err != nil {
+					return worker.Hello{}, err
+				}
+				cmd.Dir, cmd.Env = tmp, []string{"TMPDIR=" + tmp}
+				if err := u.Apply(cmd); err != nil {
+					return worker.Hello{}, err
+				}
+			}
 			w, err := worker.Start(ctx, name, cmd)
 			if err != nil {
 				return worker.Hello{}, err

@@ -161,23 +161,23 @@ line breaks.
 - All seven files must exist before the first start, even the ones a setup
   does not use: `oidc_client_secret` may be empty without an identity
   provider, and `admin_password` stays when the admin account is off.
-- On Linux the containers run as uid 65532 and must be able to read the
+- On Linux most containers run as uid 65532 and must be able to read the
   files. The default mode, 0644 from a umask of 022, is enough.
   `chmod 700 secrets` protects the directory on the host and does not affect
   the containers, which get the files themselves through bind mounts.
+- `worker_token` and `builder_token` are the exception. The pool and the
+  builder run as root and start the runtimes they serve or build as
+  nobody ([the pool](#the-pool), [the builder](#the-builder)), and a bind
+  mount keeps the host file's owner and mode, so make those two files
+  readable by the server (uid 65532) and by group root (the pool and the
+  builder) only: `sudo chown 65532:0 secrets/worker_token
+  secrets/builder_token && sudo chmod 440 secrets/worker_token
+  secrets/builder_token`. The pool and the builder warn at startup while
+  nobody can read them.
 - Docker makes a directory in place of a missing file, and the service that
   reads it stops with an error naming it. Stop the stack, remove the
   directory (`rmdir secrets/NAME`), create the file, and start again.
 
-### Applying a change
-
-After changing a setting in `.env`, run `docker compose up -d`: Compose
-recreates the services whose environment changed. After changing a secret
-file, run
-
-```sh
-docker compose restart
-```
 ### Database roles
 
 On an empty `postgres-data` volume, PostgreSQL's first start runs a script
@@ -197,6 +197,15 @@ container's local socket: `docker compose exec postgres psql -U postgres`.
 
 The script runs only when the volume is created.
 
+### Applying a change
+
+After changing a setting in `.env`, run `docker compose up -d`: Compose
+recreates the services whose environment changed. After changing a secret
+file, run
+
+```sh
+docker compose restart
+```
 
 because services read their secrets when they start, and a bind mount shows
 the new file after a restart. The exception is `postgres_password`, which
@@ -391,7 +400,8 @@ requests at once across them:
 | --- | --- |
 | Network | `edge` and `storage`, no egress. |
 | Budget | `LINEA_POOL_MEMORY` and `LINEA_POOL_CPUS` (4 GiB and 4 CPUs by default, [resources](#resources)) for the pool and its children together. It keeps up to 4 idle runtimes warm (`--warm`), stops one idle for 10 minutes (`--idle`) and keeps its cache within 5 GiB (`--cache`); edit the service's command to change them. It sets no `GOMAXPROCS` or `GOMEMLIMIT`, which its children would inherit. |
-| Disk | The named volume `pool-cache`, mounted at `/cache`, holds the downloaded binaries. It is mounted executable, unlike the hardened `/tmp`, because the children run from it, and it survives restarts so they start without a download. Removing the volume only costs the downloads. The image creates `/cache` owned by its user (65534), which a new volume copies. |
+| Disk | The named volume `pool-cache`, mounted at `/cache`, holds the downloaded binaries. It is mounted executable, unlike the hardened `/tmp`, because the children run from it, and it survives restarts so they start without a download. Removing the volume only costs the downloads. |
+| User | Root with only `CAP_SETUID` and `CAP_SETGID`; `no-new-privileges` stays. Each child starts as nobody (`--child-user 65534:65534`) and loses both on exec, so a runtime's code cannot read `worker_token`, the pool's environment or its memory, or write the cache (mode 0711). |
 
 ## The builder
 
@@ -408,7 +418,8 @@ credentials.
 | --- | --- |
 | Network | `edge` and `storage` like a worker, and alone on `egress`, the stack's only way to the Internet besides the server's own route out: the module proxy. `GOPROXY` and the other Go module variables come from its environment, as do `NETRC` and `SSL_CERT_FILE` for a proxy that needs credentials or a private CA ([runtime builds](runtime-builds.md#building-on-a-team-server)). Server builds take uploaded sources, not git. |
 | Budget | `LINEA_BUILDER_MEMORY` (swap included, 5 GiB by default) and `LINEA_BUILDER_CPUS` (4), one build at a time ([resources](#resources)). |
-| Disk | The named volume `builder-work` holds the Go module and build caches, which make rebuilds fast, and each build's directory, removed when the build ends. It is mounted executable, unlike the hardened `/tmp`, because builds start the generator and the worker they compile. Removing the volume only costs the caches. |
+| Disk | The named volume `builder-work`, mounted at `/work`, holds the Go module and build caches, which make rebuilds fast, and each build's directory, removed when the build ends. It is mounted executable, unlike the hardened `/tmp`, because a build starts the worker it compiles. Removing the volume only costs the caches. |
+| User | Root with only `CAP_SETUID` and `CAP_SETGID`, like the pool. The worker a build makes starts for its hello check as nobody (`--check-user 65534:65534`) in a directory of its own; it cannot read `builder_token`, the module caches or other builds' sources. The check is not cut off from the network: the builder is on `egress`, and dropping that for one process needs privileges the builder does not have. |
 | Storage | A runtime binary (about 85 MiB for the default manifest, more with more components) counts toward `LINEA_STORE_STORAGE_LIMIT` (4 GiB here, 256 MiB by default). |
 
 ### Image export (optional)

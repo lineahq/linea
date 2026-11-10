@@ -25,23 +25,32 @@ import (
 )
 
 func TestFlagsAreChecked(t *testing.T) {
+	defer func(was string) { hostOS = was }(hostOS)
+	hostOS = "darwin"
+	if _, err := parseOptions([]string{"--connect", "https://linea.example", "--token-file", "t", "--check-user", "65534:65534"}); err == nil || !strings.Contains(err.Error(), "Linux only") {
+		t.Errorf("a builder off Linux = %v", err)
+	}
+	hostOS = "linux"
 	for _, tc := range []struct {
 		args []string
 		want string
 	}{
-		{nil, "--connect"},
-		{[]string{"--connect", "https://linea.example"}, "--token-file"},
-		{[]string{"--connect", "https://linea.example", "--token-file", "t", "--capacity", "0"}, "--capacity"},
-		{[]string{"--connect", "https://linea.example", "--token-file", "t", "--cpus", "0"}, "--cpus"},
-		{[]string{"--connect", "https://linea.example", "--token-file", "t", "--name", " "}, "--name"},
-		{[]string{"--connect", "https://linea.example", "--token-file", "t", "extra"}, "unexpected argument"},
+		{nil, "--check-user"},
+		{[]string{"--check-user", "65534:65534"}, "--connect"},
+		{[]string{"--check-user", "0:0"}, "root"},
+		{[]string{"--check-user", "65534:65534", "--connect", "https://linea.example"}, "--token-file"},
+		{[]string{"--check-user", "65534:65534", "--connect", "https://linea.example", "--token-file", "t", "--capacity", "0"}, "--capacity"},
+		{[]string{"--check-user", "65534:65534", "--connect", "https://linea.example", "--token-file", "t", "--capacity", "1025"}, "--capacity"},
+		{[]string{"--check-user", "65534:65534", "--connect", "https://linea.example", "--token-file", "t", "--cpus", "0"}, "--cpus"},
+		{[]string{"--check-user", "65534:65534", "--connect", "https://linea.example", "--token-file", "t", "--name", " "}, "--name"},
+		{[]string{"--check-user", "65534:65534", "--connect", "https://linea.example", "--token-file", "t", "extra"}, "unexpected argument"},
 		{[]string{"--listen", "127.0.0.1:0"}, "not defined"},
 	} {
 		if _, err := parseOptions(tc.args); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("parseOptions %v = %v, want an error naming %s", tc.args, err, tc.want)
 		}
 	}
-	o, err := parseOptions([]string{"--connect", "https://linea.example", "--token-file", "t", "--name", "b1"})
+	o, err := parseOptions([]string{"--check-user", "65534:65534", "--connect", "https://linea.example", "--token-file", "t", "--name", "b1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +65,9 @@ func TestRunReadsTheTokenAndCAFirst(t *testing.T) {
 	if err := os.WriteFile(empty, []byte("\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	base := []string{"--connect", "https://linea.example", "--work-dir", dir}
+	defer func(was string) { hostOS = was }(hostOS)
+	hostOS = "linux"
+	base := []string{"--check-user", "65534:65534", "--connect", "https://linea.example", "--work-dir", dir}
 	if err := run(context.Background(), nil, append(base, "--token-file", filepath.Join(dir, "missing"))); err == nil || !strings.Contains(err.Error(), "--token-file") {
 		t.Errorf("a missing token file = %v", err)
 	}

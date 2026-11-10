@@ -63,11 +63,14 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      # Root with only CAP_SETUID and CAP_SETGID (below): the binary a build
+      # makes starts for its hello check as nobody (--check-user), which
+      # reads neither the token nor the other secret files (mode 0400). The
+      # namespace needs the baseline Pod Security level.
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 65532
-        runAsGroup: 65532
-        fsGroup: 65532
+        runAsNonRoot: false
+        runAsUser: 0
+        runAsGroup: 0
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -82,6 +85,7 @@ spec:
             - --cpus={{ .Values.builder.cpus }}
             - --token-file=/etc/linea/builder-token/token
             - --work-dir=/work
+            - --check-user=65534:65534
             {{- if .Values.builder.caSecret }}
             - --ca-file=/etc/linea/ca/ca.crt
             {{- end }}
@@ -121,6 +125,7 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+              add: ["SETUID", "SETGID"]
           volumeMounts:
             - name: work
               mountPath: /work
@@ -168,6 +173,7 @@ spec:
           secret:
             secretName: {{ include "linea.builderSecret" . }}
             items: [{key: token, path: token}]
+            defaultMode: 0400
         {{- if .Values.builder.caSecret }}
         - name: ca
           secret:
@@ -179,12 +185,14 @@ spec:
           secret:
             secretName: {{ .Values.builder.export.authSecret }}
             items: [{key: {{ .Values.builder.export.authKey | quote }}, path: config.json}]
+            defaultMode: 0400
         {{- end }}
         {{- if $modules.netrcSecret }}
         - name: modules-netrc
           secret:
             secretName: {{ $modules.netrcSecret }}
             items: [{key: {{ $modules.netrcKey | quote }}, path: netrc}]
+            defaultMode: 0400
         {{- end }}
         {{- if $modules.caSecret }}
         - name: modules-ca
