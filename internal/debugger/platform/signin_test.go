@@ -12,6 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
+
 	"github.com/lineahq/linea/internal/debugger/authz"
 	"github.com/lineahq/linea/internal/debugger/oidctest"
 	"github.com/lineahq/linea/internal/debugger/store/memory"
@@ -113,6 +116,34 @@ func TestAdminPasswordRefusesBadSignIns(t *testing.T) {
 				t.Errorf("= %d %q with cookies %v, want %d", w.Code, w.Body.String(), w.Result().Cookies(), tc.want)
 			}
 		})
+	}
+}
+
+// TestAdminSignInRefusalLogsNoSecret: a refused sign-in is logged with the
+// client and the reason, and the line carries neither password.
+func TestAdminSignInRefusalLogsNoSecret(t *testing.T) {
+	core, logs := observer.New(zap.InfoLevel)
+	s := openPlatform(t, memory.NewData(), Options{Shared: true, Access: mustPolicy(t), AdminPassword: testAdminPassword, Logger: zap.New(core)})
+	si, err := s.SignIn(SignInOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const tried = "a wrong but long password"
+	if w := postPassword(si, "198.51.100.7", passwordBody("admin", tried, ""), nil); w.Code != http.StatusUnauthorized {
+		t.Fatalf("= %d, want 401", w.Code)
+	}
+	refusals := logs.FilterMessage("admin sign-in refused").All()
+	if len(refusals) != 1 {
+		t.Fatalf("refusal lines %v, want one", logs.All())
+	}
+	line, _ := json.Marshal(refusals[0].ContextMap())
+	for _, secret := range []string{tried, testAdminPassword} {
+		if strings.Contains(string(line), secret) {
+			t.Errorf("refusal line %s carries a password", line)
+		}
+	}
+	if !strings.Contains(string(line), "198.51.100.7") {
+		t.Errorf("refusal line %s does not name the client", line)
 	}
 }
 

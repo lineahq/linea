@@ -32,7 +32,8 @@ The root Go module is declared in `go.mod`.
   file) and the flags
   `--addr`, `--tls-cert-file`/`--tls-key-file` or `--allow-http`,
   `--drain-timeout`, `--metrics-listen`, `--mcp`, `--fleet-url`,
-  `--fleet-token-file`, `--fleet-allow-http` and `--verbose` (debug logs), and
+  `--fleet-token-file`, `--fleet-allow-http` and `--verbose` (adds debug logs;
+  info and above always go to stderr as JSON), and
   no subcommand. It links no Collector (no `engine/local/install`): every
   request runs on connected workers. It is always a team server on PostgreSQL
   and object storage, with no Docker; `linea serve` no longer exists.
@@ -259,8 +260,11 @@ The root Go module is declared in `go.mod`.
   through `run_events` (an outbox: `AppendRunEvents`, `RunEvents`). An
   interactive request that needs a worker slot is a row in `jobs`: an instance
   with a connected worker of the runtime claims it and the posting instance
-  waits for the answer (a local fast path when it has the worker itself; a team
-  server gives up after 30 s). OIDC sign-ins in progress are rows in `logins`
+  waits for the answer (a local fast path when it has the worker itself). A
+  job no worker claims is withdrawn after 30 s. Jobs have no lease: when the
+  claiming instance stops, the posting instance waits out 30 s plus the
+  execution budget plus one minute (about 11.5 minutes with the default
+  budget) before it answers `unavailable`. OIDC sign-ins in progress are rows in `logins`
   (`SaveLogin`, `TakeLogin`, taken once, at most 1000), so the callback may land
   on any instance. One instance, the upkeep's leader, runs the optional
   `artifact.Upkeep` (`Lead`, `Housekeep`) every 5 minutes: the store sweep,

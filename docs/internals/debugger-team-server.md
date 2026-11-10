@@ -147,6 +147,14 @@ protocols in [debugger-workers.md](debugger-workers.md).
   the chart uses `server.drainSeconds` plus 20 s.
 - A killed instance loses its runs' 30 s leases; another instance requeues
   them once, as a new attempt.
+- An interactive request (one that needs a worker slot but is not a run) that no worker
+  claims fails as `unavailable` after 30 s. Jobs have no lease: when the
+  instance that claimed one is killed, the posting instance waits for the
+  execution budget plus 1.5 minutes (about 11.5 minutes with the default
+  budget) before it fails the request.
+- `linea-server` always writes info and above to stderr as JSON lines;
+  `--verbose` adds debug logs. Credentials, configuration, environment and
+  telemetry are never logged.
 - `--metrics-listen ADDR` serves the build queue's counts at `GET /metrics` on
   a listener of its own, without credentials, for a builder autoscaler.
 - The connected CLI retries a report wait (`run`, `test`, suites,

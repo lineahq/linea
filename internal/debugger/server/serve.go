@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/lineahq/linea/internal/debugger/api"
 	"github.com/lineahq/linea/internal/debugger/artifact"
@@ -418,7 +419,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, env envir
 	fs.DurationVar(&tm.drain, "drain-timeout", 25*time.Second, "how long running work may finish when the server stops before it is handed to another instance")
 	fs.StringVar(&tm.metricsAddr, "metrics-listen", "", "serve the build queue's metrics for an autoscaler at http://ADDR/metrics, on a listener of its own without credentials (counts only)")
 	enableMCP := fs.Bool("mcp", false, "serve the MCP endpoint at /mcp; clients present an API token")
-	verbose := fs.Bool("verbose", false, "write debug logs to stderr")
+	verbose := fs.Bool("verbose", false, "also write debug logs; info and above are always written to stderr as JSON")
 	var fleet fleetServeOptions
 	fs.StringVar(&fleet.url, "fleet-url", "", "linea-fleet management API, such as https://fleet:8080, for live capture through its livecapture plugin")
 	fs.StringVar(&fleet.tokenFile, "fleet-token-file", "", "file holding the fleet API token (never passed as an argument)")
@@ -451,16 +452,26 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, env envir
 		return exitError
 	}
 	tm.team = t
-	var logger *zap.Logger
-	if *verbose {
-		if logger, err = zap.NewDevelopment(); err != nil {
-			return fail(stderr, err)
-		}
-	}
+	logger := newLogger(stderr, *verbose)
+	defer func() { _ = logger.Sync() }()
 	if err := serveAPI(ctx, *addr, &tm, *enableMCP, logger, stderr, fleet); err != nil {
 		return fail(stderr, err)
 	}
 	return exitOK
+}
+
+// newLogger is the server's log: one JSON object per line on w, at info and
+// above, or debug and above when verbose. Its callers never log
+// credentials, configuration, environment or telemetry.
+func newLogger(w io.Writer, verbose bool) *zap.Logger {
+	level := zapcore.InfoLevel
+	if verbose {
+		level = zapcore.DebugLevel
+	}
+	enc := zap.NewProductionEncoderConfig()
+	enc.EncodeTime = zapcore.ISO8601TimeEncoder
+	core := zapcore.NewCore(zapcore.NewJSONEncoder(enc), zapcore.Lock(zapcore.AddSync(w)), level)
+	return zap.New(core, zap.ErrorOutput(zapcore.Lock(zapcore.AddSync(w))))
 }
 
 func fail(stderr io.Writer, err error) int {
