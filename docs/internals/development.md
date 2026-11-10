@@ -431,6 +431,15 @@ These run only with `LINEA_DOCKER_TESTS=1` (or `LINEA_NATIVE_TESTS=1`).
   serves the token realm; the credentials come from a credential helper, the
   test binary as `docker-credential-fake`). It pushes nowhere else and takes
   seconds.
+- `LINEA_DOCKER_TESTS=1 go test -p 1 -run
+  TestAPoolContainersChildCannotReachItsSecrets ./internal/debugger/worker`
+  cross-compiles the package's tests for the Docker host and runs the
+  child-user test in a container set up like a pool (root with only
+  `CAP_SETUID` and `CAP_SETGID`, no new privileges, a read-only root
+  filesystem, no network, on the worker image's base). A child started as
+  65534 must fail to read a 0400 token, the parent's environment and memory,
+  to plant a file in a root-owned 0711 directory and to signal the parent.
+  It takes about two minutes, most of it compiling.
 - `LINEA_NATIVE_TESTS=1 go test -p 1 -run TestANativeBuild
   ./internal/debugger/container` builds a two-component runtime with the
   host's `go` (linux, `container.GoVersion`; `go generate` is not needed, the
