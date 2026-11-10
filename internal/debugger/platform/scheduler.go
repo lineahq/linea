@@ -357,6 +357,14 @@ func (s *Service) startJob(job *pendingRun) bool {
 	if job.restore {
 		restoreErr = s.restore(job)
 	}
+	retry := false
+	defer func() {
+		// After s.mu is released: wakeAt takes it.
+		if retry {
+			now := s.now()
+			s.wakeAt(now, now.Add(startRetryDelay))
+		}
+	}()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r := job.handle
@@ -380,11 +388,17 @@ func (s *Service) startJob(job *pendingRun) bool {
 		return fail(StateError, restoreErr)
 	}
 	if err := s.runQueue.Start(s.ctx, job.assignment); err != nil {
-		if !errors.Is(err, artifact.ErrConflict) {
-			s.logError("starting a claimed run", err)
-		}
-		// The lease ended before the run started; expiry requeues it.
 		s.releaseLocked(job)
+		if errors.Is(err, artifact.ErrConflict) {
+			// The lease ended before the run started; expiry requeues it.
+			return false
+		}
+		// The lease is still held, and renewal would keep it while the
+		// executor is connected: hand the run back to the queue.
+		s.logError("starting a claimed run", err)
+		if s.releaseUnstartedLocked(job) {
+			retry = true
+		}
 		return false
 	}
 	r.state, r.started = StateRunning, time.Now().UTC()
@@ -394,6 +408,35 @@ func (s *Service) startJob(job *pendingRun) bool {
 			return fail(StateError, persistenceError(err))
 		}
 	}
+	r.notifyLocked()
+	return true
+}
+
+// startRetryDelay is how long dispatch waits to claim again after a run it
+// could not start was handed back, so a failing store is not retried in a
+// tight loop.
+const startRetryDelay = time.Second
+
+// releaseUnstartedLocked returns a claimed run whose start could not be
+// recorded to the queue, counted as released rather than as an attempt.
+// It reports whether the run is queued again; if the store refused, the
+// executor's next renewal tries again.
+func (s *Service) releaseUnstartedLocked(job *pendingRun) bool {
+	ctx, cancel := context.WithTimeout(s.ctx, releaseTimeout)
+	defer cancel()
+	generation, err := s.runQueue.Release(ctx, job.assignment)
+	job.unreleased = err != nil && !errors.Is(err, artifact.ErrConflict)
+	if err != nil {
+		if job.unreleased {
+			s.logError("returning a run that could not start", err)
+		}
+		return false
+	}
+	r := job.handle
+	if generation > r.generation {
+		r.generation = generation
+	}
+	r.state, r.started = StateQueued, time.Time{}
 	r.notifyLocked()
 	return true
 }
@@ -523,6 +566,10 @@ func (s *Service) renew(e *executor, now time.Time) {
 			_ = r.persist(false)
 		case a.CancelRequested && job != nil && job.exec == e:
 			r.cancel(context.Canceled)
+		case job != nil && job.unreleased && job.exec == nil && a.Attempt == job.assignment.Attempt:
+			if s.releaseUnstartedLocked(job) {
+				s.wakeLocked()
+			}
 		}
 		r.mu.Unlock()
 	}

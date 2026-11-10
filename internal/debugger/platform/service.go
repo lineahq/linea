@@ -218,6 +218,9 @@ type pendingRun struct {
 	exec       *executor
 	// pooled is set for a run bound to connected workers.
 	pooled bool
+	// unreleased is set while the run's start could not be recorded and
+	// handing it back failed too: its executor's renewal tries again.
+	unreleased bool
 }
 
 // Service owns scheduling and run history for all attached adapters.
