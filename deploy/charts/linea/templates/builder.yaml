@@ -50,6 +50,11 @@ spec:
     metadata:
       labels:
         {{- include "linea.builderSelector" . | nindent 8 }}
+      {{- if include "linea.builderTokenRendered" . }}
+      annotations:
+        # The token is read at startup; a change restarts the builders.
+        checksum/builder-token: {{ include "linea.builderToken" . | sha256sum }}
+      {{- end }}
     spec:
       serviceAccountName: {{ $fullname }}-builder
       automountServiceAccountToken: false

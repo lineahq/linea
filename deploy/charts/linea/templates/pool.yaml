@@ -37,6 +37,11 @@ spec:
     metadata:
       labels:
         {{- include "linea.poolSelector" . | nindent 8 }}
+      {{- if include "linea.workerTokenRendered" . }}
+      annotations:
+        # The token is read at startup (an environment variable); a change restarts the pool.
+        checksum/worker-token: {{ include "linea.workerToken" . | sha256sum }}
+      {{- end }}
     spec:
       serviceAccountName: {{ $fullname }}-pool
       automountServiceAccountToken: false

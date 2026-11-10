@@ -35,6 +35,11 @@ spec:
     metadata:
       labels:
         {{- include "linea.workerSelector" . | nindent 8 }}
+      {{- if include "linea.workerTokenRendered" . }}
+      annotations:
+        # The token is read at startup (an environment variable); a change restarts the worker.
+        checksum/worker-token: {{ include "linea.workerToken" . | sha256sum }}
+      {{- end }}
     spec:
       serviceAccountName: {{ $fullname }}-worker
       automountServiceAccountToken: false

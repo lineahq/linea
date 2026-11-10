@@ -58,6 +58,25 @@ app.kubernetes.io/component: seaweedfs
 {{- .Values.worker.existingSecret | default (printf "%s-worker-token" (include "linea.fullname" .)) -}}
 {{- end -}}
 
+{{/* The token the pool and workers register with, and the server checks: worker.token, else the one kept in the Secret, else a new random one. */}}
+{{- define "linea.workerToken" -}}
+{{- include "linea.keptSecret" (list . (printf "%s-worker-token" (include "linea.fullname" .)) "token" .Values.worker.token "token") -}}
+{{- end -}}
+
+{{/* The token builders register with, and the server checks. */}}
+{{- define "linea.builderToken" -}}
+{{- include "linea.keptSecret" (list . (printf "%s-builder-token" (include "linea.fullname" .)) "token" .Values.builder.token "token") -}}
+{{- end -}}
+
+{{/* The pods that read a Secret only at start restart on a change of it (checksum annotations), but the chart can hash only the Secrets it renders: with an existingSecret the rollout is yours to trigger (kubectl rollout restart). */}}
+{{- define "linea.workerTokenRendered" -}}
+{{- if and (include "linea.acceptsWorkers" .) (not .Values.worker.existingSecret) }}true{{ end -}}
+{{- end -}}
+
+{{- define "linea.builderTokenRendered" -}}
+{{- if and (include "linea.acceptsBuilds" .) (not .Values.builder.existingSecret) }}true{{ end -}}
+{{- end -}}
+
 {{- define "linea.fleetSecret" -}}
 {{- .Values.fleet.existingSecret | default (printf "%s-fleet" (include "linea.fullname" .)) -}}
 {{- end -}}
@@ -374,7 +393,7 @@ app.kubernetes.io/component: livecapture
 {{- .repository }}:{{ .tag }}{{ with .digest }}@{{ . }}{{ end -}}
 {{- end -}}
 
-{{/* A value from values, else the one kept in an existing Secret, else a new random one: 32 letters and digits, or with a fifth element "hex" 64 lowercase hexadecimal characters, or "fleet" a fleet credential token. Generated once per render: every template sees the same value. */}}
+{{/* A value from values, else the one kept in an existing Secret, else a new random one: 32 letters and digits, or with a fifth element "hex" 64 lowercase hexadecimal characters, or "token" 48 letters and digits, or "fleet" a fleet credential token. Generated once per render: every template sees the same value. */}}
 {{- define "linea.keptSecret" -}}
 {{- $root := index . 0 -}}{{- $secret := index . 1 -}}{{- $key := index . 2 -}}{{- $given := index . 3 -}}
 {{- $kind := "" -}}{{- if gt (len .) 4 }}{{ $kind = index . 4 }}{{ end -}}
@@ -388,6 +407,8 @@ app.kubernetes.io/component: livecapture
 {{- $value = b64dec (index $existing.data $key) -}}
 {{- else if eq $kind "hex" -}}
 {{- $value = sha256sum (randAlphaNum 64) -}}
+{{- else if eq $kind "token" -}}
+{{- $value = randAlphaNum 48 -}}
 {{- else if eq $kind "fleet" -}}
 {{- $value = printf "of1_%s_%s" (sha256sum (randAlphaNum 64) | trunc 32) (sha256sum (randAlphaNum 64)) -}}
 {{- else -}}

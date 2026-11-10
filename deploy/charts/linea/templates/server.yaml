@@ -38,6 +38,25 @@ spec:
         # The admin password is read at startup too.
         checksum/admin: {{ include "linea.adminPassword" . | sha256sum }}
         {{- end }}
+        {{- if not .Values.store.existingSecret }}
+        # So are the store credentials, the bundled PostgreSQL's password included.
+        checksum/store: {{ printf "%s/%s/%s/%s" .Values.store.databaseURL (include "linea.objects" . | fromYaml).accessKey (include "linea.objects" . | fromYaml).secretKey (ternary (include "linea.postgresqlPassword" .) "" .Values.postgresql.enabled) | sha256sum }}
+        {{- end }}
+        {{- if and .Values.oidc.clientSecret (not .Values.oidc.existingSecret) }}
+        checksum/oidc: {{ .Values.oidc.clientSecret | sha256sum }}
+        {{- end }}
+        {{- if include "linea.workerTokenRendered" . }}
+        # And the tokens it checks workers and builders against.
+        checksum/worker-token: {{ include "linea.workerToken" . | sha256sum }}
+        {{- end }}
+        {{- if include "linea.builderTokenRendered" . }}
+        checksum/builder-token: {{ include "linea.builderToken" . | sha256sum }}
+        {{- end }}
+        {{- if include "linea.fleetDeployed" . }}
+        checksum/fleet: {{ include "linea.fleetToken" . | sha256sum }}
+        {{- else if and .Values.fleet.url (not .Values.fleet.existingSecret) }}
+        checksum/fleet: {{ .Values.fleet.token | sha256sum }}
+        {{- end }}
     spec:
       serviceAccountName: {{ $fullname }}
       automountServiceAccountToken: false

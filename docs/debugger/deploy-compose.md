@@ -332,6 +332,10 @@ LINEA_BUILDER_MEMORY=3g
 ```
 
 PostgreSQL and SeaweedFS keep fixed limits of 1 CPU and 512 MiB each.
+SeaweedFS opens as many 64 MiB volumes as its disk holds (`-volume.max=0`), so
+`LINEA_STORE_STORAGE_LIMIT`, not a volume count, bounds the stored payloads:
+raising the limit needs no change there, only disk space for the
+`seaweedfs-data` volume.
 
 Scaled pools (`--scale pool=N`) share the `pool-cache` volume, which is safe only
 while they run nothing but the built-in runtime. For more pools that run built runtimes, add services with a volume each.
@@ -528,6 +532,8 @@ job.
 | Event | Behavior |
 | --- | --- |
 | `docker compose stop` or `restart` | The server drains: it stops claiming work, lets what runs on its workers finish for up to `--drain-timeout` (25 s here), then hands the rest back to the queue without spending an attempt. `stop_grace_period` (45 s) leaves room for that. |
+| `docker compose stop` or `restart`, pool | The pool stops its runtime processes, each given 10 s to exit, and cancels what they run; the server retries those requests. `stop_grace_period` is 30 s. |
+| `docker compose stop` or `restart`, builder | The builder takes no new build and finishes those it runs, up to the 30 minute build timeout, so `stop_grace_period` is 35 minutes. A build still running then is killed and retried once. `docker compose kill builder` stops it at once. |
 | Server killed | It loses its runs' leases; the restarted server requeues them after 30 s, once, as a new attempt. |
 | CLI waits | A report wait that gets a lost connection, or a 502, 503 or 504, is sent again, for up to 30 s of such failures. |
 

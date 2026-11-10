@@ -58,11 +58,15 @@ services:
         max-file: "3"
 
   # The S3 credentials sign in its admin identity, which SeaweedFS takes
-  # only from its environment; the server creates the bucket.
+  # only from its environment; the server creates the bucket. -volume.max=0
+  # lets it open as many 64 MiB volumes as the disk holds, so the ceiling
+  # is the disk and the server's LINEA_STORE_STORAGE_LIMIT (4GiB by
+  # default) is the bound. A fixed count would stop writes once the volumes
+  # fill, before that limit does: -volume.max=30 held 1.9 GiB.
   seaweedfs:
     image: chrislusf/seaweedfs:4.51@sha256:f7a49e3f3972ebed5be2ed4befa4a0c68eb7bdddba6e692d42729ceb545134b8
     entrypoint: [sh, -c, 'AWS_ACCESS_KEY_ID="$$(cat /run/secrets/s3_access_key)" AWS_SECRET_ACCESS_KEY="$$(cat /run/secrets/s3_secret_key)" exec weed "$$@"', weed]
-    command: [server, -dir=/data, -master.volumeSizeLimitMB=64, -volume.max=30, -filer, -s3, -s3.port=8333]
+    command: [server, -dir=/data, -master.volumeSizeLimitMB=64, -volume.max=0, -filer, -s3, -s3.port=8333]
     secrets: [s3_access_key, s3_secret_key]
     volumes:
       - seaweedfs-data:/data
@@ -177,6 +181,10 @@ services:
     build:
       context: ../../..
       dockerfile: deploy/docker/linea-worker.Dockerfile
+    # SIGTERM stops the children in parallel, each given 10 s to exit and
+    # then killed (5 s more to reap), and cancels what they run, which the
+    # server retries; 30 s leaves room for that.
+    stop_grace_period: 30s
     command: [--connect, "http://linea:7070", --pool, --name, pool, --capacity, "${LINEA_POOL_CAPACITY:-4}", --cache-dir, /cache, --token-file, /run/secrets/worker_token]
     # No GOMAXPROCS or GOMEMLIMIT: the children inherit the environment, and
     # the container limits below are the bound.
@@ -209,6 +217,12 @@ services:
       context: ../../..
       dockerfile: deploy/docker/linea-builder.Dockerfile
     user: "65532:65532"
+    # The first SIGTERM drains: the builder takes no new build and finishes
+    # those it runs, which end within 30 minutes (the server's build
+    # timeout). 35 minutes covers that, like the chart's
+    # terminationGracePeriodSeconds. A build still running at the end is
+    # killed and retried once; docker compose kill stops it at once.
+    stop_grace_period: 35m
     command: [--connect, "http://linea:7070", --name, builder, --capacity, "1", --cpus, "${LINEA_BUILDER_CPUS:-4}", --token-file, /run/secrets/builder_token, --work-dir, /work]
     secrets: [builder_token]
     volumes:

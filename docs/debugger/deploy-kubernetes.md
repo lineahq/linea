@@ -247,6 +247,16 @@ The server reads the Secrets as files. The generated admin password and worker
 and builder tokens are kept across upgrades. The chart keeps no volume for the
 server: everything it stores is in PostgreSQL and the bucket.
 
+The server, the pool, the dedicated worker and the builder read their Secrets
+at startup. For each Secret the chart renders (a value, or a generated one)
+the pod template carries a checksum annotation, so `helm upgrade` with a
+changed value restarts the pods that read it: the server for the store, OIDC,
+fleet, admin, worker and builder secrets, the pool and the worker for the
+worker token, and the builders for the builder token. A Secret you supply
+through `existingSecret` is not hashed, since the chart does not render it:
+after changing it, run `kubectl rollout restart` on the deployments that mount
+it.
+
 Install fails, as the server would, without:
 
 - a sign-in method: `config.authentication` with `oidc` or `trusted_headers`,
