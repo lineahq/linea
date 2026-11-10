@@ -32,8 +32,8 @@ const BuilderPath = "/v1/builders/connect"
 // talk only when theirs are equal.
 const BuilderProtocol = 1
 
-// cancelGrace is how long the server waits for a cancelled build's result
-// before it gives up on the builder.
+// cancelGrace is how long the server waits for the answer to a cancelled
+// build or worker request before it gives up on the builder or worker.
 var cancelGrace = 30 * time.Second
 
 // ErrBuilderVersion means a builder of another product version dialed: it

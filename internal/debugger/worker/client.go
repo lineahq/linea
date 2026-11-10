@@ -25,6 +25,10 @@ const logLimit = 64 << 10
 // waiting for it.
 var ErrWorkerExited = errors.New("worker exited")
 
+// ErrCancelIgnored means a worker did not answer a cancelled request within
+// cancelGrace, and the client stopped it.
+var ErrCancelIgnored = errors.New("worker ignored a cancel")
+
 // ErrProtocol means the worker speaks another protocol version.
 var ErrProtocol = errors.New("worker protocol mismatch")
 
@@ -275,6 +279,7 @@ func (c *Client) exchange(ctx context.Context, m *message, event func(json.RawMe
 		}
 	}
 	done := ctx.Done()
+	var grace <-chan time.Time
 	for {
 		select {
 		case r, ok := <-cl.result:
@@ -289,6 +294,16 @@ func (c *Client) exchange(ctx context.Context, m *message, event func(json.RawMe
 			done = nil
 			cancel := &message{ID: m.ID, Type: typeCancel, DeadlineExceeded: errors.Is(context.Cause(ctx), context.DeadlineExceeded)}
 			_ = c.send(cancel)
+			t := time.NewTimer(cancelGrace)
+			defer t.Stop()
+			grace = t.C
+		case <-grace:
+			// A worker that ignores a cancel would hold the request, its
+			// lease and Close forever: drop it. Its other requests end as
+			// its connection does.
+			c.kill()
+			return nil, fmt.Errorf("%w: worker %s did not answer a cancelled %s within %s and was stopped (%v)",
+				ErrCancelIgnored, c.name, m.Type, cancelGrace, context.Cause(ctx))
 		}
 	}
 }

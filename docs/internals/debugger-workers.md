@@ -57,6 +57,7 @@ The server names the runtime binary in each request it sends.
 | A failed download (object store unreachable) | Not held against the binary. |
 | Concurrent first requests for one runtime | Share one download and one start. |
 | A child that exits | Fails the requests it ran as `unavailable` and is dropped; the next request starts it again. |
+| A worker that does not answer a cancelled request within 30 s | Stopped (`worker.ErrCancelIgnored`): that request ends as `error` naming the ignored cancel, and the worker's other requests are lost with it and requeue like any lost worker. |
 | A child that runs a request | Never stopped for `--warm` or `--idle`, and its binary is never evicted. |
 | A child's environment | The pool's without every `LINEA_*` variable, so the registration token never reaches it. Its standard error goes to the pool's log line by line (cut at 4 KiB) with a short runtime prefix. |
 | Connection lost | The pool cancels what runs, stops every child (closing its input, then killing it after 10 s) and keeps the cache. It reconnects like any worker. |
