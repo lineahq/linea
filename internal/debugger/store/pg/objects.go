@@ -54,6 +54,9 @@ type ObjectStore interface {
 	// Open starts a streaming read of the object, or fails with an error
 	// wrapping ErrObjectNotFound. The caller closes the body.
 	Open(ctx context.Context, key string) (ObjectReader, error)
+	// Stat reports an object's size and age without reading it, or fails
+	// with an error wrapping ErrObjectNotFound.
+	Stat(ctx context.Context, key string) (ObjectInfo, error)
 	// Copy copies src to dst inside the store, replacing any object at dst,
 	// without moving the bytes through the caller. A nonempty ifMatch is the
 	// ETag Open reported for src: the copy then fails with ErrObjectChanged
@@ -108,6 +111,28 @@ func (s *Store) putBlob(ctx context.Context, digest string, raw []byte) error {
 	return nil
 }
 
+// keepBlob makes sure the object putBlob stored before a transaction is
+// still there. The caller holds the installation lock, so a Sweep that listed
+// the object as old before putBlob refreshed it can no longer delete it; one
+// that already did is undone by storing it again.
+func (s *Store) keepBlob(ctx context.Context, digest string, raw []byte) error {
+	key, err := objectKey(s.prefix, digest)
+	if err != nil {
+		return err
+	}
+	_, err = s.objects.Stat(ctx, key)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, ErrObjectNotFound):
+		return s.putBlob(ctx, digest, raw)
+	case ctx.Err() != nil:
+		return ctx.Err()
+	default:
+		return fmt.Errorf("%w: check object: %w", artifact.ErrStorage, err)
+	}
+}
+
 // readBlob returns the object a row names, checking its size and digest.
 func (s *Store) readBlob(ctx context.Context, digest string, size int64) ([]byte, error) {
 	key, err := objectKey(s.prefix, digest)
@@ -129,6 +154,9 @@ func (s *Store) readBlob(ctx context.Context, digest string, size int64) ([]byte
 	return raw, nil
 }
 
+// s3ResponseTimeout bounds the wait for an S3 response's headers.
+const s3ResponseTimeout = 2 * time.Minute
+
 // s3Store is the ObjectStore over any S3-compatible service.
 type s3Store struct {
 	client  *s3.Client
@@ -149,6 +177,13 @@ func newS3Client(c S3Config) (*s3.Client, error) {
 		UsePathStyle:               c.UsePathStyle,
 		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
 		ResponseChecksumValidation: aws.ResponseChecksumValidationWhenRequired,
+		// A server that accepts a request and never answers fails it instead
+		// of holding the caller; the SDK's default sets no such bound. The
+		// wait starts after the request body is sent, so it does not limit
+		// how long an upload or download takes.
+		HTTPClient: awshttp.NewBuildableClient().WithTransportOptions(func(t *http.Transport) {
+			t.ResponseHeaderTimeout = s3ResponseTimeout
+		}),
 	}
 	if opts.Region == "" {
 		opts.Region = "us-east-1"
@@ -292,6 +327,14 @@ func (m *s3Store) Open(ctx context.Context, key string) (ObjectReader, error) {
 		return ObjectReader{}, notFound(err)
 	}
 	return ObjectReader{Body: out.Body, Size: aws.ToInt64(out.ContentLength), ETag: aws.ToString(out.ETag)}, nil
+}
+
+func (m *s3Store) Stat(ctx context.Context, key string) (ObjectInfo, error) {
+	out, err := m.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(m.bucket), Key: aws.String(key)})
+	if err != nil {
+		return ObjectInfo{}, notFound(err)
+	}
+	return ObjectInfo{Key: key, Size: aws.ToInt64(out.ContentLength), Modified: aws.ToTime(out.LastModified)}, nil
 }
 
 func (m *s3Store) Copy(ctx context.Context, src, dst, ifMatch string) error {

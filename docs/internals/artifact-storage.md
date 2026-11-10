@@ -66,6 +66,17 @@ installation lock, so it never removes an object a writer is about to
 reference. The upkeep leader runs it in `Housekeep`. Reads verify the stored
 size and SHA-256 of every object; a missing or changed object is `ErrCorrupt`.
 
+`SaveRun` uploads a run's evidence before its transaction, so the
+installation lock is not held for the upload; under the lock it checks the
+object is still there and uploads it again if a sweep that listed an older
+object of that digest deleted it. An input bundle is still uploaded inside
+`AdmitRun`'s transaction. Every database session has a two-minute
+`statement_timeout` and a five-minute `idle_in_transaction_session_timeout`, so
+a hung statement or an abandoned transaction holding the lock ends; migrations
+lift the statement bound. S3 requests fail when the service sends no response
+headers within two minutes of the request body, which leaves long transfers
+unbounded.
+
 A build's binary is the one object written outside the installation lock:
 `StoreBuildBinary` copies the staged upload to its blob key without the lock,
 then, under it, checks the lease and the limit again, confirms the copy is

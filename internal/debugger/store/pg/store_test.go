@@ -664,3 +664,59 @@ func TestOriginBackfillProtectsRuns(t *testing.T) {
 		t.Fatalf("evicted = %+v, %v", got, err)
 	}
 }
+
+// putHook runs put after every successful Put.
+type putHook struct {
+	ObjectStore
+	put func(key string)
+}
+
+func (h putHook) Put(ctx context.Context, key string, data []byte) error {
+	if err := h.ObjectStore.Put(ctx, key, data); err != nil {
+		return err
+	}
+	h.put(key)
+	return nil
+}
+
+// TestSaveRunUploadsEvidenceOutsideTheLock checks that a run's evidence is
+// uploaded without the installation lock, and that evidence a Sweep deletes
+// between the upload and the lock is stored again.
+func TestSaveRunUploadsEvidenceOutsideTheLock(t *testing.T) {
+	f := newFixture(t)
+	s := f.open(t, artifact.Limits{})
+	evidence := []byte("evidence")
+	key, err := s.ObjectKey(digestOf(evidence))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inner := s.objects
+	puts := 0
+	s.objects = putHook{ObjectStore: inner, put: func(k string) {
+		if k != key {
+			return
+		}
+		puts++
+		if puts > 1 {
+			return
+		}
+		admitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if _, err := s.AdmitRun(admitCtx, artifact.Admission{ID: runID(2), Project: "team-a", Metadata: []byte(`{}`), Bundle: []byte("bundle"), Runtime: "builtin"}); err != nil {
+			t.Errorf("admission during the upload = %v", err)
+		}
+		// A Sweep that listed the object as old deletes it now.
+		if err := inner.Delete(ctx, key); err != nil {
+			t.Error(err)
+		}
+	}}
+	if _, err := s.SaveRun(ctx, runID(1), "team-a", 0, true, artifact.RunIndex{}, []byte(`{}`), evidence); err != nil {
+		t.Fatal(err)
+	}
+	if puts != 2 {
+		t.Errorf("evidence was put %d times, want 2", puts)
+	}
+	if got, err := s.RunEvidence(ctx, runID(1)); err != nil || string(got) != string(evidence) {
+		t.Errorf("evidence = %q, %v", got, err)
+	}
+}

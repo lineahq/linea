@@ -16,8 +16,9 @@ const sweepBatch = 500
 // olderThan, and returns how many it deleted. It is safe to run on any
 // instance, concurrently with writes: each batch is checked and deleted under
 // the installation lock that every writer of objects holds from its upload to
-// its commit, so an unreferenced object is never one a writer is about to
-// reference. olderThan (the default is one day) is a margin on top of
+// its commit, or from checking that an object it uploaded before taking the
+// lock is still there (keepBlob) to its commit, so an unreferenced object is
+// never one a writer is about to reference. olderThan (the default is one day) is a margin on top of
 // that. Sweep also deletes staged worker-transfer objects (transfers.go) older
 // than one hour whatever olderThan is, and counts them; no row references
 // them, so they need no lock. Housekeep runs it from one leader.

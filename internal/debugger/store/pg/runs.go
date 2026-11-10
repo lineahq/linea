@@ -54,6 +54,21 @@ func (s *Store) saveRun(ctx context.Context, id, project string, expected uint64
 		}
 		pin = *admission.Binary
 	}
+	// Evidence is uploaded before the transaction so the installation lock is
+	// not held for the upload; under the lock keepBlob checks it is still
+	// there. A failed publication leaves an unreferenced object for Sweep.
+	// Bundles stay inside: identical inputs give a bundle the digest of an
+	// old object Sweep may be deleting, and admission is not on a lease.
+	var evidenceDigest string
+	if len(evidence) != 0 {
+		if int64(len(evidence)) > s.limits.RunBytes {
+			return nil, artifact.ErrLimit
+		}
+		evidenceDigest = digestOf(evidence)
+		if err := s.putBlob(ctx, evidenceDigest, evidence); err != nil {
+			return nil, err
+		}
+	}
 	var rec *artifact.RunRecord
 	err := s.inTx(ctx, "run", func(tx pgx.Tx) error {
 		// Creating a run and adding bytes check counts and storage, so they
@@ -116,9 +131,7 @@ func (s *Store) saveRun(ctx context.Context, id, project string, expected uint64
 		if len(bundle) != 0 {
 			r.BundleDigest, r.BundleBytes = digestOf(bundle), int64(len(bundle))
 		}
-		if len(evidence) != 0 {
-			r.Digest = digestOf(evidence)
-		}
+		r.Digest = evidenceDigest
 		if locked {
 			additional, err := newBytes(ctx, tx, blob{r.Digest, r.Bytes}, blob{r.BundleDigest, r.BundleBytes})
 			if err != nil {
@@ -133,7 +146,7 @@ func (s *Store) saveRun(ctx context.Context, id, project string, expected uint64
 			}
 		}
 		if len(evidence) != 0 {
-			if err := s.putBlob(ctx, r.Digest, evidence); err != nil {
+			if err := s.keepBlob(ctx, r.Digest, evidence); err != nil {
 				return err
 			}
 		}

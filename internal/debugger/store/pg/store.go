@@ -23,6 +23,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -66,6 +67,11 @@ type Config struct {
 	// MaxConns bounds the connection pool; nonpositive means 8.
 	MaxConns int32
 }
+
+const (
+	statementTimeout         = 2 * time.Minute
+	idleInTransactionTimeout = 5 * time.Minute
+)
 
 // Store is an artifact.Repository over PostgreSQL and object storage.
 type Store struct {
@@ -116,6 +122,11 @@ func Open(ctx context.Context, cfg Config) (_ *Store, err error) {
 		pc.MaxConns = cfg.MaxConns
 	}
 	pc.ConnConfig.RuntimeParams["application_name"] = "linea-debugger"
+	// A hung statement or a transaction left open, which may hold the
+	// installation lock, ends instead of stalling every writer. The bounds
+	// are far above any query's run time; migrations lift them.
+	pc.ConnConfig.RuntimeParams["statement_timeout"] = strconv.Itoa(int(statementTimeout.Milliseconds()))
+	pc.ConnConfig.RuntimeParams["idle_in_transaction_session_timeout"] = strconv.Itoa(int(idleInTransactionTimeout.Milliseconds()))
 	pool, err := pgxpool.NewWithConfig(ctx, pc)
 	if err != nil {
 		return nil, fmt.Errorf("%w: connect: %w", artifact.ErrStorage, err)
