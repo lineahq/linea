@@ -222,7 +222,7 @@ exactly as for a runtime, then adds one generated file and compiles
   `release.ProductVersion`, as runtime builds stamp the worker; there is no
   `worker.custom` flag, because the CLI's in-process runtime is reported by
   its Collector release and verification rather than as the built-in one.
-- The gate generator always runs for the host; the CLI compiles for
+- The gate owners are scanned in process for linux; the CLI compiles for
   `GOOS`/`GOARCH`. A CLI for the host is started once (`checkCLI`): its
   `version --format json` must name the manifest's Collector release and
   every manifest module, or the build fails. A cross build sets
@@ -432,7 +432,9 @@ Verified against the catalogs of 0.160.0 and 0.162.0 (2026-10-15).
   `stanza.*` gates appear on runtimes whose configuration reads no files.
   The build therefore generates `internal/debugger/registry/gateowners.go`
   (`internal/debugger/registry/gen -gates`, run in the build container before
-  `go build`): it lists the worker's packages for linux, finds the
+  `go build`; the native builder calls `internal/debugger/gatescan` in
+  process instead, because `go run` would run code a manifest's modules and
+  replaces choose as the builder's user): it lists the worker's packages for linux, finds the
   `featuregate` `Register`/`MustRegister` calls and resolves their IDs
   (literals, constants, cross-package constants, concatenations), and
   records whether the Collector's own packages (the registry's imports

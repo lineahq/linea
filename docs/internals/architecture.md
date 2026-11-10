@@ -711,7 +711,10 @@ The root Go module is declared in `go.mod`.
   `-gates` writes `gateowners.go` from the worker's import
   graph: who links each feature gate (the Collector, components by
   `componentTypes`, or only the debugger), giving `FeatureGates()` a `scope`
-  (`gates.go`; a runtime build regenerates it in the container).
+  (`gates.go`; a runtime build regenerates it in the container, the native
+  builder in process). The scan itself is `internal/debugger/gatescan`,
+  standard library only: `go list` and `go/parser`, no code of the scanned
+  module runs.
   `-providers FILE` with repeatable `-provider PKG` writes `providers.go`
   (`Providers()`: the module providers compiled in, `registry.Provider`), empty
   for the built-in registry.
@@ -882,7 +885,9 @@ The root Go module is declared in `go.mod`.
   required and replaced by the embedded `collector/provider/`, a source
   requiring a newer SDK is refused (`checkSDK`), and the sources' providers are
   compiled into `providers.go` and named in the label `io.linea.providers`),
-  generates its gate owners and compiles it in the pinned official Go image
+  generates its gate owners (`Native` scans in process with `gatescan`
+  instead of `go run`, so a builder runs no code the build module resolves
+  before the hello check) and compiles it in the pinned official Go image
   (`GoImage`) with the user's module source and the cache volumes
   `linea-gomod`/`linea-gocache` (`Offline` is `--network none` and
   `GOPROXY=off`), packages a runtime image `FROM scratch`
