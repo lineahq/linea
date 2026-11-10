@@ -129,7 +129,7 @@ func ExecutionMode(kind topology.Kind, id component.ID) (topology.Mode, string) 
 		if slices.Contains(localExporters, id.Type()) {
 			return topology.ModeReal, ""
 		}
-		return topology.ModeCaptured, "telemetry is recorded locally instead of being sent"
+		return topology.ModeCaptured, "telemetry is recorded locally instead of being sent; every export succeeds, so retries, sending queues, backpressure and failover are not exercised"
 	case topology.KindConnector:
 		return topology.ModeReal, ""
 	case topology.KindExtension:

@@ -335,6 +335,7 @@ func Execute(ctx context.Context, req Request) (*Report, error) {
 	if rep.Lineage, err = analysis.Lineage(rep.Result.Events, rep.Result.Snapshots, rep.Stages, rep.Aggregations, rep.Result.Completed()); err != nil {
 		return nil, err
 	}
+	noteStandInConnectors(rep.Lineage, rep.Topology)
 	if rep.Sampling, err = explainSampling(ctx, resolved, rep.Stages, rep.Result); err != nil {
 		return nil, err
 	}
