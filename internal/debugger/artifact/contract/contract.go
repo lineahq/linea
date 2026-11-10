@@ -58,6 +58,7 @@ func Run(t *testing.T, fresh func(t *testing.T) Backend) {
 		{"worker records count until they expire", workerPresence},
 		{"change feed records writes for other repositories", changeFeed},
 		{"live events keep the latest attempt", liveEvents},
+		{"revoked tokens do not count toward the token limit", tokenLimit},
 		{"interactive jobs are claimed once and answered", interactiveJobs},
 		{"builds queue with their inputs within limits", buildAdmission},
 		{"builders hold builds under leases and reuse done ones", buildLeases},
@@ -860,6 +861,27 @@ func tokens(t *testing.T, b Backend) {
 	all, err := r.Tokens(ctx, "")
 	if err != nil || len(all) != 3 || all[2].Revoked == nil || !all[2].Revoked.Equal(at) || all[0].Revoked != nil {
 		t.Errorf("all tokens = %+v, %v", all, err)
+	}
+}
+
+// tokenLimit: the token limit counts the tokens that still authenticate,
+// so revoked ones never block new tokens.
+func tokenLimit(t *testing.T, b Backend) {
+	r := open(t, b, artifact.Limits{})
+	const limit = 1000
+	for i := range limit {
+		if err := r.SaveToken(ctx, token(i+1, "user:alice")); err != nil {
+			t.Fatalf("token %d: %v", i+1, err)
+		}
+	}
+	if err := r.SaveToken(ctx, token(limit+1, "user:alice")); !errors.Is(err, artifact.ErrLimit) {
+		t.Fatalf("token over the limit = %v", err)
+	}
+	if _, err := r.RevokeToken(ctx, token(1, "").ID, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.SaveToken(ctx, token(limit+1, "user:alice")); err != nil {
+		t.Errorf("token after a revocation = %v", err)
 	}
 }
 
