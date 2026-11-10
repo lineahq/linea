@@ -153,7 +153,7 @@ func AcceptBuilder(w http.ResponseWriter, r *http.Request, authorize func(token 
 	if err != nil {
 		return nil, err
 	}
-	b := &BuilderConn{s: newStream(conn), conn: conn, endpoint: r.RemoteAddr, calls: map[uint64]*buildCall{}, done: make(chan struct{}),
+	b := &BuilderConn{s: newAcceptedStream(conn), conn: conn, endpoint: r.RemoteAddr, calls: map[uint64]*buildCall{}, done: make(chan struct{}),
 		draining: make(chan struct{})}
 	refuse := func(err error) (*BuilderConn, error) {
 		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, clip(err.Error(), 120)), time.Now().Add(time.Second))
@@ -171,8 +171,9 @@ func AcceptBuilder(w http.ResponseWriter, r *http.Request, authorize func(token 
 		return refuse(fmt.Errorf("%w: the builder speaks protocol %d, this server speaks %d", ErrProtocol, m.BuilderHello.Protocol, BuilderProtocol))
 	case m.BuilderHello.ProductVersion != release.ProductVersion:
 		return refuse(fmt.Errorf("%w: the builder is %s, this server is %s", ErrBuilderVersion, m.BuilderHello.ProductVersion, release.ProductVersion))
-	case strings.TrimSpace(m.BuilderHello.Name) == "" || len(m.BuilderHello.Name) > 128 || m.BuilderHello.Capacity < 1:
-		return refuse(fmt.Errorf("%w: a builder needs a name of at most 128 bytes and a capacity of at least 1", errFrame))
+	case strings.TrimSpace(m.BuilderHello.Name) == "" || len(m.BuilderHello.Name) > maxHelloName ||
+		m.BuilderHello.Capacity < 1 || m.BuilderHello.Capacity > maxHelloCapacity:
+		return refuse(fmt.Errorf("%w: a builder needs a name of at most %d bytes and a capacity from 1 to %d", errFrame, maxHelloName, maxHelloCapacity))
 	}
 	b.hello = *m.BuilderHello
 	keepAlive(b.done, conn)
@@ -355,8 +356,8 @@ func ServeBuilds(ctx context.Context, opts BuilderOptions, build BuildFunc) erro
 	if strings.TrimSpace(opts.Hello.Name) == "" {
 		return errors.New("builder: a builder needs a name")
 	}
-	if opts.Hello.Capacity < 1 {
-		return errors.New("builder: a builder's capacity is at least 1")
+	if opts.Hello.Capacity < 1 || opts.Hello.Capacity > maxHelloCapacity {
+		return fmt.Errorf("builder: a builder's capacity is from 1 to %d", maxHelloCapacity)
 	}
 	hello := opts.Hello
 	hello.Protocol, hello.ProductVersion = BuilderProtocol, release.ProductVersion

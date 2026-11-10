@@ -73,6 +73,9 @@ and [Docker Compose](../debugger/deploy-compose.md#the-builder).
 
 - Hello: platform, Go version, capacity. A builder of another release than the
   server is refused.
+- The server reads a dialing worker's or builder's first message, its hello,
+  with a 4 MiB limit and the later ones with the 256 MiB frame limit, and
+  refuses a hello with a capacity above 1024 or a name over 128 bytes.
 - Inputs: the manifest and one tar per uploaded module.
 - Build identity: manifest, sources, Go image and builder version.
 - `deploy/docker/linea-builder.Dockerfile` copies the toolchain

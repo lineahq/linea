@@ -50,11 +50,30 @@ type stream struct {
 	conn    *websocket.Conn
 	r       io.Reader
 	writeMu sync.Mutex
+	// helloOnly is set until the accepted peer's first message, its hello,
+	// has been read; until then a message may be at most maxHelloFrame.
+	helloOnly bool
 }
+
+// The hello limits: a peer's first frame, its capacity and its name. A
+// hello holds a runtime's description, far below maxHelloFrame; a peer
+// that announces more is refused before the server keeps anything of it.
+const (
+	maxHelloFrame    = 4 << 20
+	maxHelloCapacity = 1024
+	maxHelloName     = 128
+)
 
 func newStream(conn *websocket.Conn) *stream {
 	conn.SetReadLimit(maxFrame + 4)
 	return &stream{conn: conn}
+}
+
+// newAcceptedStream is the stream of a peer the server accepted: its first
+// message, the hello, is held to maxHelloFrame, and later ones to maxFrame.
+func newAcceptedStream(conn *websocket.Conn) *stream {
+	conn.SetReadLimit(maxHelloFrame + 4)
+	return &stream{conn: conn, helloOnly: true}
 }
 
 func (s *stream) Read(p []byte) (int, error) {
@@ -76,6 +95,12 @@ func (s *stream) Read(p []byte) (int, error) {
 		n, err := s.r.Read(p)
 		if errors.Is(err, io.EOF) {
 			s.r = nil
+			if s.helloOnly {
+				// Raised by the reading goroutine, the only one that reads
+				// the connection.
+				s.helloOnly = false
+				s.conn.SetReadLimit(maxFrame + 4)
+			}
 			if n > 0 {
 				return n, nil
 			}

@@ -57,7 +57,8 @@ docker run --rm -e LINEA_WORKER_TOKEN ghcr.io/lineahq/linea-worker:0.2.0 \
 
 `--name`, `--capacity`, `--token-file`, `--ca-file`, `--pool`, `--warm`,
 `--idle`, `--cache` and `--cache-dir` need `--connect`; the last four need
-`--pool`. A worker accepts no connection: it holds no certificate and serves no
+`--pool`. `--capacity` is at most 1024; the server refuses a hello with more,
+or with a name over 128 bytes. A worker accepts no connection: it holds no certificate and serves no
 health endpoint.
 
 ## Pool workers
