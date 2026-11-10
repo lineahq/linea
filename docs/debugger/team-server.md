@@ -398,9 +398,16 @@ The `store` block is required.
   bucket exists. With `objects.create_bucket: true` it creates a missing bucket
   (`HeadBucket` answers not found, then `CreateBucket`; a start of another
   instance that wins the race is accepted). Any other failure, such as access
-  denied or an unreachable endpoint, never creates anything and refuses
-  startup. Without it a missing bucket refuses startup. The database, and the
-  bucket unless it is created, are yours to run, back up and secure.
+  denied or an unreachable endpoint, never creates anything. The database, and
+  the bucket unless it is created, are yours to run, back up and secure.
+- The server listens before it opens its storage, so it can start before
+  the database and the bucket do. While it cannot reach them, or the bucket
+  is missing or refused, it says why on stderr and tries again after 1 s,
+  doubling up to every 30 s. Meanwhile `GET /healthz` answers 200,
+  `GET /readyz` answers 503 `starting`, and every other request answers 503
+  with `Retry-After: 5`. A migration newer than the binary, a changed
+  migration, or a configuration or secret file it cannot use refuses startup
+  at once.
 - The layout and limits are in [artifact
   storage](../internals/artifact-storage.md).
 

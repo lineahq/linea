@@ -18,14 +18,37 @@ const (
 	readyPath  = "/readyz"
 )
 
+// serveState is what the health endpoints report: the server answers from
+// the moment it listens, takes requests once its storage is open, and stops
+// taking them while it drains.
+type serveState struct {
+	// api is the API's handler, nil while the server waits for its storage.
+	api      atomic.Pointer[http.Handler]
+	draining atomic.Bool
+}
+
+// serve sets the API handler: the server takes requests from now on.
+func (s *serveState) serve(h http.Handler) { s.api.Store(&h) }
+
+// startingRetryAfter is the Retry-After of a request refused while the
+// server waits for its storage, in seconds.
+const startingRetryAfter = "5"
+
 // health answers GET /healthz while the process serves and GET /readyz
-// while it also takes new work: /readyz answers 503 once the server drains,
-// so a load balancer stops sending it requests. Every other request goes to
-// next.
-func health(next http.Handler, draining *atomic.Bool) http.Handler {
+// while it also takes new work: /readyz answers 503 until the storage is
+// open and once the server drains, so a load balancer sends requests only
+// to a server that takes them. Every other request goes to the API, or is
+// answered 503 while the server waits for its storage.
+func health(state *serveState) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next := state.api.Load()
 		if r.URL.Path != healthPath && r.URL.Path != readyPath {
-			next.ServeHTTP(w, r)
+			if next == nil {
+				w.Header().Set("Retry-After", startingRetryAfter)
+				http.Error(w, "starting: the server is waiting for its storage", http.StatusServiceUnavailable)
+				return
+			}
+			(*next).ServeHTTP(w, r)
 			return
 		}
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -35,9 +58,13 @@ func health(next http.Handler, draining *atomic.Bool) http.Handler {
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		if r.URL.Path == readyPath && draining.Load() {
+		if r.URL.Path == readyPath && (next == nil || state.draining.Load()) {
 			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = io.WriteString(w, "draining\n")
+			if next == nil {
+				_, _ = io.WriteString(w, "starting\n")
+			} else {
+				_, _ = io.WriteString(w, "draining\n")
+			}
 			return
 		}
 		_, _ = io.WriteString(w, "ok\n")

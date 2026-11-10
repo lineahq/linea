@@ -20,8 +20,10 @@ account token.
 ## Server
 
 - Readiness is `GET /readyz` and liveness `GET /healthz`, which need no
-  credential; `/readyz` answers 503 while the instance drains, so the Service
-  stops sending it requests. With `server.tls` the probes use HTTPS, and the
+  credential; `/readyz` answers 503 until the instance has opened its storage
+  and while it drains, so the Service sends it requests only in between. The
+  server retries its storage instead of exiting, so a first install whose
+  PostgreSQL and SeaweedFS start later does not crash-loop. With `server.tls` the probes use HTTPS, and the
   kubelet does not verify the certificate.
 - `RollingUpdate` with `maxSurge` 1 and `maxUnavailable` 0 starts a new pod
   before an old one stops. Any instance serves any request because the run

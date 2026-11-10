@@ -294,9 +294,11 @@ Traefik and nginx work the same way. Four things matter in any of them:
 ## Health
 
 The server answers `GET /healthz` while it runs and `GET /readyz` while it
-also takes new work (it answers 503 once it drains), both without a
-credential. `linea-server probe` is the container's healthcheck against
-`/healthz`; `pool` and `builder` start once `linea` is healthy.
+also takes new work, both without a credential. `/readyz` answers 503 until
+the server has opened its database and bucket, which it retries until they
+answer, and once it drains. `linea-server probe` is the container's
+healthcheck against `/readyz`; `pool` and `builder` start once `linea` is
+healthy.
 `docker compose ps` shows the state.
 
 ## Resources

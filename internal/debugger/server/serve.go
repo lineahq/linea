@@ -13,7 +13,6 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -175,8 +174,30 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 		}
 		defer metricsLn.Close()
 	}
-	repo, err := OpenStore(ctx, tm.store)
+	// The server answers from the moment it listens: /healthz with 200, and
+	// /readyz and every other request with 503 until its storage is open, so
+	// a liveness probe does not restart it while the database or object
+	// store beside it is still starting.
+	var state serveState
+	srv := newTeamHTTPServer(securityHeaders(health(&state)))
+	srv.TLSConfig = tlsConfig
+	serve := srv.Serve
+	if tlsConfig != nil {
+		serve = func(ln net.Listener) error { return srv.ServeTLS(ln, "", "") }
+	}
+	served := make(chan error, 1)
+	go func() { served <- serve(ln) }()
+	defer srv.Close()
+	scheme := "http"
+	if tlsConfig != nil {
+		scheme = "https"
+	}
+	fmt.Fprintf(stderr, "listening on %s://%s, opening storage\n", scheme, ln.Addr())
+	repo, err := openStoreRetrying(ctx, tm.store, stderr)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
 		return err
 	}
 	// A team server needs no Docker: its runtimes are the catalog's, served
@@ -221,10 +242,6 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 	var auth platform.Authenticator = chain
 	h := api.New(api.Options{Platform: service, Fallback: webui.Handler(), Logger: logger, Authenticator: auth, RemoteAccess: true})
 	var handler http.Handler = h
-	scheme := "http"
-	if tlsConfig != nil {
-		scheme = "https"
-	}
 	if signIn != nil || enableMCP {
 		mux := http.NewServeMux()
 		mux.Handle("/", h)
@@ -238,9 +255,6 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 			mux.Handle("/mcp", mcp.New(mcp.Options{Platform: service, Logger: logger, Authenticator: auth}))
 		}
 	}
-	var draining atomic.Bool
-	srv := newTeamHTTPServer(securityHeaders(health(handler, &draining)))
-	srv.TLSConfig = tlsConfig
 	stopped := make(chan struct{})
 	defer close(stopped)
 	if metricsLn != nil {
@@ -260,7 +274,7 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 		// Claim nothing more and let running work finish while the API
 		// still answers; Close hands the rest to another instance. Readiness
 		// fails first, so a load balancer sends new requests elsewhere.
-		draining.Store(true)
+		state.draining.Store(true)
 		drainCtx, cancel := context.WithTimeout(context.Background(), tm.drain)
 		if err := service.Drain(drainCtx); err != nil {
 			fmt.Fprintf(stderr, "drain: work still running after %s is handed back to the queue\n", tm.drain)
@@ -274,6 +288,7 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
 	}()
+	state.serve(handler)
 	fmt.Fprintf(stderr, "serving API on %s://%s/api/v1 (contract: /api/v1/openapi.json)\n", scheme, ln.Addr())
 	if enableMCP {
 		fmt.Fprintf(stderr, "serving MCP on %s://%s/mcp\n", scheme, ln.Addr())
@@ -299,14 +314,53 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 	}
 	fmt.Fprintf(stderr, "storage: PostgreSQL, payloads in object storage bucket %s%s\n", tm.store.S3.Bucket, created)
 	fmt.Fprintln(stderr, "requests read no host file or host environment variable: they send their files inline or name saved ones, and ${env:...} reads declared values only")
-	serve := srv.Serve
-	if tlsConfig != nil {
-		serve = func(ln net.Listener) error { return srv.ServeTLS(ln, "", "") }
-	}
-	if err := serve(ln); !errors.Is(err, http.ErrServerClosed) {
+	if err := <-served; !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
+}
+
+// Retrying the storage at startup: the first delay, doubled after each
+// failure up to the last. A database or object store started beside the
+// server, by Compose or a Helm install, is often not up yet.
+const (
+	storeRetryFirst = time.Second
+	storeRetryMax   = 30 * time.Second
+)
+
+// storeRetryWait waits d or until ctx ends. Tests replace it.
+var storeRetryWait = func(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+// openStoreRetrying opens the store. While it fails with a storage error (a
+// database or object store that does not answer, or a bucket missing) it
+// says why on stderr and tries again, with a growing delay, until ctx ends.
+// Any other error, such as an invalid URL or a schema newer than this
+// binary, fails at once.
+func openStoreRetrying(ctx context.Context, c pg.Config, stderr io.Writer) (artifact.Repository, error) {
+	delay := storeRetryFirst
+	for {
+		repo, err := OpenStore(ctx, c)
+		if err == nil {
+			return repo, nil
+		}
+		if !errors.Is(err, artifact.ErrStorage) || ctx.Err() != nil {
+			return nil, err
+		}
+		fmt.Fprintf(stderr, "storage not available, retrying in %s: %v\n", delay, err)
+		if err := storeRetryWait(ctx, delay); err != nil {
+			return nil, err
+		}
+		delay = min(2*delay, storeRetryMax)
+	}
 }
 
 // loopbackHost reports whether a host name or address is this machine's.

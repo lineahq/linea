@@ -116,8 +116,12 @@ the first item below.
 - The server creates its bucket at start when `store.objects.create_bucket` is
   true (off by default; the Compose stack turns it on).
 - `GET /healthz` and `GET /readyz` answer without a credential: the second
-  answers 503 once the server drains. `linea-server probe` checks `/readyz`
-  (`--url` picks another) and is the Compose healthcheck.
+  answers 503 until the storage is open and once the server drains.
+  `linea-server probe` checks `/readyz` (`--url` picks another) and is the
+  Compose healthcheck.
+- The server no longer exits when its database or bucket is not reachable at
+  start: it listens, says why on stderr and retries after 1 s, doubling up to
+  every 30 s, answering other requests 503 with `Retry-After` meanwhile.
 - The Helm chart follows the server. `admin.enabled`, `admin.password` and
   `admin.existingSecret` set up the built-in admin account: unset, it is on
   when `config.authentication` has neither `oidc` nor `trusted_headers`, with
