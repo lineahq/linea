@@ -11,7 +11,7 @@ is the same server as on [Kubernetes](deploy-kubernetes.md). The CLI's direct co
 
 | Service | What it is |
 | --- | --- |
-| `postgres` | PostgreSQL 17: runs, queue, change feed, sessions, sign-ins, catalog |
+| `postgres` | PostgreSQL 17: runs, queue, change feed, sessions, sign-ins, catalog. The server connects as `linea`, a role without superuser rights that owns the database `linea` ([database roles](#database-roles)). |
 | `seaweedfs` | S3-compatible object storage for bundles, reports and evidence |
 | `linea` | `linea-server`, one instance, on `LINEA_BIND:LINEA_PORT` (`127.0.0.1:7070`), plain HTTP. It migrates its database and creates its bucket at start. |
 | `pool` | `linea-worker --connect --pool`: runs the built-in runtime and the runtimes the builder makes ([pool worker](#the-pool-worker)) |
@@ -151,7 +151,7 @@ line breaks.
 
 | File | Mounted in | Used for |
 | --- | --- | --- |
-| `postgres_password` | `postgres`, `linea` | The database user `linea`. Taken once, when the `postgres-data` volume is created; changing it later does not change the database's password. |
+| `postgres_password` | `postgres`, `linea` | The password of the database user `linea` and of the superuser `postgres`. Taken once, when the `postgres-data` volume is created; changing it later does not change the database's passwords. |
 | `s3_access_key`, `s3_secret_key` | `seaweedfs`, `linea` | The object store's credentials. SeaweedFS takes the same values as its admin identity, which its entrypoint reads from the files into `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. |
 | `worker_token` | `linea`, `pool` | The pool worker's token |
 | `builder_token` | `linea`, `builder` | The builder's token; it must differ from the worker's |
@@ -178,6 +178,25 @@ file, run
 ```sh
 docker compose restart
 ```
+### Database roles
+
+On an empty `postgres-data` volume, PostgreSQL's first start runs a script
+that `compose.yaml` carries (the config `postgres_init`). It creates the
+role `linea` (`LOGIN NOSUPERUSER CREATEDB CREATEROLE`, with the password
+in `postgres_password`) and the database `linea`, owned by it, and takes
+the `CONNECT` on `linea`, `postgres` and `template1` from `PUBLIC`. The
+server needs only to own its database: its migrations create only tables,
+views, triggers and one PL/pgSQL function there. `CREATEDB` and
+`CREATEROLE` are for the fleet overlay's `fleet-db` job, which creates the
+fleet and live-capture databases and roles as `linea`; PostgreSQL 17 lets a
+role with `CREATEROLE` change only the roles it created, never a superuser,
+and never grant superuser or the server-program roles. The image's superuser `postgres`
+has the same password, and the script refuses it over TCP with a first line
+in `pg_hba.conf`, `host all postgres all reject`. It works only on the
+container's local socket: `docker compose exec postgres psql -U postgres`.
+
+The script runs only when the volume is created.
+
 
 because services read their secrets when they start, and a bind mount shows
 the new file after a restart. The exception is `postgres_password`, which

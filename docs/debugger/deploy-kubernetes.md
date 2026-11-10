@@ -99,6 +99,18 @@ replication, no backups and no TLS inside the cluster.
   `seaweedfs.secretKey` to choose them yourself.
 - The server creates the bucket (`seaweedfs.bucket`, default `linea`) at startup, and keeps an existing one. With your own store it does that only with `store.objects.createBucket: true`; by default the bucket is yours and must exist.
 - The bundled PostgreSQL password reaches the server as a file, `store.database_password_file`, from the PostgreSQL Secret; the server config holds a URL without it.
+- The server connects to the bundled PostgreSQL as `linea`, a role without
+  superuser rights that owns the database `linea`. It can create databases
+  and roles, which the `fleet.deploy` Job uses to create the fleet and
+  live-capture databases and roles; PostgreSQL 17 lets it change only the
+  roles it created, and never grant superuser. A ConfigMap script (`<release>-linea-postgresql-init`) that the
+  image runs when it first starts on an empty volume creates it, and refuses
+  the superuser `postgres` over TCP with a first line in `pg_hba.conf`; it
+  works only inside the pod (`kubectl exec ... psql -U postgres`). The two
+  share the password in the PostgreSQL Secret.
+- Your own PostgreSQL needs no superuser for the server: ownership of its
+  database is enough (the migrations create tables, views, triggers and one
+  PL/pgSQL function). Create the role and database yourself.
 - Each can be enabled on its own. An enabled store replaces its part of
   `store`, so leave that part empty. Neither can be combined with
   `store.existingSecret`.

@@ -17,6 +17,32 @@ type: Opaque
 stringData:
   password: {{ include "linea.postgresqlPassword" . | quote }}
 ---
+# The image runs this once, on an empty volume, as the superuser postgres,
+# which has the Secret's password. The server connects as linea, which owns
+# only the linea database and has the same password. The superuser is refused
+# over TCP, so a leaked password never opens it; it works only inside the pod,
+# on the local socket.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-init
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+data:
+  10-linea.sh: |
+    #!/bin/sh
+    set -eu
+    LINEA_PASSWORD=$(cat /etc/postgresql-secret/password); export LINEA_PASSWORD
+    psql --quiet --set ON_ERROR_STOP=1 --username postgres --dbname postgres <<'SQL'
+    \getenv pw LINEA_PASSWORD
+    SELECT 'CREATE ROLE linea' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'linea') \gexec
+    ALTER ROLE linea LOGIN NOSUPERUSER CREATEDB CREATEROLE PASSWORD :'pw';
+    SELECT 'CREATE DATABASE linea OWNER linea' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'linea') \gexec
+    REVOKE ALL ON DATABASE linea, postgres, template1 FROM PUBLIC;
+    SQL
+    grep -qx 'host all postgres all reject' "$PGDATA/pg_hba.conf" ||
+      sed -i '1i host all postgres all reject' "$PGDATA/pg_hba.conf"
+---
 apiVersion: v1
 kind: Service
 metadata:
@@ -71,8 +97,6 @@ spec:
           image: {{ include "linea.image" $p.image | quote }}
           imagePullPolicy: {{ $p.image.pullPolicy }}
           env:
-            - {name: POSTGRES_DB, value: linea}
-            - {name: POSTGRES_USER, value: linea}
             - {name: POSTGRES_PASSWORD_FILE, value: /etc/postgresql-secret/password}
             - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
           ports:
@@ -98,12 +122,17 @@ spec:
           volumeMounts:
             - {name: data, mountPath: /var/lib/postgresql/data}
             - {name: password, mountPath: /etc/postgresql-secret, readOnly: true}
+            - {name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true}
             - {name: run, mountPath: /var/run/postgresql}
             - {name: tmp, mountPath: /tmp}
       volumes:
         - name: password
           secret:
             secretName: {{ $name }}
+        - name: init
+          configMap:
+            name: {{ $name }}-init
+            defaultMode: 0555
         - {name: run, emptyDir: {}}
         - {name: tmp, emptyDir: {}}
       {{- with $p.nodeSelector }}

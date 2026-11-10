@@ -33,11 +33,12 @@ services:
   postgres:
     image: postgres:17@sha256:b8faeff7712663c2773a190181e1246e37e364b887611c04658c28b44e2408fe
     environment:
-      POSTGRES_DB: linea
-      POSTGRES_USER: linea
-      # Taken once, when the volume is created.
+      # The superuser postgres, which the server never uses (see the config
+      # postgres_init below). Taken once, when the volume is created.
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
     secrets: [postgres_password]
+    configs:
+      - {source: postgres_init, target: /docker-entrypoint-initdb.d/10-linea.sh}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     networks: [database]
@@ -241,7 +242,8 @@ services:
 # random values (openssl rand -hex 32 > secrets/<name>); oidc_client_secret
 # holds your identity provider's client secret and stays empty without one.
 # Services read them when they start. PostgreSQL takes postgres_password
-# once, when its volume is created, so keep it as long as the data. Docker
+# once, when its volume is created (for the superuser and the role linea),
+# so keep it as long as the data. Docker
 # makes a directory in place of a missing file, and the service that reads
 # it stops with an error naming it.
 secrets:
@@ -272,6 +274,30 @@ volumes:
 
 networks:
   database:
+# The image runs this once, on an empty volume, as the superuser. The server
+# connects as linea, which owns the linea database, is no superuser and
+# has the same password; it can create databases and roles for the fleet
+# overlay's fleet-db job. The superuser is refused over TCP, so a leaked password never
+# opens it; it works only inside the container, on the local socket.
+configs:
+  postgres_init:
+    content: |
+      # Compose cannot mark it executable, so the entrypoint sources it:
+      # the subshell keeps its options and variables out of the entrypoint.
+      (
+        set -eu
+        LINEA_PASSWORD=$$(cat /run/secrets/postgres_password); export LINEA_PASSWORD
+        psql --quiet --set ON_ERROR_STOP=1 --username postgres --dbname postgres <<'SQL'
+      \getenv pw LINEA_PASSWORD
+      SELECT 'CREATE ROLE linea' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'linea') \gexec
+      ALTER ROLE linea LOGIN NOSUPERUSER CREATEDB CREATEROLE PASSWORD :'pw';
+      SELECT 'CREATE DATABASE linea OWNER linea' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'linea') \gexec
+      REVOKE ALL ON DATABASE linea, postgres, template1 FROM PUBLIC;
+      SQL
+        grep -qx 'host all postgres all reject' "$$PGDATA/pg_hba.conf" ||
+          sed -i '1i host all postgres all reject' "$$PGDATA/pg_hba.conf"
+      )
+
     internal: true
   storage:
     internal: true

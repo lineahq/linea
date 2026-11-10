@@ -193,7 +193,8 @@ server:
 
 store:
   # PostgreSQL, e.g. postgres://linea@db:5432/linea?sslmode=verify-full. The
-  # server creates and migrates its tables in this database.
+  # server creates and migrates its tables in this database, and needs only
+  # ownership of it, not superuser.
   databaseURL: ""
   objects:
     # The S3 API endpoint, http:// or https://.
@@ -227,7 +228,9 @@ postgresql:
     tag: "17"
     digest: sha256:b8faeff7712663c2773a190181e1246e37e364b887611c04658c28b44e2408fe
     pullPolicy: IfNotPresent
-  # The password of the user linea. Generated once and kept when empty.
+  # The password of the user linea, which owns the database linea, and of
+  # the superuser postgres, which works only inside the pod. Generated once
+  # and kept when empty.
   password: ""
   persistence:
     size: 10Gi

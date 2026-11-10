@@ -68,7 +68,7 @@ x-postgres-tool: &postgres-tool
 
 services:
   # One-shot on every up: creates or updates the fleet and livecapture
-  # databases and roles in the debugger's PostgreSQL, as its owner. Idempotent.
+  # databases and roles in the debugger's PostgreSQL, as linea. Idempotent.
   # Each role's password is the one in its URL.
   fleet-db:
     <<: *postgres-tool
@@ -99,14 +99,14 @@ services:
         \getenv cr CAPTURE_RUNTIME_PASSWORD
         SELECT format('CREATE ROLE %I', r) FROM unnest(ARRAY['fleet_migrator','fleet_app','capture_migrator','capture_app']) r
           WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = r) \gexec
-        ALTER ROLE fleet_migrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD :'fm';
-        ALTER ROLE fleet_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD :'fr';
-        ALTER ROLE capture_migrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD :'cm';
-        ALTER ROLE capture_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD :'cr';
+        ALTER ROLE fleet_migrator LOGIN NOCREATEDB NOCREATEROLE PASSWORD :'fm';
+        ALTER ROLE fleet_app LOGIN NOCREATEDB NOCREATEROLE PASSWORD :'fr';
+        ALTER ROLE capture_migrator LOGIN NOCREATEDB NOCREATEROLE PASSWORD :'cm';
+        ALTER ROLE capture_app LOGIN NOCREATEDB NOCREATEROLE PASSWORD :'cr';
         SELECT format('CREATE DATABASE %I', d) FROM unnest(ARRAY['fleet','livecapture']) d
           WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = d) \gexec
         -- Each role reaches its own database only.
-        REVOKE ALL ON DATABASE linea, postgres, fleet, livecapture FROM PUBLIC;
+        REVOKE ALL ON DATABASE linea, fleet, livecapture FROM PUBLIC;
         GRANT CONNECT, CREATE ON DATABASE fleet TO fleet_migrator;
         GRANT CONNECT ON DATABASE fleet TO fleet_app;
         GRANT CONNECT, CREATE ON DATABASE livecapture TO capture_migrator;

@@ -21,7 +21,7 @@ mechanisms](../internals/debugger-team-server.md).
 
 | Need | Detail |
 | --- | --- |
-| PostgreSQL and an S3-compatible bucket | The server creates its tables, but not the database. It creates the bucket only with `store.objects.create_bucket: true`. |
+| PostgreSQL and an S3-compatible bucket | The server creates its tables, but not the database; it needs ownership of that database, not superuser rights. It creates the bucket only with `store.objects.create_bucket: true`. |
 | Sign-in | An OIDC identity provider, or an authenticating proxy that sends identity headers. |
 | Runtime workers | At least one, which dials the server. Add a runtime builder if people build runtimes on the server. The server itself runs no Collector. |
 | One release | Server, workers and builders of one release. Each release publishes the `linea-server`, `linea-worker` and `linea-builder` images to `ghcr.io/lineahq/`; you can also build them from `deploy/docker/`. A builder of another release is refused. |
