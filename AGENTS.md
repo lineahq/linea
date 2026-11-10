@@ -28,6 +28,9 @@ Keep this file current and short. Detail belongs in `docs/`, whose
 - `docs/install.md`: installing the CLI and a team server, release assets
   and building from source. The root `README.md` presents the product and
   links here; keep install detail out of it.
+- `docs/compatibility.md`: the version table (product, worker protocol,
+  Collector line, plugin host protocol, control proto, schemas). Update it
+  when one of them changes.
 - `docs/debugger/`: debugger user and operator documentation.
 - `docs/fleet/README.md`, `docs/fleet/plugins.md`, `docs/fleet/deployment.md`:
   fleet overview, plugin contract and operation.

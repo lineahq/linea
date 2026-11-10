@@ -126,6 +126,10 @@ Each release attaches the Helm chart to its GitHub release. See
 [Kubernetes](debugger/deploy-kubernetes.md) and the
 [team server](debugger/team-server.md) guide.
 
+Before an upgrade, read [Compatibility](compatibility.md): the server,
+builders and workers must match, and runtime images need a rebuild when the
+worker protocol changes.
+
 ## What a release publishes
 
 - `linea` CLI archives for Linux, macOS and Windows, with `SHA256SUMS`;
