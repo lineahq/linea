@@ -18,6 +18,14 @@ Reach it with a port-forward:
 
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "linea.fullname" . }} 7070:{{ .Values.service.port }}
 {{- end }}
+{{- if include "linea.adminEnabled" . }}
+
+Sign in as admin, with the built-in account's password:
+
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "linea.adminSecret" . }} -o jsonpath='{.data.password}' | base64 -d
+
+On the command line, `linea login --admin --server {{ $url }}` asks for it; `--password-stdin` reads it for scripts. The server limits failed sign-ins per client address, which behind an ingress is the ingress's address.
+{{- end }}
 {{- if .Values.worker.enabled }}
 
 Runs on {{ .Values.worker.name }} go to its dedicated workers: {{ .Values.worker.replicas }} dialing {{ include "linea.serverURL" . }}, {{ .Values.worker.capacity }} request(s) at a time each. Make it the default runtime, the one requests run on when they name none:

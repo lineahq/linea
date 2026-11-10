@@ -19,8 +19,10 @@ account token.
 
 ## Server
 
-- Probes check the TCP port, not an HTTP route: every route except the web
-  client's assets needs a credential.
+- Readiness is `GET /readyz` and liveness `GET /healthz`, which need no
+  credential; `/readyz` answers 503 while the instance drains, so the Service
+  stops sending it requests. With `server.tls` the probes use HTTPS, and the
+  kubelet does not verify the certificate.
 - `RollingUpdate` with `maxSurge` 1 and `maxUnavailable` 0 starts a new pod
   before an old one stops. Any instance serves any request because the run
   queue, events, sessions and sign-ins are in PostgreSQL.
@@ -79,8 +81,8 @@ roots, and a public identity provider would then fail verification.
 - Bundled PostgreSQL admits only the server on its port, and with
   `fleet.deploy.enabled` also fleet, the plugin and the database Job.
   Bundled SeaweedFS admits the server, pool, worker and builder pods on the
-  S3 port, the bucket Job on the master and filer ports, and itself (the pod
-  reaches its own master and filer through the Service).
+  S3 port, and itself (the pod reaches its own master and filer through the
+  Service).
 
 ## Builder autoscaling
 
@@ -116,14 +118,10 @@ roots, and a public identity provider would then fail verification.
   (`-s3.config` from the Secret's `s3.json`, one identity with Admin, Read,
   Write, List and Tagging), `-volume.max=0` (as many volumes as the disk
   holds) and `-master.volumeSizeLimitMB` from `seaweedfs.volumeSizeLimitMB`
-  (256). The Service exposes the S3 port (8333) and the master (9333 and gRPC
-  19333).
-- **Bucket Job.** One Job per release revision (`<release>-seaweedfs-bucket-<revision>`),
-  with `backoffLimit` 6, removed 600 s after it finishes. It loops up to 120
-  times, 2 s apart: it lists buckets with `weed shell` against the master,
-  exits when the bucket exists, and otherwise creates it. It fails if the
-  bucket cannot be created. The pod advertises its own IP (`-ip`) so the
-  shell can reach the filer.
+  (256). The Service exposes only the S3 port (8333). The server creates the
+  bucket at startup (`store.objects.create_bucket`, which the chart sets for
+  the bundled SeaweedFS) and restarts until SeaweedFS answers; there is no
+  bucket Job. The pod still advertises its own IP (`-ip`).
 
 ## Fleet
 

@@ -118,6 +118,18 @@ the first item below.
 - `GET /healthz` and `GET /readyz` answer without a credential: the second
   answers 503 once the server drains. `linea-server probe` checks `/readyz`
   (`--url` picks another) and is the Compose healthcheck.
+- The Helm chart follows the server. `admin.enabled`, `admin.password` and
+  `admin.existingSecret` set up the built-in admin account: unset, it is on
+  when `config.authentication` has neither `oidc` nor `trusted_headers`, with
+  a generated password kept across upgrades (Secret `<release>-linea-admin`,
+  key `password`); `config.bindings` is then optional. The server's probes
+  are `GET /readyz` and `GET /healthz`. The server creates the bundled
+  SeaweedFS bucket (`store.objects.create_bucket`), so the bucket Job is gone,
+  and `store.objects.createBucket` does the same for your own store (off by
+  default). With the bundled PostgreSQL the server config holds a URL without
+  the password and `store.database_password_file` names it, so the `store`
+  Secret has no `database-url` key then. `docs/debugger/deploy-kubernetes.md`
+  has the details.
 
 ## [0.2.0]
 

@@ -34,6 +34,10 @@ spec:
       annotations:
         # The server config is read at startup; a change restarts the server.
         checksum/config: {{ include "linea.serverConfig" . | sha256sum }}
+        {{- if and (include "linea.adminEnabled" .) (not .Values.admin.existingSecret) }}
+        # The admin password is read at startup too.
+        checksum/admin: {{ include "linea.adminPassword" . | sha256sum }}
+        {{- end }}
     spec:
       serviceAccountName: {{ $fullname }}
       automountServiceAccountToken: false
@@ -105,15 +109,21 @@ spec:
             - name: metrics
               containerPort: {{ .Values.server.metrics.port }}
             {{- end }}
-          # Every route but the web client's assets needs a credential, so
-          # the probes check that the server accepts connections.
+          # /healthz answers while the process serves; /readyz also answers
+          # 503 while the instance drains, so the Service stops sending it
+          # requests. Neither needs a credential. The kubelet does not verify
+          # the certificate when the server serves TLS.
           readinessProbe:
-            tcpSocket:
+            httpGet:
+              path: /readyz
               port: http
+              scheme: {{ if $tls }}HTTPS{{ else }}HTTP{{ end }}
             periodSeconds: 10
           livenessProbe:
-            tcpSocket:
+            httpGet:
+              path: /healthz
               port: http
+              scheme: {{ if $tls }}HTTPS{{ else }}HTTP{{ end }}
             periodSeconds: 30
             failureThreshold: 4
           resources:
@@ -147,6 +157,16 @@ spec:
               mountPath: /etc/linea/fleet
               readOnly: true
             {{- end }}
+            {{- if .Values.postgresql.enabled }}
+            - name: postgresql
+              mountPath: /etc/linea/postgresql
+              readOnly: true
+            {{- end }}
+            {{- if include "linea.adminEnabled" . }}
+            - name: admin
+              mountPath: /etc/linea/admin
+              readOnly: true
+            {{- end }}
             {{- if include "linea.hasOIDCSecret" . }}
             - name: oidc
               mountPath: /etc/linea/oidc
@@ -173,9 +193,24 @@ spec:
           secret:
             secretName: {{ include "linea.storeSecret" . }}
             items:
+              {{- if not .Values.postgresql.enabled }}
               - {key: database-url, path: database-url}
+              {{- end }}
               - {key: access-key, path: access-key}
               - {key: secret-key, path: secret-key}
+        {{- if .Values.postgresql.enabled }}
+        # The bundled PostgreSQL's password, completing store.database_url.
+        - name: postgresql
+          secret:
+            secretName: {{ include "linea.postgresqlName" . }}
+            items: [{key: password, path: password}]
+        {{- end }}
+        {{- if include "linea.adminEnabled" . }}
+        - name: admin
+          secret:
+            secretName: {{ include "linea.adminSecret" . }}
+            items: [{key: password, path: password}]
+        {{- end }}
         - name: tmp
           emptyDir:
             sizeLimit: 1Gi

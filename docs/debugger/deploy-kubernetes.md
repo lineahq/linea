@@ -97,7 +97,8 @@ replication, no backups and no TLS inside the cluster.
 - The chart generates their passwords and S3 keys once and keeps them across
   upgrades. Set `postgresql.password` or `seaweedfs.accessKey` and
   `seaweedfs.secretKey` to choose them yourself.
-- A Job per release creates the bucket (`seaweedfs.bucket`, default `linea`).
+- The server creates the bucket (`seaweedfs.bucket`, default `linea`) at startup, and keeps an existing one. With your own store it does that only with `store.objects.createBucket: true`; by default the bucket is yours and must exist.
+- The bundled PostgreSQL password reaches the server as a file, `store.database_password_file`, from the PostgreSQL Secret; the server config holds a URL without it.
 - Each can be enabled on its own. An enabled store replaces its part of
   `store`, so leave that part empty. Neither can be combined with
   `store.existingSecret`.
@@ -162,6 +163,42 @@ networkPolicy:
       ports: [{port: 443}]
 ```
 
+With OIDC configured as in the example, the admin account stays off. Add
+`admin.enabled: true` to keep it as a way in until a group holds `admin`. The
+bucket is yours; add `store.objects.createBucket: true` to have the server
+create it when missing.
+
+### Signing in
+
+The chart can turn on the server's built-in account, the user `admin` with the
+admin role on everything and no binding to write
+([Signing in](team-server.md#signing-in)). It sets
+`authentication.admin.password_file` from a Secret.
+
+| Value | Meaning |
+| --- | --- |
+| `admin.enabled` | Unset (default): on when `config.authentication` sets neither `oidc` nor `trusted_headers`, so an install with no identity provider can be signed in to. `true` also turns it on beside an identity provider, `false` off. |
+| `admin.password`, `admin.existingSecret` | The password (at least 16 characters, one line), or a Secret holding it under the key `password`. With neither, the chart generates one and keeps it across upgrades. |
+
+Read the generated password, then sign in at `/sign-in` or from the CLI (the
+notes the chart prints show both):
+
+```sh
+kubectl -n <namespace> get secret <release>-linea-admin -o jsonpath='{.data.password}' | base64 -d
+linea login --admin --server https://debugger.example.com
+```
+
+- With the admin account as the only method, `config.bindings` can stay empty.
+- Failed sign-ins are limited per instance and per client address, 5 a minute.
+  The server sees the address of the connection, which behind an ingress is the
+  ingress's, so failed attempts from one client count against everyone behind
+  it.
+- Setting `admin.enabled: false` once a group from your identity provider holds
+  `admin` makes the server refuse the password and end the account's sessions
+  and API tokens.
+- A changed `admin.password` restarts the server, which reads it at startup. A
+  password in your own Secret is read again only when the pods restart.
+
 ### After the install
 
 Nothing needs registering. The pool's image is the server's release, so the
@@ -183,15 +220,15 @@ linea runtime default mine --server https://debugger.example.com
 
 | Resource | Contents |
 | --- | --- |
-| Server ConfigMap | The server config, composed from `config`. The chart sets `store` (from `store`, `config.storageLimit`, `config.runLimit`), `worker_token_file` when the server accepts workers, `client_secret_file` with an OIDC secret, and `builds.token_file` when it accepts builders. `config.limits` and `config.retention` pass through as the server config's keys. No default runtime is set: use `linea runtime default`. A change restarts the server. |
-| Server Deployment | `server.replicas` identical pods (default 2), `RollingUpdate` with `maxSurge` 1 and `maxUnavailable` 0: a new pod starts before an old one stops. Runs `linea-server --config` on port 7070 with `--mcp`. Queue, events, sessions and sign-ins are in PostgreSQL, so any instance serves any request. TCP probes. |
+| Server ConfigMap | The server config, composed from `config`. The chart sets `store` (from `store`, `config.storageLimit`, `config.runLimit`; with the bundled PostgreSQL a `database_url` without a password and its `database_password_file`), `store.objects.create_bucket` (`store.objects.createBucket`, always with the bundled SeaweedFS), `authentication.admin.password_file` with the admin account, `worker_token_file` when the server accepts workers, `client_secret_file` with an OIDC secret, and `builds.token_file` when it accepts builders. `config.limits` and `config.retention` pass through as the server config's keys. No default runtime is set: use `linea runtime default`. A change restarts the server. |
+| Server Deployment | `server.replicas` identical pods (default 2), `RollingUpdate` with `maxSurge` 1 and `maxUnavailable` 0: a new pod starts before an old one stops. Runs `linea-server --config` on port 7070 with `--mcp`. Queue, events, sessions and sign-ins are in PostgreSQL, so any instance serves any request. HTTP probes: liveness `GET /healthz`, readiness `GET /readyz`, which answers 503 while the instance drains (HTTPS with `server.tls.secretName`). |
 | PodDisruptionBudget | `maxUnavailable: 1`, when `server.replicas` is above 1: a node drain keeps one instance serving. |
 | Ingress | For `ingress.host`, TLS from `ingress.tls.secretName`. The server then serves plain HTTP in the cluster (`--allow-http`). With `server.tls.secretName` the server ends TLS itself instead. |
 | Pool Deployment (`pool.enabled`, default on) | `pool.replicas` pods running `linea-worker --connect --pool`, `pool.capacity` requests at once across all runtimes. Downloads each runtime binary through a presigned URL into `/cache` (emptyDir bounded by `pool.cache.size`) and runs it as a child process: idle ones beyond `pool.warm` stop, least recently used first, and an idle one after `pool.idle`. No port, no Service. |
 | Builder Deployment (`builder.enabled`, default on) | `builder.replicas` pods running `linea-builder --connect`: `builder.capacity` builds at once, `builder.cpus` CPUs per build. Compiles with the pinned Go toolchain from a manifest and sources it downloads through presigned URLs, and uploads the binary the same way. Holds no database or bucket credentials. |
 | Dedicated workers (`worker.enabled`, default off) | `worker.replicas` pods running `linea-worker --connect` from a runtime image you built, `worker.capacity` requests at once. |
 | Bundled PostgreSQL (`postgresql.enabled`) | StatefulSet of one pod (PVC from `postgresql.persistence`), a Service on 5432, and a Secret with the generated password (key `password`, kept across upgrades). |
-| Bundled SeaweedFS (`seaweedfs.enabled`) | StatefulSet of one pod (PVC from `seaweedfs.persistence`) serving the S3 gateway on 8333, a Service, a Secret with the generated keys (`access-key`, `secret-key`, kept across upgrades), and a bucket Job per release revision that creates `seaweedfs.bucket` and keeps an existing one. |
+| Bundled SeaweedFS (`seaweedfs.enabled`) | StatefulSet of one pod (PVC from `seaweedfs.persistence`) serving the S3 gateway on 8333, a Service, and a Secret with the generated keys (`access-key`, `secret-key`, kept across upgrades). The server creates `seaweedfs.bucket` at startup. |
 | Fleet and live capture (`fleet.deploy.enabled`) | A Deployment and Service each for fleet and the plugin, a database Job with the bundled PostgreSQL, their Secrets and a ConfigMap (see [Fleet and live capture](#fleet-and-live-capture)). |
 | NetworkPolicies | For the pool, the builder, the dedicated worker, each bundled store, and, with the build metrics, the server's metrics port (see [Egress](#egress)). |
 
@@ -201,18 +238,20 @@ Secrets, each from a value or your own Secret:
 | --- | --- | --- | --- |
 | Store | `store.databaseURL`, `store.objects.accessKey`, `store.objects.secretKey` (or the bundled stores) | `store.existingSecret` | `database-url`, `access-key`, `secret-key` |
 | Fleet token | `fleet.token`, or generated with `fleet.deploy.enabled` | `fleet.existingSecret` | `token` |
+| Admin password | `admin.password`, or generated | `admin.existingSecret` | `password` |
 | OIDC client secret | `oidc.clientSecret` | `oidc.existingSecret` | `client-secret` |
 | Worker token | `worker.token`, or generated | `worker.existingSecret` | `token` |
 | Builder token | `builder.token`, or generated | `builder.existingSecret` | `token` |
 
-The server reads the Secrets as files. Generated worker and builder tokens are
-kept across upgrades. The chart keeps no volume for the server: everything it
-stores is in PostgreSQL and the bucket.
+The server reads the Secrets as files. The generated admin password and worker
+and builder tokens are kept across upgrades. The chart keeps no volume for the
+server: everything it stores is in PostgreSQL and the bucket.
 
 Install fails, as the server would, without:
 
-- `config.bindings`,
-- `config.authentication` with `oidc` or `trusted_headers`,
+- a sign-in method: `config.authentication` with `oidc` or `trusted_headers`,
+  or the [admin account](#signing-in),
+- `config.bindings`, unless the admin account is on,
 - one of `pool.enabled`, `worker.enabled` or a worker token.
 
 Server shutdown and builder sizing:

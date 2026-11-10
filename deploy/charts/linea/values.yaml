@@ -18,14 +18,37 @@ config:
   storageLimit: 4GiB
   runLimit: 16MiB
   # oidc and/or trusted_headers, as in the server config, without
-  # client_secret_file (set oidc.clientSecret or oidc.existingSecret).
+  # client_secret_file (set oidc.clientSecret or oidc.existingSecret). The
+  # built-in admin account (admin below) is the third sign-in method; the
+  # chart sets its password_file.
   authentication: {}
-  # Required: without a binding nothing is allowed.
+  # Required unless the built-in admin account is on: without a binding
+  # nothing else is allowed. The admin account needs none.
   bindings: []
   limits: {}
   # Run history kept, as in the server config: runs (count) and age, such as
   # {runs: 10000, age: 30d}; empty keeps the server's defaults.
   retention: {}
+
+# The built-in admin account: the user admin, with the admin role on
+# everything and no binding to write
+# (authentication.admin.password_file in the server config). It signs in at
+# /sign-in and with `linea login`. The server refuses more than 5 failed
+# sign-ins a minute per client address and 20 in total, per instance; behind
+# an ingress the address is the ingress's, so one client can use up the limit
+# for the others.
+admin:
+  # null: on when config.authentication sets neither oidc nor trusted_headers,
+  # so an install with no identity provider can be signed in to. true or
+  # false decides. Turn it off once a group from your identity provider
+  # holds the admin role.
+  enabled: null
+  # The password, at least 16 characters on one line, or a Secret holding it
+  # under the key password. Generated once and kept when both are empty;
+  # read it from the Secret <release>-linea-admin (the notes the chart prints
+  # show the command).
+  password: ""
+  existingSecret: ""
 
 oidc:
   # The web client's secret at the identity provider, or a Secret holding
@@ -181,6 +204,10 @@ store:
     region: ""
     # Path-style requests, as SeaweedFS and most self-hosted stores need.
     pathStyle: true
+    # Create the bucket at startup when it is missing (the credentials must
+    # allow it). Off: the bucket is yours and the server refuses to start
+    # without it. The bundled SeaweedFS always creates its bucket.
+    createBucket: false
     accessKey: ""
     secretKey: ""
   # A Secret holding database-url, access-key and secret-key instead of
@@ -215,8 +242,9 @@ postgresql:
   tolerations: []
   affinity: {}
 
-# SeaweedFS with its S3 gateway. A Job per release creates the bucket. The
-# pool and builders reach it without networkPolicy.objectStorage.
+# SeaweedFS with its S3 gateway. The server creates the bucket at startup
+# (store.objects.create_bucket). The pool and builders reach it without
+# networkPolicy.objectStorage.
 seaweedfs:
   enabled: false
   image:
