@@ -335,7 +335,16 @@ The root Go module is declared in `go.mod`.
   (`Builds.CountBuilds`, reused for 10 s) and the builders connected to this
   instance with their slots; it takes no caller and names nothing, and
   `api.Metrics` serves it as Prometheus text on `linea-server --metrics-listen`, never
-  on the API listener. Pool workers (`worker_pool.go`): a worker whose hello
+  on the API listener. The server's own metrics (`server_metrics.go`) are
+  recorded with the OpenTelemetry metric API on `Options.MeterProvider`
+  (none without one): claim wait in `takeLocked`, lease renewals, losses and
+  expiries in the scheduler, audit append failures in `recordAudit`, and the
+  queue, executors, builds and storage as observed instruments read under
+  `mu` at collection. `tendLeases` records each answered lease scan, and
+  `StorageReady` is false once none answered for a whole lease; the server's
+  `/readyz` reads it. `linea-server` builds the SDK provider with an OTLP
+  exporter from the standard `OTEL_*` variables (`server/telemetry.go`) and
+  shuts it down after the service closes. Pool workers (`worker_pool.go`): a worker whose hello
   carries `Pool` is an executor for every catalog entry with a `binary` of its
   platform (refused without `artifact.BuildTransfers`). A run on such an entry
   is pinned at admission to its binary (`artifact.RunBinary`,

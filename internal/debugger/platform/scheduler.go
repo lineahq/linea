@@ -336,6 +336,10 @@ func (s *Service) takeLocked(a artifact.Assignment, e *executor) *pendingRun {
 		delete(s.jobs, a.RunID)
 		return nil
 	}
+	if a.Attempt == 1 && !r.created.IsZero() {
+		// The first claim: the run's wait in the queue since admission.
+		s.metrics.claimWait.Record(s.ctx, s.now().Sub(r.created).Seconds())
+	}
 	r.state, r.attempt = StateAssigned, a.Attempt
 	r.notifyLocked()
 	job.assignment = a
@@ -597,6 +601,11 @@ func (s *Service) renewLeases(now time.Time) {
 		ctx, cancel := context.WithTimeout(s.ctx, s.lease/3)
 		held, err := s.runQueue.Renew(ctx, e.id, now.Add(s.lease))
 		cancel()
+		if err == nil {
+			s.metrics.leaseRenewals.Add(s.ctx, 1, renewed)
+		} else if s.ctx.Err() == nil {
+			s.metrics.leaseRenewals.Add(s.ctx, 1, renewFailed)
+		}
 		e.lease.mu.Lock()
 		if err == nil {
 			e.lease.renewed = now
@@ -628,6 +637,9 @@ func (s *Service) tendLeases(now time.Time) {
 		s.logError("listing expired leases", err)
 		return
 	}
+	// The scan is the scheduler's regular read of the store: StorageReady
+	// judges an outage by when it last answered.
+	s.metrics.storageAnswered(s.now())
 	for _, a := range expired {
 		if s.shared {
 			// Any instance ends or requeues an expired run; one this service
@@ -663,6 +675,9 @@ func (s *Service) renewed(e *executor, now time.Time) {
 		for _, job := range s.jobs {
 			if job.exec == e {
 				job.handle.mu.Lock()
+				if !job.handle.terminalLocked() && context.Cause(job.ctx) == nil {
+					s.metrics.leasesLost.Add(s.ctx, 1)
+				}
 				job.handle.cancel(errLeaseLost)
 				job.handle.mu.Unlock()
 			}
@@ -708,6 +723,9 @@ func (s *Service) expire(a artifact.Assignment, now time.Time) {
 	if job := s.jobs[r.id]; job != nil && job.exec != nil {
 		// This service's own lease ended: whatever its executor publishes
 		// now is stale.
+		if !r.terminalLocked() && context.Cause(job.ctx) == nil {
+			s.metrics.leasesLost.Add(s.ctx, 1)
+		}
 		r.cancel(errLeaseLost)
 	}
 	if r.terminalLocked() {
@@ -722,6 +740,7 @@ func (s *Service) expire(a artifact.Assignment, now time.Time) {
 			r.finishLocked(StateCancelled, nil, nil)
 		} else {
 			r.finishLocked(StateLost, nil, ErrLost)
+			s.metrics.expiries.Add(s.ctx, 1, expLost)
 		}
 		delete(s.jobs, r.id)
 		return
@@ -749,6 +768,7 @@ func (s *Service) expire(a artifact.Assignment, now time.Time) {
 	}
 	r.notifyLocked()
 	s.jobs[r.id] = job
+	s.metrics.expiries.Add(s.ctx, 1, expRequeued)
 	s.wakeLocked()
 }
 

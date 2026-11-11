@@ -144,6 +144,10 @@ services:
       LINEA_LIMITS_CONNECTIONS: ${LINEA_LIMITS_CONNECTIONS:-}
       LINEA_LIMITS_GIT_CLONE_SIZE: ${LINEA_LIMITS_GIT_CLONE_SIZE:-}
       LINEA_BUILDS_EXPORT_REPOSITORY: ${LINEA_BUILDS_EXPORT_REPOSITORY:-}
+      # The server's own metrics over OTLP, off without an endpoint.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
       # GOMAXPROCS follows the CPU limit by itself (Go 1.25 and later).
       GOMEMLIMIT: ${LINEA_SERVER_GOMEMLIMIT:-768MiB}
     secrets: [postgres_password, s3_access_key, s3_secret_key, worker_token, builder_token, admin_password, oidc_client_secret]

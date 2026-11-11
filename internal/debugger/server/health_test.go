@@ -31,23 +31,29 @@ func TestHealthAnswersReadinessWhileServing(t *testing.T) {
 		starting bool
 		draining bool
 		want     int
+		// storageDown makes the store stop answering.
+		storageDown bool
 	}{
-		{"healthy", http.MethodGet, healthPath, false, false, http.StatusOK},
-		{"healthy while starting", http.MethodGet, healthPath, true, false, http.StatusOK},
-		{"healthy while draining", http.MethodGet, healthPath, false, true, http.StatusOK},
-		{"ready", http.MethodGet, readyPath, false, false, http.StatusOK},
-		{"head ready", http.MethodHead, readyPath, false, false, http.StatusOK},
-		{"not ready while starting", http.MethodGet, readyPath, true, false, http.StatusServiceUnavailable},
-		{"not ready while draining", http.MethodGet, readyPath, false, true, http.StatusServiceUnavailable},
-		{"post refused", http.MethodPost, readyPath, false, false, http.StatusMethodNotAllowed},
-		{"api", http.MethodGet, "/api/v1/runs", false, false, http.StatusTeapot},
-		{"api while starting", http.MethodGet, "/api/v1/runs", true, false, http.StatusServiceUnavailable},
-		{"api while draining", http.MethodGet, "/api/v1/runs", false, true, http.StatusTeapot},
-		{"prefix is not health", http.MethodGet, healthPath + "/x", false, false, http.StatusTeapot},
+		{"not ready while the storage is down", http.MethodGet, readyPath, false, false, http.StatusServiceUnavailable, true},
+		{"healthy while the storage is down", http.MethodGet, healthPath, false, false, http.StatusOK, true},
+		{"api while the storage is down", http.MethodGet, "/api/v1/runs", false, false, http.StatusTeapot, true},
+		{"healthy", http.MethodGet, healthPath, false, false, http.StatusOK, false},
+		{"healthy while starting", http.MethodGet, healthPath, true, false, http.StatusOK, false},
+		{"healthy while draining", http.MethodGet, healthPath, false, true, http.StatusOK, false},
+		{"ready", http.MethodGet, readyPath, false, false, http.StatusOK, false},
+		{"head ready", http.MethodHead, readyPath, false, false, http.StatusOK, false},
+		{"not ready while starting", http.MethodGet, readyPath, true, false, http.StatusServiceUnavailable, false},
+		{"not ready while draining", http.MethodGet, readyPath, false, true, http.StatusServiceUnavailable, false},
+		{"post refused", http.MethodPost, readyPath, false, false, http.StatusMethodNotAllowed, false},
+		{"api", http.MethodGet, "/api/v1/runs", false, false, http.StatusTeapot, false},
+		{"api while starting", http.MethodGet, "/api/v1/runs", true, false, http.StatusServiceUnavailable, false},
+		{"api while draining", http.MethodGet, "/api/v1/runs", false, true, http.StatusTeapot, false},
+		{"prefix is not health", http.MethodGet, healthPath + "/x", false, false, http.StatusTeapot, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var state serveState
 			if !tc.starting {
+				state.watchStorage(func() bool { return !tc.storageDown })
 				state.serve(api)
 			}
 			state.draining.Store(tc.draining)

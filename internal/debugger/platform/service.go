@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
 
 	"github.com/lineahq/linea/build/versions"
@@ -57,7 +58,10 @@ type Runtime interface {
 // Options configure one shared service and worker. Nonpositive capacities use
 // the finite defaults. Prepare and Execute default to the real engine boundaries.
 type Options struct {
-	Logger        *zap.Logger
+	Logger *zap.Logger
+	// MeterProvider records the server's own metrics (server_metrics.go);
+	// nil records none.
+	MeterProvider metric.MeterProvider
 	QueueCapacity int
 	// HistoryLimit is how many terminal runs a service without a
 	// repository keeps; RunCache how many a service with one keeps in
@@ -269,8 +273,10 @@ type Service struct {
 	// slots; buildCounts caches the queue's counts (build_metrics.go).
 	builders    builderCount
 	buildCounts buildCountCache
-	lease       time.Duration
-	now         func() time.Time
+	// metrics are the server's own instruments (server_metrics.go).
+	metrics serverMetrics
+	lease   time.Duration
+	now     func() time.Time
 	// beating is closed when the heartbeat loops stop.
 	beating chan struct{}
 	// leased is a copy of executors that lease renewal reads without mu.
@@ -510,6 +516,8 @@ func newService(opts Options, repository artifact.Repository) *Service {
 		s.runQueue = s.localQueue
 	}
 	s.builds = newBuildQueue(s)
+	s.metrics.storageAnswered(s.now())
+	s.newServerMetrics(opts.MeterProvider)
 	return s
 }
 
@@ -953,6 +961,11 @@ func listed(r *Handle) Run {
 // Close atomically stops admission, cancels all unfinished work and waits for
 // every executor's Collector shutdown. It is safe to call concurrently or repeatedly.
 func (s *Service) Close() {
+	// Before s.mu: a collection in progress holds the SDK's lock and waits
+	// for s.mu in observe.
+	if s.metrics.observed != nil {
+		_ = s.metrics.observed.Unregister()
+	}
 	var held []artifact.Assignment
 	s.mu.Lock()
 	if !s.closed {

@@ -131,6 +131,7 @@ passes these from `.env` to `linea`:
 | Roles | `LINEA_BINDINGS` |
 | Bounds | `LINEA_STORE_STORAGE_LIMIT` (`4GiB`), `LINEA_STORE_RUN_LIMIT` (`32MiB`), `LINEA_RETENTION_RUNS`, `LINEA_RETENTION_AGE`, `LINEA_LIMITS_QUEUE`, `LINEA_LIMITS_RUNS_PER_PRINCIPAL`, `LINEA_LIMITS_CAPTURES_PER_PRINCIPAL`, `LINEA_LIMITS_CONNECTIONS`, `LINEA_LIMITS_GIT_CLONE_SIZE` |
 | Image export | `LINEA_BUILDS_EXPORT_REPOSITORY` ([image export](#image-export-optional)) |
+| Server metrics | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_RESOURCE_ATTRIBUTES` ([server metrics](team-server.md#readiness-and-server-metrics)) |
 | Resources | [Resources](#resources) |
 | Release | `LINEA_VERSION`, the image tag of `linea-server`, `linea-worker` and `linea-builder`; by default the file's release |
 
@@ -324,7 +325,7 @@ Traefik and nginx work the same way. Four things matter in any of them:
 The server answers `GET /healthz` while it runs and `GET /readyz` while it
 also takes new work, both without a credential. `/readyz` answers 503 until
 the server has opened its database and bucket, which it retries until they
-answer, and once it drains. `linea-server probe` is the container's
+answer, while the database has not answered for 30 s, and once it drains. `linea-server probe` is the container's
 healthcheck against `/readyz`; `pool` and `builder` start once `linea` is
 healthy.
 `docker compose ps` shows the state.

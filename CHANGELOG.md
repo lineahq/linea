@@ -120,6 +120,14 @@ the first item below.
   is gone.
 - The server creates its bucket at start when `store.objects.create_bucket` is
   true (off by default; the Compose stack turns it on).
+- `linea-server` exports metrics about itself over OTLP with the
+  OpenTelemetry SDK when the standard `OTEL_EXPORTER_OTLP_ENDPOINT` (or
+  `OTEL_METRICS_EXPORTER=otlp`) is set: run queue size, claim wait, lease
+  renewals, losses and expiries, connected workers and builders, runtime
+  builds, storage readiness and audit append failures
+  (`docs/debugger/team-server.md` lists them). `GET /readyz` answers 503
+  `storage unavailable` after the database has not answered for a whole run
+  lease, while `/healthz` stays 200.
 - `GET /healthz` and `GET /readyz` answer without a credential: the second
   answers 503 until the storage is open and once the server drains.
   `linea-server probe` checks `/readyz` (`--url` picks another) and is the

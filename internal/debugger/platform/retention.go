@@ -8,7 +8,6 @@ import (
 
 	"github.com/lineahq/linea/internal/debugger/artifact"
 	"github.com/lineahq/linea/internal/debugger/authz"
-	"go.uber.org/zap"
 )
 
 // RetentionPolicy bounds the terminal runs a team server keeps: at most Runs
@@ -147,9 +146,7 @@ func (s *Service) recordEviction(reasons map[string]int, err error) {
 	if err != nil {
 		e.Code = string(resultCode(artifactError(err)))
 	}
-	if _, err := s.auditLog.AppendAudit(context.Background(), e); err != nil && s.logger != nil {
-		s.logger.Warn("audit event not recorded", zap.String("operation", e.Operation), zap.Error(err))
-	}
+	s.recordAudit(e)
 }
 
 // forgetRunsLocked drops deleted runs from memory and remembers their IDs.

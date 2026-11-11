@@ -168,8 +168,17 @@ func (s *Service) record(c Caller, operation string, r *auditRecord, err error) 
 	if c.validate() != nil {
 		return
 	}
-	if _, err := s.auditLog.AppendAudit(context.Background(), e); err != nil && s.logger != nil {
-		s.logger.Warn("audit event not recorded", zap.String("operation", operation), zap.Error(err))
+	s.recordAudit(e)
+}
+
+// recordAudit appends e to the audit log. A failure is logged and counted
+// (linea.audit.append.failures); the operation's outcome stands.
+func (s *Service) recordAudit(e artifact.AuditEvent) {
+	if _, err := s.auditLog.AppendAudit(context.Background(), e); err != nil {
+		s.metrics.auditFailures.Add(context.Background(), 1)
+		if s.logger != nil {
+			s.logger.Warn("audit event not recorded", zap.String("operation", e.Operation), zap.Error(err))
+		}
 	}
 }
 

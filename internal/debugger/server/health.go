@@ -25,10 +25,17 @@ type serveState struct {
 	// api is the API's handler, nil while the server waits for its storage.
 	api      atomic.Pointer[http.Handler]
 	draining atomic.Bool
+	// storage reports whether the store still answers (platform
+	// StorageReady); nil until the API serves.
+	storage atomic.Pointer[func() bool]
 }
 
 // serve sets the API handler: the server takes requests from now on.
 func (s *serveState) serve(h http.Handler) { s.api.Store(&h) }
+
+// watchStorage has /readyz follow ready, the store's answer to the
+// scheduler.
+func (s *serveState) watchStorage(ready func() bool) { s.storage.Store(&ready) }
 
 // startingRetryAfter is the Retry-After of a request refused while the
 // server waits for its storage, in seconds.
@@ -36,8 +43,10 @@ const startingRetryAfter = "5"
 
 // health answers GET /healthz while the process serves and GET /readyz
 // while it also takes new work: /readyz answers 503 until the storage is
-// open and once the server drains, so a load balancer sends requests only
-// to a server that takes them. Every other request goes to the API, or is
+// open, once the server drains, and while its storage has not answered for a
+// whole run lease, so a load balancer sends requests only to a server that
+// can serve them. /healthz stays 200 then: restarting the server does not
+// bring the storage back. Every other request goes to the API, or is
 // answered 503 while the server waits for its storage.
 func health(state *serveState) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -58,14 +67,21 @@ func health(state *serveState) http.Handler {
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		if r.URL.Path == readyPath && (next == nil || state.draining.Load()) {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			if next == nil {
-				_, _ = io.WriteString(w, "starting\n")
-			} else {
-				_, _ = io.WriteString(w, "draining\n")
+		if r.URL.Path == readyPath {
+			var reason string
+			switch storage := state.storage.Load(); {
+			case next == nil:
+				reason = "starting"
+			case state.draining.Load():
+				reason = "draining"
+			case storage != nil && !(*storage)():
+				reason = "storage unavailable"
 			}
-			return
+			if reason != "" {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = io.WriteString(w, reason+"\n")
+				return
+			}
 		}
 		_, _ = io.WriteString(w, "ok\n")
 	})

@@ -427,7 +427,8 @@ credentials are in [Operating a team server](operations.md).
   is missing or refused, it says why on stderr and tries again after 1 s,
   doubling up to every 30 s. Meanwhile `GET /healthz` answers 200,
   `GET /readyz` answers 503 `starting`, and every other request answers 503
-  with `Retry-After: 5`. A migration newer than the binary, a changed
+  with `Retry-After: 5` (see also [readiness](#readiness-and-server-metrics)
+  once it runs). A migration newer than the binary, a changed
   migration, or a configuration or secret file it cannot use refuses startup
   at once.
 - The layout and limits are in [artifact
@@ -543,6 +544,53 @@ instance. One instance at a time does housekeeping and run retention.
 
 [Docker Compose](deploy-compose.md) runs one instance on one machine; the
 [Kubernetes chart](deploy-kubernetes.md) runs `server.replicas` instances.
+
+## Readiness and server metrics
+
+`GET /readyz` answers 503 `storage unavailable` once the database has not
+answered the instance's lease scan for a whole run lease (30 s; the scan
+runs every 10 s), and 200 again at the next answer. `GET /healthz` stays
+200, so an orchestrator takes the instance out of rotation without
+restarting it.
+
+`linea-server` records metrics about itself with the OpenTelemetry SDK and
+exports them over OTLP. They describe the server and its queue, never a
+Collector it debugs, and name no run, runtime, worker or principal. Export
+is off until the standard OpenTelemetry environment variables ask for it:
+
+| Variable | Effect |
+| --- | --- |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | Either one turns export on. |
+| `OTEL_METRICS_EXPORTER` | `otlp` turns export on (to `localhost` without an endpoint); `none` turns it off. Any other exporter refuses startup. |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL` | `http/protobuf` (the default) or `grpc`. `http/json` refuses startup. |
+| `OTEL_SDK_DISABLED` | `true` turns export off. |
+| `OTEL_METRIC_EXPORT_INTERVAL` | Milliseconds between exports, default 60000. |
+| `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` | Override the resource: `service.name` `linea-server`, `service.version` the release and a random `service.instance.id` per process. |
+
+The other `OTEL_EXPORTER_OTLP_*` variables (headers, certificates,
+compression, timeout) work as the OpenTelemetry specification says. A failed
+export is logged as a warning and retried at the next interval; the server
+never logs the headers. The chart passes these variables with
+`server.extraEnv`.
+
+| Metric | Kind | Unit | Attributes | Meaning |
+| --- | --- | --- | --- | --- |
+| `linea.run.queue.size` | UpDownCounter (observed) | `{run}` | | Queued runs this instance knows of; with the shared store, the installation's queue. |
+| `linea.run.claim.wait` | Histogram | `s` | | Time from a run's admission to its first claim, for the runs this instance claimed. |
+| `linea.run.lease.renewals` | Counter | `{renewal}` | `outcome`: `renewed`, `failed` | Lease renewals, one per executor every 10 s. |
+| `linea.run.lease.lost` | Counter | `{run}` | | Runs this instance stopped because their lease ended before it was renewed. |
+| `linea.run.lease.expiries` | Counter | `{run}` | `result`: `requeued`, `lost` | Runs whose lease ended that this instance queued again, or ended as lost after their last attempt. |
+| `linea.worker.connections` | UpDownCounter (observed) | `{worker}` | | Workers connected to this instance. |
+| `linea.worker.slots` | UpDownCounter (observed) | `{run}` | | Runs those workers take at once. |
+| `linea.builder.connections` | UpDownCounter (observed) | `{builder}` | | Builders connected to this instance. |
+| `linea.builder.slots` | UpDownCounter (observed) | `{build}` | | Builds those builders run at once. |
+| `linea.runtime.builds` | UpDownCounter (observed) | `{build}` | `state`: `queued`, `running` | The installation's unfinished runtime builds; left out of a collection when the store cannot be read. |
+| `linea.storage.ready` | Gauge | `1` | | 1 while the store answers, 0 while `/readyz` answers `storage unavailable`. |
+| `linea.audit.append.failures` | Counter | `{event}` | | Audit events this instance could not record; the operations themselves stood. |
+
+The names, units and attributes are a contract: a release changes them only
+with a changelog entry. The builder autoscaler's `--metrics-listen` endpoint
+is separate and unchanged.
 
 ## Limits
 

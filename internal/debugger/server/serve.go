@@ -289,6 +289,7 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
 	}()
+	state.watchStorage(service.StorageReady)
 	state.serve(handler)
 	fmt.Fprintf(stderr, "serving API on %s://%s/api/v1 (contract: /api/v1/openapi.json)\n", scheme, ln.Addr())
 	if enableMCP {
