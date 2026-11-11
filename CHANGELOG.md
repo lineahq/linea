@@ -167,6 +167,14 @@ the first item below.
     `scripts/debugger/compose-fleet.sh` and restart `linea`. If you set
     `raw_principals` to the server's credential ID, change it to the second
     `_`-separated field of the operator token.
+- Fleet binds an agent's OpAMP instance UID to the credential that holds it.
+  While the agent is connected, a connection with another credential and the
+  same UID is refused with an OpAMP error response and recorded as
+  `agent.credential_refused` (and in
+  `linea_fleet_agent_credential_refused_total`). Once the agent is
+  disconnected, another credential may take the UID over, and fleet records
+  `agent.credential_changed`. Collectors that share a UID across credentials
+  (cloned identities) now see one of them refused.
 
 ## [0.2.0]
 
