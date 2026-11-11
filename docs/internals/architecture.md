@@ -33,8 +33,13 @@ The root Go module is declared in `go.mod`.
   `--addr`, `--tls-cert-file`/`--tls-key-file` or `--allow-http`,
   `--drain-timeout`, `--metrics-listen`, `--mcp`, `--fleet-url`,
   `--fleet-token-file`, `--fleet-allow-http` and `--verbose` (adds debug logs;
-  info and above always go to stderr as JSON), and
-  no subcommand. It links no Collector (no `engine/local/install`): every
+  info and above always go to stderr as JSON), and two subcommands that
+  do not serve: `probe [--url]` (a healthcheck for an image without a shell)
+  and `revoke-admin [--config <file>]` (`revoke.go`: loads the same server
+  config, opens the store and calls `platform.RevokeAdminAccess`, which revokes
+  the built-in admin's API tokens, ends its web sessions through
+  `Sessions.DeleteSessionsOf` and appends one `RevokeAdminAccess` audit event
+  with counts; run after rotating the admin password). It links no Collector (no `engine/local/install`): every
   request runs on connected workers. It is always a team server on PostgreSQL
   and object storage, with no Docker; `linea serve` no longer exists.
 - `cmd/linea-worker/` — the worker process for the built-in registry, in two

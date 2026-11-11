@@ -78,6 +78,7 @@ func Run(t *testing.T, fresh func(t *testing.T) Backend) {
 		{"concurrent project writes at one revision serialize", projectRace},
 		{"project retention replaces the installation's for its runs", projectRetention},
 		{"sessions are found by hash and ended", sessions},
+		{"a principal's sessions end together", sessionsOfPrincipal},
 		{"sign-ins in progress are taken once", logins},
 		{"closed repositories refuse", closed},
 	}
@@ -925,6 +926,49 @@ func sessions(t *testing.T, b Backend) {
 	}
 	if _, err := r.SessionByHash(ctx, session(2, now).Hash); !errors.Is(err, artifact.ErrNotFound) {
 		t.Errorf("expired session kept = %v", err)
+	}
+}
+
+// sessionsOfPrincipal: ending a principal's sessions ends every unexpired one
+// of that principal and counts it, leaves other principals' sessions, and
+// changes nothing the second time.
+func sessionsOfPrincipal(t *testing.T, b Backend) {
+	r := open(t, b, artifact.Limits{})
+	now := time.Now().UTC().Truncate(time.Second)
+	session := func(n int, principal string, expires time.Time) artifact.SessionRecord {
+		return artifact.SessionRecord{Hash: fmt.Sprintf("%064x", n), Principal: principal, Name: principal,
+			Created: expires.Add(-time.Hour), Expires: expires}
+	}
+	for _, s := range []artifact.SessionRecord{
+		session(1, "user:linea:admin", now.Add(time.Hour)),
+		session(2, "user:linea:admin", now.Add(2*time.Hour)),
+		session(3, "user:linea:admin", now.Add(-time.Second)),
+		session(4, "user:alice", now.Add(time.Hour)),
+	} {
+		if err := r.SaveSession(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := r.DeleteSessionsOf(ctx, "user:linea:admin"); err != nil || n != 2 {
+		t.Fatalf("ending the admin's sessions = %d, %v, want 2", n, err)
+	}
+	for _, n := range []int{1, 2, 3} {
+		if _, err := r.SessionByHash(ctx, session(n, "", now).Hash); !errors.Is(err, artifact.ErrNotFound) {
+			t.Errorf("session %d after its principal's were ended = %v", n, err)
+		}
+	}
+	if got, err := r.SessionByHash(ctx, session(4, "", now).Hash); err != nil || got.Principal != "user:alice" {
+		t.Errorf("another principal's session = %+v, %v", got, err)
+	}
+	if n, err := r.DeleteSessionsOf(ctx, "user:linea:admin"); err != nil || n != 0 {
+		t.Errorf("ending them again = %d, %v, want 0", n, err)
+	}
+	if n, err := r.DeleteSessionsOf(ctx, "user:nobody"); err != nil || n != 0 {
+		t.Errorf("ending an unknown principal's sessions = %d, %v, want 0", n, err)
+	}
+	r.Close()
+	if _, err := r.DeleteSessionsOf(ctx, "user:alice"); !errors.Is(err, artifact.ErrClosed) {
+		t.Errorf("after close = %v", err)
 	}
 }
 

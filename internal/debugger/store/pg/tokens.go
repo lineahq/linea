@@ -279,3 +279,17 @@ func (s *Store) DeleteSession(ctx context.Context, hash string) error {
 	_, err := s.pool.Exec(ctx, "DELETE FROM sessions WHERE hash = $1 OR expires_at <= $2", hash, time.Now())
 	return storageErr("session", err)
 }
+
+// DeleteSessionsOf ends every session of the principal and drops expired
+// ones; it counts the unexpired sessions of the principal it ended.
+func (s *Store) DeleteSessionsOf(ctx context.Context, principal string) (int, error) {
+	if err := s.ready(ctx); err != nil {
+		return 0, err
+	}
+	at := time.Now()
+	var ended int
+	err := s.pool.QueryRow(ctx, `WITH gone AS (
+    DELETE FROM sessions WHERE principal = $1 OR expires_at <= $2 RETURNING principal, expires_at
+) SELECT count(*) FROM gone WHERE principal = $1 AND expires_at > $2`, principal, at).Scan(&ended)
+	return ended, storageErr("session", err)
+}

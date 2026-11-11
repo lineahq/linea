@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lineahq/linea/internal/debugger/artifact"
 	"github.com/lineahq/linea/internal/debugger/authz"
 )
 
@@ -18,6 +20,11 @@ import (
 // stored: the account compares SHA-256 sums in constant time. Without a
 // password the account is off and its sessions and API tokens are refused,
 // so turning it off needs no cleanup.
+//
+// Rotating the password does not end what the old one started: the admin's
+// web sessions and API tokens, which the server checks against its database on
+// every request, stay valid until they expire. An operator who rotates the
+// password runs RevokeAdminAccess (linea-server revoke-admin) afterwards.
 
 // AdminName is the built-in admin account's user name.
 const AdminName = "admin"
@@ -116,4 +123,44 @@ func (s *Service) enabledPrincipal(id string) error {
 		return errAdminOff
 	}
 	return nil
+}
+
+// AdminAccessStore is the storage RevokeAdminAccess needs.
+type AdminAccessStore interface {
+	artifact.Tokens
+	artifact.Sessions
+	artifact.Audit
+}
+
+// RevokeAdminAccess ends everything the built-in admin account started: it
+// revokes every unrevoked API token of AdminPrincipalID at now, ends every web
+// session of the account, and records one audit event with the two counts,
+// never a token or session. It works whether or not the account is enabled and
+// changes nothing the second time. A failure part way leaves the rest to be
+// ended by running it again.
+func RevokeAdminAccess(ctx context.Context, repo AdminAccessStore, now time.Time) (tokens, sessions int, err error) {
+	records, err := repo.Tokens(ctx, AdminPrincipalID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("list the admin's API tokens: %w", err)
+	}
+	for _, r := range records {
+		if r.Revoked != nil {
+			continue
+		}
+		if _, err := repo.RevokeToken(ctx, r.ID, now); err != nil {
+			return tokens, 0, fmt.Errorf("revoke an admin API token: %w", err)
+		}
+		tokens++
+	}
+	if sessions, err = repo.DeleteSessionsOf(ctx, AdminPrincipalID); err != nil {
+		return tokens, 0, fmt.Errorf("end the admin's web sessions: %w", err)
+	}
+	_, err = repo.AppendAudit(ctx, artifact.AuditEvent{Time: now, Principal: string(PrincipalSystem), PrincipalKind: string(PrincipalSystem),
+		Client: "linea-server", Operation: "RevokeAdminAccess", Scope: "*", Resources: []string{
+			fmt.Sprintf("tokens:%d", tokens), fmt.Sprintf("sessions:%d", sessions)},
+		Outcome: artifact.AuditAllowed})
+	if err != nil {
+		return tokens, sessions, fmt.Errorf("record the revocation in the audit log: %w", err)
+	}
+	return tokens, sessions, nil
 }

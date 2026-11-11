@@ -5,6 +5,7 @@
 // Usage:
 //
 //	linea-server --config <file> [--addr 127.0.0.1:7070] [--tls-cert-file FILE --tls-key-file FILE | --allow-http] [--mcp]
+//	linea-server revoke-admin [--config <file>]
 package main
 
 import (

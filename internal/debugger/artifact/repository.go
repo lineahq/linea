@@ -129,4 +129,7 @@ type Sessions interface {
 	SessionByHash(ctx context.Context, hash string) (SessionRecord, error)
 	// DeleteSession ends a session; an unknown one is not an error.
 	DeleteSession(ctx context.Context, hash string) error
+	// DeleteSessionsOf ends every session of a principal and drops expired
+	// ones. It returns how many unexpired sessions of the principal it ended.
+	DeleteSessionsOf(ctx context.Context, principal string) (int, error)
 }

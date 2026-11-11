@@ -336,3 +336,24 @@ func (s *Store) DeleteSession(ctx context.Context, hash string) error {
 	d.sessions = slices.DeleteFunc(d.sessions, func(o artifact.SessionRecord) bool { return !now.Before(o.Expires) })
 	return nil
 }
+
+// DeleteSessionsOf ends every session of a principal and drops expired ones;
+// it counts the unexpired sessions it ended.
+func (s *Store) DeleteSessionsOf(ctx context.Context, principal string) (int, error) {
+	d := s.d
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err := s.ready(ctx.Err()); err != nil {
+		return 0, err
+	}
+	now := time.Now()
+	ended := 0
+	d.sessions = slices.DeleteFunc(d.sessions, func(r artifact.SessionRecord) bool {
+		live := now.Before(r.Expires)
+		if r.Principal == principal && live {
+			ended++
+		}
+		return r.Principal == principal || !live
+	})
+	return ended, nil
+}

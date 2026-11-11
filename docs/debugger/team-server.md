@@ -636,6 +636,13 @@ and password; `linea login` asks for the password and stores an API token.
 - Remove the setting once a group from your identity provider holds `admin`:
   the server then refuses the password, and the account's sessions and API
   tokens stop working.
+- Changing the password does not end what the old one started: the account's
+  web sessions and API tokens stay valid until they expire. After rotating it,
+  run `linea-server revoke-admin [--config <file>]` with the same
+  configuration as the server. It revokes the account's API tokens, ends its
+  web sessions in the server's database, which every running instance checks on
+  each request, records one audit event with the two counts, and prints them.
+  It works whether or not the account is enabled and is safe to run again.
 
 With `oidc`, people open the web client and sign in at the identity provider.
 Register `redirect_url` at the provider. With both, the sign-in page offers

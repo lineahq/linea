@@ -112,6 +112,9 @@ the first item below.
   scripts) and stores an API token. Failed attempts are limited to 5 a minute
   per client address and 20 a minute in total, per instance. Unsetting the
   password turns the account off, and its sessions and tokens stop working.
+  After rotating the password, run `linea-server revoke-admin`: it revokes
+  the account's API tokens, ends its web sessions and records an audit event,
+  and prints the counts.
   The server needs at least one sign-in method (the admin password, OIDC or
   trusted headers). The trusted-header "local" sign-in the Compose stack used
   is gone.

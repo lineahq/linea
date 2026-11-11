@@ -403,10 +403,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, env envir
 	if len(args) > 0 && args[0] == "probe" {
 		return probe(ctx, args[1:], stderr)
 	}
+	if len(args) > 0 && args[0] == "revoke-admin" {
+		return revokeAdmin(ctx, args[1:], stdout, stderr, env)
+	}
 	fs := flag.NewFlagSet("linea-server", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
-		fmt.Fprintf(stderr, "usage: linea-server %s\n       linea-server probe [--url http://127.0.0.1:7070/readyz]\n", usage)
+		fmt.Fprintf(stderr, "usage: linea-server %s\n       linea-server probe [--url http://127.0.0.1:7070/readyz]\n       linea-server revoke-admin [--config <file>]\n", usage)
 		fs.PrintDefaults()
 		fmt.Fprintln(stderr, "\nThe server config, a file and the LINEA_* environment variables that override it, names the storage (PostgreSQL and object storage), authentication, role bindings and worker registration; see docs/debugger/team-server.md.\nRequests read no host file or host environment variable: they send their files inline or name saved ones, and ${env:NAME} reads only scenario/setup values and URI defaults; any other name gets a stand-in.")
 	}
