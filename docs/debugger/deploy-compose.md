@@ -597,6 +597,10 @@ The server migrates its database at start. The server, the pool and the
 builder must be of one release; `LINEA_VERSION` sets all three. The release
 notes in [`CHANGELOG.md`](../../CHANGELOG.md) say what an upgrade needs.
 
+Back up first, and see [Operating a team
+server](operations.md) for the full upgrade and rollback steps, backup and
+restore, and secret rotation.
+
 ## Stopping and removing it
 
 From the directory with `compose.yaml` (in a checkout, add

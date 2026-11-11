@@ -806,3 +806,5 @@ free host port 443.
 
 The bundled PostgreSQL and SeaweedFS are single pods without replication or
 backups. For production, use your own HA PostgreSQL and a durable bucket.
+Backup, restore, secret rotation, upgrade and rollback are in [Operating a
+team server](operations.md).

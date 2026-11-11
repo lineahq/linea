@@ -404,7 +404,8 @@ A sandbox per child (a user namespace or gVisor) is not available yet.
 
 ## Storage
 
-The `store` block is required.
+The `store` block is required. Backing up, restoring and rotating its
+credentials are in [Operating a team server](operations.md).
 
 | Where | What |
 | --- | --- |
