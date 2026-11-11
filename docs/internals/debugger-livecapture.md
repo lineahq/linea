@@ -144,6 +144,37 @@ the Collector components are documented under `docs/fleet/` and
   `capture_storage_error`. A changed point catalog stops it with
   `capture_catalog_changed`, because the stored sensitivity classification no
   longer applies. Session `data` reports received and rejected counts.
+- Drain rate (user text: [Throughput limit](../debugger/livecapture.md#throughput-limit)),
+  verified in code, not measured:
+  - Fleet's plugin ingress: 2 read and 2 write slots per plugin
+    (`internal/fleet/plugins/registry.go:90`, taken at `api.go:83-93`, 429 when
+    full), 2 s upstream deadline (`api.go:109`, `registry.go:92,95`), 1 MiB
+    response (`api.go:145`). The debugger client allows 5 s and 1 MiB
+    (`internal/debugger/fleetcapture/client.go:28-30`).
+  - One batch per `next`, then one ack, serially per capture, 100 ms wait when
+    empty, a status read every second
+    (`internal/debugger/platform/capture_runner.go:33,44,48,73`;
+    `captures.go:193,195`). `next` and the status read take read slots, the ack
+    takes a write slot. The ack error is ignored and the unacknowledged batch is
+    offered again, so a refused ack is retried. Captures running at once share
+    the slots; the 64 MiB payload reservation allows at most 8
+    (`captures.go:569`, `capture_data.go:19-20`).
+  - Batch of at most 256 KiB OTLP (`internal/fleetplugins/livecapture/delivery.go:226`),
+    about 342 KiB as base64 JSON, so the 1 MiB response cap is not the binding
+    one. The Collector's delivery exporter batches to 256 KiB with one consumer
+    (`collector/livecapture/livecaptureextension/exporter.go:113,120`).
+  - Plugin buffer per capture channel: 16 batches, 1 MiB
+    (`delivery.go:246`); full means `delivery_capacity`, withdrawn with
+    `ResourceExhausted` to the Collector (`delivery.go:246-252`); no ack in 2 s
+    means `receipt_uncertain` (`delivery.go:261-270`). Counters
+    `delivery_capacity_total` and `receipt_uncertain_total`
+    (`metrics.go:126-127`). Collector-side drops reach the debugger as the
+    target's `dropped` stats (`captures.go:99,782`).
+  - Session caps that end a capture first on a fast link: 8 MiB, 10,000
+    records (`capture_data.go:19,21`); a batch over 8,192 records, resources or
+    scopes is refused whole (`capture_data.go:267`).
+  - Ceiling per capture: 256 KiB / (read + store + ack time). No timer sets a
+    fixed rate, so no single number is measured.
 
 ## Storage
 

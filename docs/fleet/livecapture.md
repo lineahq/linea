@@ -432,6 +432,10 @@ base64 OTLP protobuf.
 
 ## Bounds and operating limits
 
+A consumer that reads through the generic ingress drains at most one 256 KiB
+batch per read and acknowledge cycle, with 2 reads and 2 writes at once. See
+the [debugger's throughput limit](../debugger/livecapture.md#throughput-limit).
+
 One active plugin authority per database. There is no active-active, capacity
 or HA claim. Clocks must stay synchronized for absolute expiry. The existing
 Collector enforces requested capture limits and redaction; defaults come from

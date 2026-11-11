@@ -133,7 +133,7 @@ members never join an admitted capture.
 | Points, signals | 1 to 64 points, 1 to 3 signals |
 | Filter conditions | At most `max_conditions` across all contexts of one capture, each at most `max_condition_chars` characters, regular expressions at most `max_regex_chars`. Each Collector reports them as `filter_limits` on `GET /api/v1/collectors/{id}`; one that predates the report gets 16, 256 and 256. |
 | Filter ceiling | 32 conditions per context, 4,096 bytes each, 16 KiB in total |
-| Budgets (zero or omitted use fleet's ceilings; larger values clamp down; negative is refused) | 1 MiB/s, 5,000 records/s, 16 MiB and 10,000 records in total, 64 KiB per record. The Collector may clamp further. |
+| Budgets (zero or omitted use fleet's ceilings; larger values clamp down; negative is refused) | 1 MiB/s, 5,000 records/s, 16 MiB and 10,000 records in total, 64 KiB per record. The Collector may clamp further. The debugger stores at most 8 MiB and 10,000 records per capture and stops it there (`capture_storage_limit`). |
 
 - `filter` and `limits` may be omitted (also in MCP tools).
 - A filter no target fits is refused with `invalid_argument` naming the count or
@@ -252,7 +252,7 @@ linea capture stop --session <id> --server http://127.0.0.1:7070
 
 | Field | Values |
 | --- | --- |
-| `reason` | Fleet's code (`absolute_expiry`, `collector_rejected`, `peer_disconnected`), or the debugger's loss reason: `capture_channel_lost`, `fleet_no_longer_reports_capture`, `no_terminal_state_from_fleet_after_expiry`, `platform_restarted; capture_not_resumed` |
+| `reason` | Fleet's code (`absolute_expiry`, `collector_rejected`, `peer_disconnected`, `delivery_capacity`, `receipt_uncertain`; see [throughput limit](#throughput-limit)), or the debugger's loss reason: `capture_channel_lost`, `fleet_no_longer_reports_capture`, `no_terminal_state_from_fleet_after_expiry`, `platform_restarted; capture_not_resumed` |
 | `stop_reason` | Why the debugger asked fleet to stop: `stop_requested`, `capture_storage_error`, `capture_storage_limit`, `capture_processing_limit`, `capture_catalog_changed` |
 
 The web client turns these codes into sentences and marks a capture with failed
@@ -312,6 +312,51 @@ batches fleet delivers on it; there is no OTLP listener.
 
 See [live capture internals](../internals/debugger-livecapture.md) and
 [artifact storage](../internals/artifact-storage.md#captures) for the details.
+
+### Throughput limit
+
+Live capture is for samples, not for full traffic. The debugger drains the
+plugin through fleet's plugin API, which is built for small control calls:
+2 reads and 2 writes at once per plugin, 2 seconds per call and 1 MiB per
+response. All captures of one team server share those slots.
+
+For each capture the debugger reads one batch, stores it, acknowledges it,
+then reads the next. A batch holds at most 256 KiB of OTLP. The drain rate of
+one capture is therefore 256 KiB divided by the time of one read, store and
+acknowledge cycle:
+
+| Cycle time | Most one capture can drain |
+| --- | --- |
+| 50 ms | 5 MiB/s |
+| 250 ms | 1 MiB/s |
+| 1 s | 256 KiB/s |
+
+The cycle time depends on your network and storage. Across all captures, no
+more than two reads and two writes run at once, so the batches per second of
+the whole server stay under 2 divided by the time of one call. A refused call
+(HTTP 429) is retried and counts against that rate.
+
+A capture also stops at 8 MiB or 10,000 records, whichever comes first, and a
+Collector sends at most 1 MiB/s and 5,000 records/s by default. A single
+capture on a fast link therefore ends at its storage limit before the drain rate
+matters. The drain rate matters on a slow link or with several captures.
+
+Above the limit nothing is spooled to disk:
+
+- The Collector queues copies, then drops them. Drops are counted per target in
+  its `dropped` stats, by reason such as `queue_full`, `rate_bytes` and
+  `rate_records`.
+- The plugin holds at most 16 batches and 1 MiB per capture. When that is full
+  it refuses the delivery and withdraws the capture with the reason
+  `delivery_capacity`.
+- A batch not acknowledged within 2 seconds withdraws the capture with the
+  reason `receipt_uncertain`.
+
+Records already stored stay readable. A capture withdrawn this way is
+incomplete.
+
+For more volume, capture less: a `filter`, a `sampling` rate, lower `limits`,
+fewer points, signals or Collectors, or a shorter `duration_seconds`.
 
 Reading records: pages default to 25 entries, at most 100, within the platform
 byte budget. The first page freezes a receipt watermark; following cursors never
