@@ -267,14 +267,14 @@ server.
 ## The team server and the Compose stack
 
 `go run ./cmd/linea-server [--config <file>] [--addr 127.0.0.1:7070] [--tls-cert-file
-F --tls-key-file F | --allow-http] [--drain-timeout D] [--metrics-listen ADDR]
+F --tls-key-file F | --allow-http] [--drain-timeout D]
 [--mcp] [--fleet-url URL --fleet-token-file F] [--verbose]` serves the HTTP API
 and embedded web client of a team server.
 
 - `--mcp` also mounts `/mcp` on the same listener and platform; clients
   present an API token.
-- `--metrics-listen` serves the build queue's counts for a builder autoscaler
-  at `http://ADDR/metrics` on a listener of its own, without credentials.
+- `OTEL_EXPORTER_OTLP_ENDPOINT` (and the other standard `OTEL_*` variables)
+  exports the server's own metrics over OTLP; without it nothing is exported.
 - This is the only server mode: `linea-server` with neither `--config` nor a `LINEA_*` config variable is refused, and there
   is no in-memory or loopback-only mode and no `linea up`.
 - The server config names the PostgreSQL and object storage, the storage limits

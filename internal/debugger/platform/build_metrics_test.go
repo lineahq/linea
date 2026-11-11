@@ -13,11 +13,11 @@ import (
 )
 
 // waitBuildMetrics waits until the metrics are want.
-func waitBuildMetrics(t *testing.T, s *Service, want BuildMetrics) {
+func waitBuildMetrics(t *testing.T, s *Service, want buildMetrics) {
 	t.Helper()
 	deadline := time.Now().Add(time.Minute)
 	for {
-		got, err := s.BuildMetrics(context.Background())
+		got, err := s.readBuildMetrics(context.Background())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -39,7 +39,7 @@ func TestBuildMetricsCountTheQueueAndBuilders(t *testing.T) {
 	t.Cleanup(func() { buildCountsFor = keep })
 	buildCountsFor = 0
 	s, _, url := builderPlatform(t)
-	waitBuildMetrics(t, s, BuildMetrics{})
+	waitBuildMetrics(t, s, buildMetrics{})
 
 	identity := "sha256:" + strings.Repeat("e", 64)
 	started, release := make(chan struct{}), make(chan struct{})
@@ -50,7 +50,7 @@ func TestBuildMetricsCountTheQueueAndBuilders(t *testing.T) {
 		}
 		return fakeBuild([]byte("binary "+job.Name), identity)(ctx, job, log)
 	})
-	waitBuildMetrics(t, s, BuildMetrics{Builders: 1, BuilderSlots: 1})
+	waitBuildMetrics(t, s, buildMetrics{Builders: 1, BuilderSlots: 1})
 
 	slow, err := s.BuildRuntime(context.Background(), buildAlice, serverBuildRequest("slow", procArchive(t, "")))
 	if err != nil {
@@ -61,14 +61,14 @@ func TestBuildMetricsCountTheQueueAndBuilders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitBuildMetrics(t, s, BuildMetrics{Queued: 1, Running: 1, Builders: 1, BuilderSlots: 1})
+	waitBuildMetrics(t, s, buildMetrics{Queued: 1, Running: 1, Builders: 1, BuilderSlots: 1})
 	close(release)
 	for _, id := range []string{slow.ID, edge.ID} {
 		if b := waitServerBuild(t, s, buildAlice, id); b.State != BuildDone {
 			t.Fatalf("build %s = %+v", id, b)
 		}
 	}
-	waitBuildMetrics(t, s, BuildMetrics{Builders: 1, BuilderSlots: 1})
+	waitBuildMetrics(t, s, buildMetrics{Builders: 1, BuilderSlots: 1})
 }
 
 // TestBuildMetricsReuseRecentCounts: within buildCountsFor the queue's
@@ -78,13 +78,13 @@ func TestBuildMetricsReuseRecentCounts(t *testing.T) {
 	t.Cleanup(func() { buildCountsFor = keep })
 	buildCountsFor = time.Hour
 	s, _, _ := builderPlatform(t)
-	waitBuildMetrics(t, s, BuildMetrics{})
+	waitBuildMetrics(t, s, buildMetrics{})
 	if _, err := s.BuildRuntime(context.Background(), buildAlice, serverBuildRequest("edge", procArchive(t, ""))); err != nil {
 		t.Fatal(err)
 	}
-	waitBuildMetrics(t, s, BuildMetrics{})
+	waitBuildMetrics(t, s, buildMetrics{})
 	buildCountsFor = 0
-	waitBuildMetrics(t, s, BuildMetrics{Queued: 1})
+	waitBuildMetrics(t, s, buildMetrics{Queued: 1})
 }
 
 // TestBuildMetricsWithoutBuildsAreZero: a service that takes no builds
@@ -92,7 +92,7 @@ func TestBuildMetricsReuseRecentCounts(t *testing.T) {
 func TestBuildMetricsWithoutBuildsAreZero(t *testing.T) {
 	s := New(Options{})
 	t.Cleanup(s.Close)
-	if m, err := s.BuildMetrics(context.Background()); err != nil || m != (BuildMetrics{}) {
+	if m, err := s.readBuildMetrics(context.Background()); err != nil || m != (buildMetrics{}) {
 		t.Fatalf("BuildMetrics = %+v, %v", m, err)
 	}
 }
@@ -150,7 +150,7 @@ func TestADrainingBuilderFinishesItsBuildAndClaimsNoMore(t *testing.T) {
 	case <-time.After(time.Minute):
 		t.Fatal("the drained builder did not stop")
 	}
-	waitBuildMetrics(t, s, BuildMetrics{Queued: 1})
+	waitBuildMetrics(t, s, buildMetrics{Queued: 1})
 	if b, err := s.GetRuntimeBuild(context.Background(), buildAlice, edge.ID, 0); err != nil || b.State != BuildQueued {
 		t.Fatalf("the queued build = %+v, %v", b, err)
 	}

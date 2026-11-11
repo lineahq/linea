@@ -120,6 +120,14 @@ the first item below.
   is gone.
 - The server creates its bucket at start when `store.objects.create_bucket` is
   true (off by default; the Compose stack turns it on).
+- **Removed:** builder autoscaling and the build metrics endpoint.
+  `linea-server --metrics-listen` is gone (an unknown flag refuses startup),
+  and so are the chart's `builder.autoscaling` (KEDA `ScaledObject` or HPA),
+  `server.metrics`, the `<release>-metrics` Service and the server's
+  NetworkPolicy. Builders run `builder.replicas` pods. **Upgrading:** remove
+  `builder.autoscaling` and `server.metrics` from your values, and set
+  `builder.replicas` to the builders you want; the build queue's counts are
+  now among the server's OTLP metrics (`linea.runtime.builds`).
 - `linea-server` exports metrics about itself over OTLP with the
   OpenTelemetry SDK when the standard `OTEL_EXPORTER_OTLP_ENDPOINT` (or
   `OTEL_METRICS_EXPORTER=otlp`) is set: run queue size, claim wait, lease

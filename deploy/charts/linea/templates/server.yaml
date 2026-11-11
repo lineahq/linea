@@ -85,9 +85,6 @@ spec:
             - --config=/etc/linea/config/config.yaml
             - --addr=0.0.0.0:7070
             - --drain-timeout={{ .Values.server.drainSeconds }}s
-            {{- if include "linea.serverMetrics" . }}
-            - --metrics-listen=0.0.0.0:{{ .Values.server.metrics.port }}
-            {{- end }}
             {{- if $tls }}
             - --tls-cert-file=/etc/linea/tls/tls.crt
             - --tls-key-file=/etc/linea/tls/tls.key
@@ -124,10 +121,6 @@ spec:
           ports:
             - name: http
               containerPort: 7070
-            {{- if include "linea.serverMetrics" . }}
-            - name: metrics
-              containerPort: {{ .Values.server.metrics.port }}
-            {{- end }}
           # /healthz answers while the process serves; /readyz also answers
           # 503 while the instance drains, so the Service stops sending it
           # requests. Neither needs a credential. The kubelet does not verify
@@ -300,49 +293,3 @@ spec:
     - name: http
       port: {{ .Values.service.port }}
       targetPort: http
-{{- if include "linea.serverMetrics" . }}
----
-# The build metrics: counts only, without credentials, apart
-# from the API Service and never behind the ingress. Every instance reports
-# the same queue, so any one answers.
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ $fullname }}-metrics
-  labels:
-    {{- include "linea.labels" . | nindent 4 }}
-    app.kubernetes.io/component: server
-spec:
-  type: ClusterIP
-  selector:
-    {{- include "linea.serverSelector" . | nindent 4 }}
-  ports:
-    - name: metrics
-      port: {{ .Values.server.metrics.port }}
-      targetPort: metrics
-{{- if .Values.networkPolicy.enabled }}
----
-# Admits the metrics port only from server.metrics.allowFrom. The API port
-# stays open to every client, as without this policy.
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: {{ $fullname }}-server
-  labels:
-    {{- include "linea.labels" . | nindent 4 }}
-spec:
-  podSelector:
-    matchLabels:
-      {{- include "linea.serverSelector" . | nindent 6 }}
-  policyTypes: [Ingress]
-  ingress:
-    - ports:
-        - port: http
-    {{- with .Values.server.metrics.allowFrom }}
-    - from:
-        {{- toYaml . | nindent 8 }}
-      ports:
-        - port: metrics
-    {{- end }}
-{{- end }}
-{{- end }}

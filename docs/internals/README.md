@@ -34,7 +34,7 @@ rather than appending a contradiction.
 | [debugger-workers.md](debugger-workers.md) | Worker protocol, pool workers, builders, local builds, manifests and runtime storage |
 | [debugger-livecapture.md](debugger-livecapture.md) | Live capture in the debugger: fleet connection, discovery, bounds, states, storage and derived inputs |
 | [debugger-provider-sdk.md](debugger-provider-sdk.md) | Provider SDK design, module releases, runtime behavior, discovery and reports |
-| [debugger-kubernetes-chart.md](debugger-kubernetes-chart.md) | Helm chart implementation: pods, certificates, network policies, builder autoscaling, bundled stores |
+| [debugger-kubernetes-chart.md](debugger-kubernetes-chart.md) | Helm chart implementation: pods, certificates, network policies, bundled stores |
 
 ## Collector internals
 

@@ -134,8 +134,6 @@ type teamServe struct {
 	// drain bounds how long running work may finish at shutdown before
 	// it is handed back to the queue for another instance.
 	drain time.Duration
-	// metricsAddr, when set, serves the build metrics there.
-	metricsAddr string
 }
 
 // serveAPI serves the team server until ctx is cancelled. It authenticates
@@ -181,13 +179,6 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 	}
 	defer ln.Close()
 	ln = newLimitListener(ln, tm.connections)
-	var metricsLn net.Listener
-	if tm.metricsAddr != "" {
-		if metricsLn, err = net.Listen("tcp", tm.metricsAddr); err != nil {
-			return fmt.Errorf("--metrics-listen: %w", err)
-		}
-		defer metricsLn.Close()
-	}
 	// The server answers from the moment it listens: /healthz with 200, and
 	// /readyz and every other request with 503 until its storage is open, so
 	// a liveness probe does not restart it while the database or object
@@ -271,14 +262,6 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 	}
 	stopped := make(chan struct{})
 	defer close(stopped)
-	if metricsLn != nil {
-		// Counts only and no credentials, on a listener of its own that no
-		// ingress routes to.
-		metrics := newTeamHTTPServer(api.Metrics(service))
-		go func() { _ = metrics.Serve(metricsLn) }()
-		defer metrics.Close()
-		fmt.Fprintf(stderr, "serving build metrics on http://%s/metrics\n", metricsLn.Addr())
-	}
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -402,7 +385,7 @@ const (
 )
 
 // usage is how the server is started.
-const usage = "[--config <file>] [--addr 127.0.0.1:7070] [--tls-cert-file FILE --tls-key-file FILE | --allow-http] [--drain-timeout D] [--metrics-listen ADDR] [--mcp] [--fleet-url URL --fleet-token-file FILE [--fleet-allow-http]] [--verbose]"
+const usage = "[--config <file>] [--addr 127.0.0.1:7070] [--tls-cert-file FILE --tls-key-file FILE | --allow-http] [--drain-timeout D] [--mcp] [--fleet-url URL --fleet-token-file FILE [--fleet-allow-http]] [--verbose]"
 
 // noConfig refuses a start with no server config at all: neither a file nor
 // a LINEA_* variable that sets a key.
@@ -437,7 +420,6 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, env envir
 	fs.StringVar(&tm.keyFile, "tls-key-file", "", "the PEM private key of --tls-cert-file")
 	fs.BoolVar(&tm.allowHTTP, "allow-http", false, "serve plain HTTP off loopback, behind a TLS-terminating proxy on a protected network")
 	fs.DurationVar(&tm.drain, "drain-timeout", 25*time.Second, "how long running work may finish when the server stops before it is handed to another instance")
-	fs.StringVar(&tm.metricsAddr, "metrics-listen", "", "serve the build queue's metrics for an autoscaler at http://ADDR/metrics, on a listener of its own without credentials (counts only)")
 	enableMCP := fs.Bool("mcp", false, "serve the MCP endpoint at /mcp; clients present an API token")
 	verbose := fs.Bool("verbose", false, "also write debug logs; info and above are always written to stderr as JSON")
 	var fleet fleetServeOptions

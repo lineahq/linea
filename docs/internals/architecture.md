@@ -31,7 +31,7 @@ The root Go module is declared in `go.mod`.
   `internal/debugger/server/envconfig.go` set the same keys and override the
   file) and the flags
   `--addr`, `--tls-cert-file`/`--tls-key-file` or `--allow-http`,
-  `--drain-timeout`, `--metrics-listen`, `--mcp`, `--fleet-url`,
+  `--drain-timeout`, `--mcp`, `--fleet-url`,
   `--fleet-token-file`, `--fleet-allow-http` and `--verbose` (adds debug logs;
   info and above always go to stderr as JSON), and two subcommands that
   do not serve: `probe [--url]` (a healthcheck for an image without a shell)
@@ -330,12 +330,11 @@ The root Go module is declared in `go.mod`.
   builder that sends `drain` (`linea-builder` on its first SIGTERM) gets no new
   claim; once its builds ended the instance answers `drain` and closes the link,
   and the builder exits rather than dial again. A second SIGTERM cancels its
-  builds, which return to the queue when their leases end. `BuildMetrics`
-  (`build_metrics.go`) counts the queued and running builds
-  (`Builds.CountBuilds`, reused for 10 s) and the builders connected to this
-  instance with their slots; it takes no caller and names nothing, and
-  `api.Metrics` serves it as Prometheus text on `linea-server --metrics-listen`, never
-  on the API listener. The server's own metrics (`server_metrics.go`) are
+  builds, which return to the queue when their leases end.
+  `readBuildMetrics` (`build_metrics.go`) counts the queued and running
+  builds (`Builds.CountBuilds`, reused for 10 s) and the builders connected
+  to this instance with their slots, for the server's metrics. The server
+  serves no metrics endpoint. The server's own metrics (`server_metrics.go`) are
   recorded with the OpenTelemetry metric API on `Options.MeterProvider`
   (none without one): claim wait in `takeLocked`, lease renewals, losses and
   expiries in the scheduler, audit append failures in `recordAudit`, and the

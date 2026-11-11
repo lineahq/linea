@@ -221,29 +221,6 @@ app.kubernetes.io/component: livecapture
 {{- if or .Values.builder.enabled .Values.builder.token .Values.builder.existingSecret }}true{{ end -}}
 {{- end -}}
 
-{{/* An autoscaler sets the builder's replicas (builder.autoscaling.kind keda or hpa). */}}
-{{- define "linea.builderAutoscaled" -}}
-{{- $kind := .Values.builder.autoscaling.kind -}}
-{{- if not (has $kind (list "none" "keda" "hpa")) -}}
-{{- fail (printf "builder.autoscaling.kind is %q: use none, keda or hpa" $kind) -}}
-{{- end -}}
-{{- if and .Values.builder.enabled (ne $kind "none") }}true{{ end -}}
-{{- end -}}
-
-{{/* The server serves the build metrics (server.metrics.enabled, or builder autoscaling). */}}
-{{- define "linea.serverMetrics" -}}
-{{- if or .Values.server.metrics.enabled (include "linea.builderAutoscaled" .) }}true{{ end -}}
-{{- end -}}
-
-{{/* The most builder pods that run at once. */}}
-{{- define "linea.builderMaxReplicas" -}}
-{{- if include "linea.builderAutoscaled" . -}}
-{{- .Values.builder.autoscaling.maxReplicas -}}
-{{- else -}}
-{{- .Values.builder.replicas -}}
-{{- end -}}
-{{- end -}}
-
 {{/* The claim mounted at the builder's /work, or empty for an emptyDir. */}}
 {{- define "linea.builderCacheClaim" -}}
 {{- $pvc := .Values.builder.cache.persistentVolumeClaim -}}
@@ -259,25 +236,10 @@ app.kubernetes.io/component: livecapture
 {{- if and (include "linea.builderCacheClaim" .) (eq .Values.builder.cache.persistentVolumeClaim.accessMode "ReadWriteOnce") }}true{{ end -}}
 {{- end -}}
 
-{{/* Fails on builder scaling values the cluster or the cache cannot serve. */}}
+{{/* Fails on builder scaling values the cache cannot serve. */}}
 {{- define "linea.checkBuilderScaling" -}}
-{{- $a := .Values.builder.autoscaling -}}
-{{- if include "linea.builderAutoscaled" . -}}
-{{- if lt (int $a.maxReplicas) (max 1 (int $a.minReplicas)) -}}
-{{- fail "builder.autoscaling.maxReplicas must be at least minReplicas and at least 1" -}}
-{{- end -}}
-{{- if lt (int .Values.builder.capacity) 1 -}}
-{{- fail "builder.capacity must be at least 1 with builder.autoscaling" -}}
-{{- end -}}
-{{- if and (eq $a.kind "keda") (not (.Capabilities.APIVersions.Has "keda.sh/v1alpha1")) -}}
-{{- fail "builder.autoscaling.kind is keda, but the cluster has no keda.sh/v1alpha1 API: install KEDA first, or use hpa or none" -}}
-{{- end -}}
-{{- if and (eq $a.kind "hpa") (not (.Capabilities.APIVersions.Has "autoscaling/v2")) -}}
-{{- fail "builder.autoscaling.kind is hpa, but the cluster has no autoscaling/v2 API" -}}
-{{- end -}}
-{{- end -}}
-{{- if and (include "linea.builderCacheExclusive" .) (gt (int (include "linea.builderMaxReplicas" .)) 1) -}}
-{{- fail "builder.cache.persistentVolumeClaim.accessMode is ReadWriteOnce, which one builder pod can mount: set builder.replicas (or builder.autoscaling.maxReplicas) to 1, or use ReadWriteMany" -}}
+{{- if and (include "linea.builderCacheExclusive" .) (gt (int .Values.builder.replicas) 1) -}}
+{{- fail "builder.cache.persistentVolumeClaim.accessMode is ReadWriteOnce, which one builder pod can mount: set builder.replicas to 1, or use ReadWriteMany" -}}
 {{- end -}}
 {{- end -}}
 

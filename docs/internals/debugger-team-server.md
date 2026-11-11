@@ -155,8 +155,9 @@ protocols in [debugger-workers.md](debugger-workers.md).
 - `linea-server` always writes info and above to stderr as JSON lines;
   `--verbose` adds debug logs. Credentials, configuration, environment and
   telemetry are never logged.
-- `--metrics-listen ADDR` serves the build queue's counts at `GET /metrics` on
-  a listener of its own, without credentials, for a builder autoscaler.
+- With an OTLP endpoint in the standard `OTEL_*` variables, `linea-server`
+  exports its own metrics (`server/telemetry.go`); it serves no metrics
+  endpoint.
 - The connected CLI retries a report wait (`run`, `test`, suites,
   `runs report --wait`, compare waits) that gets a lost connection or a 502,
   503 or 504 without an operation error code, such as a load balancer's page,

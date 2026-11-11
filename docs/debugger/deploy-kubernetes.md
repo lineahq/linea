@@ -242,7 +242,7 @@ linea runtime default mine --server https://debugger.example.com
 | Bundled PostgreSQL (`postgresql.enabled`) | StatefulSet of one pod (PVC from `postgresql.persistence`), a Service on 5432, and a Secret with the generated password (key `password`, kept across upgrades). |
 | Bundled SeaweedFS (`seaweedfs.enabled`) | StatefulSet of one pod (PVC from `seaweedfs.persistence`) serving the S3 gateway on 8333, a Service, and a Secret with the generated keys (`access-key`, `secret-key`, kept across upgrades). The server creates `seaweedfs.bucket` at startup. |
 | Fleet and live capture (`fleet.deploy.enabled`) | A Deployment and Service each for fleet and the plugin, a database Job with the bundled PostgreSQL, their Secrets and a ConfigMap (see [Fleet and live capture](#fleet-and-live-capture)). |
-| NetworkPolicies | For the pool, the builder, the dedicated worker, each bundled store, and, with the build metrics, the server's metrics port (see [Egress](#egress)). |
+| NetworkPolicies | For the pool, the builder, the dedicated worker and each bundled store (see [Egress](#egress)). |
 
 Secrets, each from a value or your own Secret:
 
@@ -285,7 +285,6 @@ Server shutdown and builder sizing:
 | Builder resources | Limits 5 GiB and 4 CPUs (the build budget), requests 256 MiB and 100m (what an idle builder uses). A build bursts to the limits; on a node without that memory free it can be killed and is retried once. Raise `builder.resources.requests` to the limits to reserve the budget. |
 | Builder stop | Finishes the builds it runs first: grace period `builder.terminationGracePeriodSeconds` (default 2100: the 30-minute build deadline plus a margin). |
 | `builder.replicas: 0` | Builds off: the Deployment scales to zero, the server still takes builders, queued builds wait. |
-| `builder.autoscaling` | An autoscaler sets the replicas (see [Scaling builders](#scaling-builders)). |
 
 Every pod has a read-only root filesystem, no capabilities and no service
 account token.
@@ -385,7 +384,7 @@ they may reach:
 | --- | --- |
 | Pool and dedicated workers | The server (port `http`), DNS, and the rules in `networkPolicy.objectStorage`. A run's Collector exports nowhere outside the pod, and the pool has no route to the module proxy. |
 | Builders | The same, and `networkPolicy.builderEgress`: the module proxy and the git hosts a manifest names. The default is every public address: `0.0.0.0/0` except the private, shared (`100.64.0.0/10`), loopback and link-local ranges, which hold the cluster, the private network and the cloud metadata endpoint. |
-| Server | No egress policy. With the build metrics on (`server.metrics`), an ingress policy admits the metrics port only from `server.metrics.allowFrom` and leaves port `http` open to every client. |
+| Server | No policy. Its own metrics leave over OTLP when configured ([server metrics](team-server.md#readiness-and-server-metrics), set with `server.extraEnv`). |
 | Bundled stores | Ingress only: the server reaches PostgreSQL; chart pods reach SeaweedFS ([Stores](#stores)). |
 
 `networkPolicy.objectStorage` is a list of egress rules (`to` and `ports`)
@@ -451,62 +450,13 @@ builder:
 | Result | A build records the image by digest. A failed push is the build's export error; the build stays done. |
 | Cleanup | Linea never deletes an exported image. Each export moves the runtime's tag and the previous image stays untagged; the registry's retention of untagged images (ECR lifecycle policy, Harbor retention and garbage collection, GHCR or GitLab cleanup) removes it. |
 
-## Scaling builders
+## Builders
 
-A builder is idle between builds. Where the cluster runs an autoscaler, the
-chart can scale builders with the build queue instead of running
-`builder.replicas` around the clock. It is off by default
-(`builder.autoscaling.kind: none`), and the chart installs no autoscaler.
-
-Both kinds target one builder per `builder.capacity` unfinished builds, up to
-`builder.autoscaling.maxReplicas` (default 2). Running builds count, so the
-target never drops below what builds in progress need. A builder that is
-scaled in finishes its builds within the grace period and builds nothing new;
-a build queued meanwhile goes to another builder.
-
-Either kind turns on the server's build metrics (`server.metrics`, also
-available alone with `enabled: true`): `linea-server --metrics-listen` on port
-`server.metrics.port` (9090), behind a Service named after the server's with
-`-metrics` appended, never behind the ingress. `GET /metrics` serves counts
-only, in Prometheus text format, without credentials:
-
-| Metric | Meaning |
-| --- | --- |
-| `linea_runtime_builds{state="queued"}`, `{state="running"}` | Builds of the installation, the same on every instance (read every 10 s) |
-| `linea_runtime_builds_unfinished` | Queued plus running: the builder slots the builds need |
-| `linea_builders_connected`, `linea_builder_slots` | The builders connected to the instance that answered, and their capacity |
-
-With `networkPolicy.enabled`, only `server.metrics.allowFrom` reaches the
-port. The default admits the namespace `keda`; add your Prometheus's
-namespace to scrape it.
-
-| | KEDA (`kind: keda`) | HPA (`kind: hpa`) |
-| --- | --- | --- |
-| Renders | A `ScaledObject` with the `metrics-api` trigger | An `autoscaling/v2` HorizontalPodAutoscaler |
-| Reads | `linea_runtime_builds_unfinished` from the metrics Service directly; no Prometheus needed | The external metric `builder.autoscaling.hpa.metricName` (`linea_runtime_builds_unfinished`), which your external metrics adapter must serve |
-| Scale to zero | `minReplicas` 0 (default): no builder while nothing is built, so the first build after an idle period waits for a pod. `cooldownPeriod` (600 s) keeps the last builder for a follow-up. | No: at least one builder runs |
-| Install fails unless | The cluster serves `keda.sh/v1alpha1` (with `helm template`, pass `--api-versions keda.sh/v1alpha1`) | |
-| Also | | `hpa.selector` when the adapter needs labels to pick the series |
-
-```yaml
-builder:
-  autoscaling:
-    kind: keda
-    maxReplicas: 3
-```
-
-With prometheus-adapter for HPA, scrape the metrics Service and expose the
-series as an external metric:
-
-```yaml
-externalRules:
-  - seriesQuery: 'linea_runtime_builds_unfinished'
-    metricsQuery: 'max(<<.Series>>)'
-    resources: {overrides: {namespace: {resource: namespace}}}
-```
-
-Every instance reports the same queue, so `max` across instances is the
-count; a sum would double it.
+A builder is idle between builds. `builder.replicas` builders run all the
+time; set it to the builds you want at once divided by `builder.capacity`.
+The chart installs no autoscaler. The server's own metrics include the build
+queue (`linea.runtime.builds`, by state) and the connected builders, for
+dashboards ([server metrics](team-server.md#readiness-and-server-metrics)).
 
 ### A persistent cache
 
@@ -516,15 +466,14 @@ claim at `/work` with `builder.cache.persistentVolumeClaim`: `existingClaim`,
 or `create: true` with `size`, `storageClassName` and `accessMode`.
 
 - The chart keeps a claim it created when the release is uninstalled.
-- `ReadWriteOnce` allows one builder (`replicas` or `maxReplicas` at most 1,
-  else the install fails) and replaces the builder on an upgrade instead of
-  rolling it.
+- `ReadWriteOnce` allows one builder (`replicas` at most 1, else the install
+  fails) and replaces the builder on an upgrade instead of rolling it.
 - With more builders use `ReadWriteMany`, or keep the emptyDir and point
   `builder.modules.proxy` at a module proxy.
 
 ```yaml
 builder:
-  autoscaling: {kind: keda, maxReplicas: 1}
+  replicas: 1
   cache:
     persistentVolumeClaim: {create: true, size: 20Gi}
 ```

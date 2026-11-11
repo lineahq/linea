@@ -93,15 +93,6 @@ roots, and a public identity provider would then fail verification.
   S3 port, and itself (the pod reaches its own master and filer through the
   Service).
 
-## Builder autoscaling
-
-- The target is one builder per `builder.capacity` unfinished builds; running
-  builds count, so it never drops below what builds in progress need.
-- Each instance reports the same queue, so the HPA metric rule uses `max`
-  across instances; a sum would double it.
-- The metrics Service is the server's name plus `-metrics`. It is never behind
-  the ingress.
-
 ## Bundled stores
 
 `templates/stores.yaml` renders both stores; helpers are in

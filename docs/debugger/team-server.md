@@ -540,7 +540,6 @@ instance. One instance at a time does housekeeping and run retention.
 | Leader lost | Another instance takes over housekeeping within 5 minutes. |
 | MCP | Stateless: every `POST /mcp` stands alone. `GET` and `DELETE` answer 405. |
 | CLI waits | The connected CLI retries a report wait that gets a lost connection, or a 502, 503 or 504 without an operation error code, for up to 30 s of such failures, so it reaches another instance. |
-| Builder autoscaling | `--metrics-listen ADDR` serves the build queue's counts at `GET /metrics` on its own listener, without credentials ([scaling builders](deploy-kubernetes.md#scaling-builders)). |
 
 [Docker Compose](deploy-compose.md) runs one instance on one machine; the
 [Kubernetes chart](deploy-kubernetes.md) runs `server.replicas` instances.
@@ -589,8 +588,7 @@ never logs the headers. The chart passes these variables with
 | `linea.audit.append.failures` | Counter | `{event}` | | Audit events this instance could not record; the operations themselves stood. |
 
 The names, units and attributes are a contract: a release changes them only
-with a changelog entry. The builder autoscaler's `--metrics-listen` endpoint
-is separate and unchanged.
+with a changelog entry. The server serves no metrics endpoint of its own.
 
 ## Limits
 

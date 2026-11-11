@@ -299,8 +299,8 @@ A builder (`linea-builder`) compiles queued builds and registers each runtime,
 which the server's pool runs. On SIGTERM or Ctrl-C it lets its builds finish, up
 to their 30-minute deadline, and claims nothing new; builds still queued wait
 for another builder. A second signal cancels the builds, and each is retried
-once by the next builder. The server serves the build queue's counts for
-autoscaling ([scaling builders](deploy-kubernetes.md#scaling-builders)).
+once by the next builder. The server's metrics report the build queue and
+the connected builders ([server metrics](team-server.md#readiness-and-server-metrics)).
 A builder runs on Linux as root with only `CAP_SETUID` and `CAP_SETGID`, as
 its image, the Compose stack and the chart run it. It runs no code of a build
 except the worker it built, which it starts once for its hello check as

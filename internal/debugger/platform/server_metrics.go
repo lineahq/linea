@@ -121,7 +121,7 @@ func (s *Service) newServerMetrics(provider metric.MeterProvider) {
 // observation is what the observed instruments report at one collection.
 type observation struct {
 	queued, workers, workerSlots int
-	build                        BuildMetrics
+	build                        buildMetrics
 	// buildsRead is false when the build queue could not be read: its
 	// counts are left out rather than reported as zero.
 	buildsRead bool
@@ -130,11 +130,11 @@ type observation struct {
 func (s *Service) observe(ctx context.Context) observation {
 	var v observation
 	var err error
-	v.build, err = s.BuildMetrics(ctx)
+	v.build, err = s.readBuildMetrics(ctx)
 	v.buildsRead = err == nil
 	if err != nil {
 		s.builders.mu.Lock()
-		v.build = BuildMetrics{Builders: s.builders.links, BuilderSlots: s.builders.slots}
+		v.build = buildMetrics{Builders: s.builders.links, BuilderSlots: s.builders.slots}
 		s.builders.mu.Unlock()
 	}
 	s.mu.Lock()

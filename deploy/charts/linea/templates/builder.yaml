@@ -1,6 +1,6 @@
 {{- if .Values.builder.enabled }}
 {{- $fullname := include "linea.fullname" . -}}
-{{- if and .Values.networkPolicy.enabled (or (include "linea.builderAutoscaled" .) (gt (int .Values.builder.replicas) 0)) }}{{ include "linea.checkObjectStorage" . }}{{ end -}}
+{{- if and .Values.networkPolicy.enabled (gt (int .Values.builder.replicas) 0) }}{{ include "linea.checkObjectStorage" . }}{{ end -}}
 {{- include "linea.checkBuilderScaling" . -}}
 {{- $claim := include "linea.builderCacheClaim" . -}}
 {{- $modules := .Values.builder.modules -}}
@@ -11,9 +11,8 @@
 # cache, build cache and build directories, allows execution; the root
 # filesystem stays read-only. It holds no database or bucket credentials:
 # inputs and binaries move through presigned URLs. With builder.replicas 0
-# builds are off and queued builds wait. With builder.autoscaling an
-# autoscaler sets the replicas (builder-autoscaling.yaml). On SIGTERM a
-# builder finishes its builds before it exits, within the grace period.
+# builds are off and queued builds wait. On SIGTERM a builder finishes its
+# builds before it exits, within the grace period.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -30,9 +29,7 @@ metadata:
     {{- include "linea.labels" . | nindent 4 }}
     app.kubernetes.io/component: builder
 spec:
-  {{- if not (include "linea.builderAutoscaled" .) }}
   replicas: {{ .Values.builder.replicas }}
-  {{- end }}
   strategy:
     {{- if include "linea.builderCacheExclusive" . }}
     # One pod at a time can mount the ReadWriteOnce cache.
