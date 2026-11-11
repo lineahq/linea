@@ -2554,6 +2554,7 @@ export interface components {
             id: string;
             kind: string;
             mode: string;
+            not_shown?: components["schemas"]["Gap"][];
             note?: string;
             pipelines?: string[];
             provider?: string;
@@ -3108,6 +3109,10 @@ export interface components {
             connected: number;
             total: number;
             value: string;
+        };
+        Gap: {
+            code: string;
+            detail: string;
         };
         Graph: {
             components?: components["schemas"]["Component"][];

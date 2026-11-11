@@ -120,7 +120,7 @@ runtime startup/execution errors after admission remain retained run errors.
 4. Assertion evaluation, when the scenario declares assertions.
 5. With `compare`, the reference run and the comparison.
 
-It returns `engine.Report` (`report_schema` 0.14, `engine.ReportSchemaVersion`).
+It returns `engine.Report` (`report_schema` 0.16, `engine.ReportSchemaVersion`).
 `engine.Test` runs several scenarios for the `test` command. `engine.Encode` is
 the only serializer, so CLI JSON output and API responses are byte-identical
 (`TestAPIMatchesCLIOutput`). The report is deterministic for deterministic

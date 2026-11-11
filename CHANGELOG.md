@@ -195,6 +195,15 @@ the first item below.
   `agent.credential_changed`. Collectors that share a UID across credentials
   (cloned identities) now see one of them refused.
 
+- Report schema 0.16: each topology component lists what a run does not show
+  of the real component (`not_shown`, a code and a sentence each): export
+  outcomes of captured exporters (every export succeeds, so errors, retries,
+  queues, backpressure and failover are not exercised), `memory_limiter`
+  measuring the debugger's process instead of your Collector, receiver
+  intake, and the processing or routing of stand-ins. `linea run` and
+  `linea inspect` print it; the web client shows it in the component's mode
+  tooltip and How it runs view. Reports of schema 0.8 to 0.15 stay readable.
+
 ## [0.2.0]
 
 **Upgrading from 0.1:** a Docker Compose stack needs `LINEA_AUTH=local` in

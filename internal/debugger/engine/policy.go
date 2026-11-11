@@ -67,6 +67,7 @@ func graph(c Collector, resolved *config.Resolved, factories otelcol.Factories) 
 	}
 	g.MarkStandInValues(byRef)
 	g.MarkProviders(c.DrivingProviders(resolved.Config))
+	markNotShown(&g)
 	return g
 }
 

@@ -21,7 +21,7 @@ import { HowItRunsView } from './HowItRunsView';
 import { nothingReached } from './findings';
 import { journeyPath } from './followPath';
 import { fateOf, fateText } from './recordList';
-import { statementCount } from './componentConfig';
+import { modeTitle, statementCount } from './componentConfig';
 
 /** Props of the bottom pane for the component selected in the graph. */
 export interface ComponentPaneProps {
@@ -81,7 +81,7 @@ export function ComponentPane({ node, runId, view, inspection, search, setSearch
         <span className="od-node__kind"><Icon name={KIND_ICONS[c.kind] ?? 'node-processor'} size={14} />{c.kind}</span>
         <span className="od-ident__name">{c.id}</span>
         {node.pipeline && <span className="od-muted" style={{ fontSize: 12 }}>in {node.pipeline}</span>}
-        <span className={`od-mode od-mode--${mode.cls}`} title={c.note}><Icon name={mode.icon} size={12} />{mode.label}</span>
+        <span className={`od-mode od-mode--${mode.cls}`} title={modeTitle(c)}><Icon name={mode.icon} size={12} />{mode.label}</span>
         <span style={{ flex: 1 }} />
         {!runId && onOpenYaml && (
           <button type="button" className="od-btn od-btn--ghost od-btn--sm" onClick={onOpenYaml}><Icon name="file-code" size={14} /><span>Open in YAML</span></button>

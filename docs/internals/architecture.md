@@ -102,8 +102,11 @@ The root Go module is declared in `go.mod`.
   `simulated_endpoints[].provider` and topology components' `provider`
   (`runtime.DrivingProviders`); 0.14 added kind `image` (a runtime image a
   direct command read from a registry and ran natively: its `name` is the
-  reference by digest and its `image_id` that digest); `ReadableReportSchema`
-  reads 0.8 to 0.14). Bundle schema 5 records source labels and
+  reference by digest and its `image_id` that digest); 0.16 added topology
+  components' `not_shown` (`engine.markNotShown`: codes `export_outcome`,
+  `host_memory`, `receiver_intake`, `stand_in_processing`,
+  `stand_in_routing`, each with a sentence); `ReadableReportSchema` reads 0.8
+  to 0.16). Bundle schema 5 records source labels and
   `Request.Sources` (saved revision IDs, never resolved by the engine;
   `BundleInfo.Sources`). Bundle schema 6 records the target runtime
   (`Request.Runtime`); built-in bundles stay schema 5, `DecodeBundle` refuses a

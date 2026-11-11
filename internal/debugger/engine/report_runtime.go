@@ -113,7 +113,7 @@ func MissingFeatures() []string {
 // remote runtime, a 0.11 report a 0.12 report without components' own logs
 // and metrics, a 0.12 report a 0.13 report without providers, and
 // a 0.14 report a 0.15 report without batching, grouping and filtering.
-var readableReportSchemas = []string{"0.8", "0.9", "0.10", "0.11", "0.12", "0.13", "0.14", ReportSchemaVersion}
+var readableReportSchemas = []string{"0.8", "0.9", "0.10", "0.11", "0.12", "0.13", "0.14", "0.15", ReportSchemaVersion}
 
 // ReadableReportSchema reports whether a stored report of schema v decodes
 // into this build's Report.

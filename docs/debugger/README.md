@@ -259,7 +259,15 @@ values. The report also contains:
   `samples/filter-order`), a suggested processor order runs on the same input and the output is
   compared with the run's, with the work it saved measured before and after;
 - mocked dependencies and stand-ins: components outside the distribution, and
-  references with no value supplied.
+  references with no value supplied;
+- what the run does not show, per component: every captured exporter's
+  export succeeds, so export errors, retries, sending queues, backpressure and
+  failover are not exercised; `memory_limiter` measures the memory of the
+  process running the debugger, not your Collector's; receivers get fixtures
+  instead of network intake; and stand-in processors and connectors do not do
+  the real component's processing or routing. `linea run` and `linea inspect`
+  print it under "not shown", and the web client in each component's mode and
+  How it runs view.
 
 A scenario declares inputs, environment values, mocks and assertions separately
 from the Collector configuration:

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Graph, TopologyComponent } from '../api/types';
-import { asWritten, howItRuns, statementCount } from './componentConfig';
+import { asWritten, howItRuns, modeTitle, statementCount } from './componentConfig';
 
 const yaml = `receivers:
   otlp:
@@ -53,6 +53,19 @@ describe('how a component will run', () => {
     expect(h.pipelines).toEqual([{ id: 'logs/ingest', position: 'position 1 of 2 processors' }]);
     expect(h.facts).toEqual([['Stand-in values', '${env:TOKEN}']]);
     expect(h.available.ok).toBe(true);
+    expect(h.notShown).toEqual([]);
+  });
+  it('lists what a run does not show, in the view and the mode tooltip', () => {
+    const exporter = c({
+      kind: 'exporter',
+      id: 'otlp/pager',
+      mode: 'captured',
+      note: 'recorded locally',
+      not_shown: [{ code: 'export_outcome', detail: 'Every export succeeds in a run.' }],
+    });
+    expect(howItRuns(exporter).notShown).toEqual(['Every export succeeds in a run.']);
+    expect(modeTitle(exporter)).toBe('recorded locally\nNot shown: Every export succeeds in a run.');
+    expect(modeTitle(c({}))).toBeUndefined();
   });
 });
 

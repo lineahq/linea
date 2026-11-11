@@ -32,7 +32,7 @@ import (
 )
 
 // ReportSchemaVersion versions the Report JSON shape.
-const ReportSchemaVersion = "0.15"
+const ReportSchemaVersion = "0.16"
 
 // Request selects a configuration and its inputs. The configuration is a
 // path (Config) or text (ConfigYAML); the inputs are exactly one of a fixture

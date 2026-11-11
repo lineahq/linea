@@ -61,6 +61,18 @@ type Component struct {
 	// Provider names the module provider that drives the component in a
 	// run: its scenario settings are mocks.providers.<Provider>.
 	Provider string `json:"provider,omitempty"`
+	// NotShown lists what the real component does in a deployment that a
+	// run does not show (report schema 0.16).
+	NotShown []Gap `json:"not_shown,omitempty"`
+}
+
+// Gap is one behavior of the real component that a run does not show.
+type Gap struct {
+	// Code names the behavior: export_outcome, host_memory,
+	// receiver_intake, stand_in_processing or stand_in_routing.
+	Code string `json:"code"`
+	// Detail says what is not shown and why, in a sentence.
+	Detail string `json:"detail"`
 }
 
 // Shared reports whether several pipelines use the component.

@@ -2781,6 +2781,12 @@
           "mode": {
             "type": "string"
           },
+          "not_shown": {
+            "items": {
+              "$ref": "#/components/schemas/Gap"
+            },
+            "type": "array"
+          },
           "note": {
             "type": "string"
           },
@@ -4760,6 +4766,21 @@
           "connected",
           "total",
           "value"
+        ],
+        "type": "object"
+      },
+      "Gap": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "detail"
         ],
         "type": "object"
       },

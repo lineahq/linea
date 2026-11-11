@@ -107,7 +107,7 @@ $ ./linea-mine version
 linea 1.2.0
   collector: 0.162.0
   built with: go1.27.3
-  report schema: 0.14
+  report schema: 0.16
   inspection schema: 0.2
   event schema: 0.6
   build: custom, made with linea build

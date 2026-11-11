@@ -109,6 +109,12 @@ func writeInspection(w io.Writer, ins *platform.Inspection) error {
 			rows = append(rows, []string{c.Ref, string(c.Mode), strings.Join(notes, "; ")})
 		}
 		t.table(1, []string{"component", "mode", "note"}, rows)
+		if lines := notShownLines(g); len(lines) > 0 {
+			t.heading("not shown by a run")
+			for _, l := range lines {
+				t.line(1, "%s", l)
+			}
+		}
 		if len(g.Unused) > 0 {
 			t.heading("unused (not built by the Collector)")
 			for _, u := range g.Unused {

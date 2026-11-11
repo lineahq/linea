@@ -40,6 +40,14 @@ export function HowItRunsView({ node, graph }: { node: LayoutNode; graph?: Graph
             ))}
           </dl>
         )}
+        {h.notShown.length > 0 && (
+          <>
+            <div className="od-section-label" style={{ marginTop: 6 }}>Not shown by a run</div>
+            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, lineHeight: '18px' }}>
+              {h.notShown.map((d) => <li key={d}>{d}</li>)}
+            </ul>
+          </>
+        )}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div className="od-section-label">Pipelines</div>
