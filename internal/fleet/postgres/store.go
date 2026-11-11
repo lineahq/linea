@@ -57,12 +57,15 @@ var actingMigration string
 //go:embed migrations/011_credential_expiry.sql
 var credentialExpiryMigration string
 
-var migrations = []string{migration, deploymentTokensMigration, lifecycleMigration, replicasMigration, inventoryMigration, pluginsMigration, configMigration, rolloutMigration, componentsMigration, actingMigration, credentialExpiryMigration}
+//go:embed migrations/012_operator_role.sql
+var operatorRoleMigration string
+
+var migrations = []string{migration, deploymentTokensMigration, lifecycleMigration, replicasMigration, inventoryMigration, pluginsMigration, configMigration, rolloutMigration, componentsMigration, actingMigration, credentialExpiryMigration, operatorRoleMigration}
 
 // adminLock serializes offline administration (migrate, bootstrap, grants).
 // v1 servers held the same lock, so a v1 server also blocks migration to v2.
 const adminLock int64 = 731281604309
-const schemaVersion = 11
+const schemaVersion = 12
 
 // ErrOwnerBusy is retryable contention, distinct from schema/identity conflicts.
 var ErrOwnerBusy = fmt.Errorf("fleet administration or a v1 server already active: %w", fleet.ErrConflict)
@@ -550,7 +553,7 @@ func normalize(err error) error {
 	if errors.As(err, &invalid) {
 		return invalid
 	}
-	for _, known := range []error{configmgmt.ErrRolloutActive, configmgmt.ErrRolloutState, configmgmt.ErrTooManyTargets, fleet.ErrUnavailable, fleet.ErrNotFound, fleet.ErrConflict, fleet.ErrInvalid, fleet.ErrCapacity, fleet.ErrStale, fleet.ErrBusy, fleet.ErrPrecondition, fleet.ErrCursorExpired, auth.ErrUnauthorized, auth.ErrForbidden} {
+	for _, known := range []error{configmgmt.ErrRolloutActive, configmgmt.ErrRolloutState, configmgmt.ErrTooManyTargets, fleet.ErrUnavailable, fleet.ErrNotFound, fleet.ErrConflict, fleet.ErrInvalid, fleet.ErrCapacity, fleet.ErrStale, fleet.ErrUIDHeld, fleet.ErrBusy, fleet.ErrPrecondition, fleet.ErrCursorExpired, auth.ErrUnauthorized, auth.ErrForbidden} {
 		if errors.Is(err, known) {
 			return known
 		}

@@ -53,7 +53,7 @@ spec:
         checksum/builder-token: {{ include "linea.builderToken" . | sha256sum }}
         {{- end }}
         {{- if include "linea.fleetDeployed" . }}
-        checksum/fleet: {{ include "linea.fleetToken" . | sha256sum }}
+        checksum/fleet: {{ include "linea.fleetOperatorToken" . | sha256sum }}
         {{- else if and .Values.fleet.url (not .Values.fleet.existingSecret) }}
         checksum/fleet: {{ .Values.fleet.token | sha256sum }}
         {{- end }}
@@ -248,7 +248,8 @@ spec:
         - name: fleet
           secret:
             secretName: {{ include "linea.fleetSecret" . }}
-            items: [{key: token, path: token}]
+            {{- /* The release's own fleet gives the server its operator token; the admin token in the same Secret is not mounted. */}}
+            items: [{key: {{ ternary "operator-token" "token" (eq (include "linea.fleetDeployed" .) "true") }}, path: token}]
         {{- end }}
         {{- if include "linea.hasOIDCSecret" . }}
         - name: oidc

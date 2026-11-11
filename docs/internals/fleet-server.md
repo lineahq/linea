@@ -18,9 +18,20 @@ server sends are in [fleet-config-layers.md](fleet-config-layers.md).
 - Connectivity, health and telemetry delivery are separate facts. An omitted
   health keeps its previous observation time. Removing a capability replaces
   the old capability bitmask.
-- A second connection with an active UID takes over the session and advances
-  `generation`. Three takeovers within a minute flag `identity_conflict`
-  (cloned identities).
+- A second connection with an active UID and the same credential takes over
+  the session and advances `generation`. Three takeovers within a minute flag
+  `identity_conflict` (two processes sharing one UID and credential).
+- The UID is bound to the credential that holds it while it is connected.
+  `connect` (`internal/fleet/postgres/writer.go`) reads the stored credential
+  under the row lock and returns `fleet.ErrUIDHeld` for another credential
+  while the owner replica is set and alive; nothing in the row changes. The
+  batch writer then records `agent.credential_refused` (subject the agent,
+  actor the refused credential) outside the rolled back savepoint, at most
+  once a minute per agent and credential on each replica. The gateway answers
+  with an OpAMP `ServerErrorResponse` of type `BadRequest` and closes the
+  socket. A disconnected or orphaned UID changes hands and writes
+  `agent.credential_changed` with `{"previous_credential":"<id>"}` in the
+  same transaction. The memory store applies the same rule without events.
 - Graceful stop withdraws readiness, closes agent sockets evenly over
   `--drain-timeout`, so Collectors do not reconnect at once, and records
   disconnected presence.
@@ -54,7 +65,8 @@ server sends are in [fleet-config-layers.md](fleet-config-layers.md).
   unknown versions, missing ledger entries and modified migration content are
   rejected. There is no down-migration.
 - The config management tables exist in every installation (durable schema
-  version 11; version 11 makes admin and reader credential expiry optional).
+  version 12; version 12 adds the `operator` credential role and version 11
+  made admin and reader credential expiry optional).
 
 ## Restore and failover
 

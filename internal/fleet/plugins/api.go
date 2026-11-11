@@ -56,7 +56,7 @@ func (r *Registry) ServeAPI(w http.ResponseWriter, request *http.Request, id, pa
 		fail(405)
 		return
 	}
-	if caller.ID == "" || (caller.Role != "reader" && caller.Role != "admin") {
+	if caller.ID == "" || (caller.Role != "reader" && caller.Role != "operator" && caller.Role != "admin") {
 		fail(403)
 		return
 	}

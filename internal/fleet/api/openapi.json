@@ -600,7 +600,7 @@
       },
       "put": {
         "operationId": "replaceGroup",
-        "description": "Admin only. If-Match quoted zero creates; otherwise replace at the exact current revision. A static group lists known inventory UIDs, at most 1000, sorted and deduplicated. A selector group stores a canonical selector that is evaluated whenever the group is read.",
+        "description": "Admin or operator. If-Match quoted zero creates; otherwise replace at the exact current revision. A static group lists known inventory UIDs, at most 1000, sorted and deduplicated. A selector group stores a canonical selector that is evaluated whenever the group is read.",
         "parameters": [
           {
             "name": "If-Match",
@@ -893,7 +893,7 @@
     "/api/v1/plugins": {
       "get": {
         "operationId": "listPlugins",
-        "description": "Reader/admin only. No client-provided registration URLs or arbitrary proxy paths. Plugin readiness does not affect core readiness. No query parameters.",
+        "description": "Reader, operator or admin only. No client-provided registration URLs or arbitrary proxy paths. Plugin readiness does not affect core readiness. No query parameters.",
         "responses": {
           "200": {
             "description": "Operator-registered plugin discovery or bounded status",
@@ -926,7 +926,7 @@
     "/api/v1/plugins/{id}": {
       "get": {
         "operationId": "getPlugin",
-        "description": "Reader/admin only. No client-provided registration URLs or arbitrary proxy paths. Plugin readiness does not affect core readiness. No query parameters.",
+        "description": "Reader, operator or admin only. No client-provided registration URLs or arbitrary proxy paths. Plugin readiness does not affect core readiness. No query parameters.",
         "responses": {
           "200": {
             "description": "Operator-registered plugin discovery or bounded status",
@@ -970,7 +970,7 @@
     "/api/v1/plugins/{id}/status": {
       "get": {
         "operationId": "getPluginStatus",
-        "description": "Reader/admin only. No client-provided registration URLs or arbitrary proxy paths. Plugin readiness does not affect core readiness. No query parameters.",
+        "description": "Reader, operator or admin only. No client-provided registration URLs or arbitrary proxy paths. Plugin readiness does not affect core readiness. No query parameters.",
         "responses": {
           "200": {
             "description": "Operator-registered plugin discovery or bounded status",
@@ -1591,7 +1591,7 @@
       },
       "post": {
         "operationId": "createConfig",
-        "description": "Admin only. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "description": "Admin or operator. Answers 404 config_management_disabled unless the server runs with --config-management.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1687,7 +1687,7 @@
       },
       "patch": {
         "operationId": "updateConfig",
-        "description": "Admin only. Renames or redescribes at the exact current revision. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "description": "Admin or operator. Renames or redescribes at the exact current revision. Answers 404 config_management_disabled unless the server runs with --config-management.",
         "parameters": [
           {
             "name": "If-Match",
@@ -1757,7 +1757,7 @@
       },
       "delete": {
         "operationId": "deleteConfig",
-        "description": "Admin only. Deletes the config and its versions; 409 while an assignment references it. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "description": "Admin or operator. Deletes the config and its versions; 409 while an assignment references it. Answers 404 config_management_disabled unless the server runs with --config-management.",
         "parameters": [
           {
             "name": "If-Match",
@@ -1867,7 +1867,7 @@
       },
       "post": {
         "operationId": "createConfigVersion",
-        "description": "Admin only. Creates the next immutable version. The newest 100 versions and every version an assignment references are kept; older ones are pruned. Request bodies up to 1 MiB of JSON are accepted. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "description": "Admin or operator. Creates the next immutable version. The newest 100 versions and every version an assignment references are kept; older ones are pruned. Request bodies up to 1 MiB of JSON are accepted. Answers 404 config_management_disabled unless the server runs with --config-management.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1941,7 +1941,7 @@
       ],
       "get": {
         "operationId": "getConfigVersion",
-        "description": "The body is included only for admin. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "description": "The body is included only for admin or operator. Answers 404 config_management_disabled unless the server runs with --config-management.",
         "responses": {
           "200": {
             "description": "Version",
@@ -2024,7 +2024,7 @@
       },
       "post": {
         "operationId": "createConfigAssignment",
-        "description": "Admin only. Stores the assignment without an active version and starts the rollout that introduces it; only the rollout's released targets receive the layer until it completes. Assignments change or are removed only through rollouts (POST /api/v1/rollouts). Answers 409 rollout_conflict when a targeted agent is already in an active rollout and 409 too_many_targets above 20000 targets. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "description": "Admin or operator. Stores the assignment without an active version and starts the rollout that introduces it; only the rollout's released targets receive the layer until it completes. Assignments change or are removed only through rollouts (POST /api/v1/rollouts). Answers 409 rollout_conflict when a targeted agent is already in an active rollout and 409 too_many_targets above 20000 targets. Answers 404 config_management_disabled unless the server runs with --config-management.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2237,7 +2237,7 @@
       ],
       "post": {
         "operationId": "retryAgentConfig",
-        "description": "Admin only. Clears the agent's failure hold so its desired config is sent again. Idempotent. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "description": "Admin or operator. Clears the agent's failure hold so its desired config is sent again. Idempotent. Answers 404 config_management_disabled unless the server runs with --config-management.",
         "responses": {
           "204": {
             "description": "Hold cleared"
@@ -2316,7 +2316,7 @@
       },
       "post": {
         "operationId": "createRollout",
-        "description": "Admin only. Snapshots the eligible agents the assignment targets (credential with remote_config and matching labels, AcceptsRemoteConfig) and releases them in waves; the leader's controller records outcomes, pauses or rolls back on a threshold breach, and on completion moves the assignment to to_version or deletes it. 409 rollout_conflict: the assignment or a target is in an active rollout; 409 too_many_targets above 20000; 409 capacity_exceeded at 50 active rollouts. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "description": "Admin or operator. Snapshots the eligible agents the assignment targets (credential with remote_config and matching labels, AcceptsRemoteConfig) and releases them in waves; the leader's controller records outcomes, pauses or rolls back on a threshold breach, and on completion moves the assignment to to_version or deletes it. 409 rollout_conflict: the assignment or a target is in an active rollout; 409 too_many_targets above 20000; 409 capacity_exceeded at 50 active rollouts. Answers 404 config_management_disabled unless the server runs with --config-management.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2490,7 +2490,7 @@
       ],
       "post": {
         "operationId": "pauseRollout",
-        "description": "Admin only. running → paused. 409 invalid_state when the state does not allow it. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "description": "Admin or operator. running → paused. 409 invalid_state when the state does not allow it. Answers 404 config_management_disabled unless the server runs with --config-management.",
         "responses": {
           "200": {
             "description": "Rollout after the action",
@@ -2536,7 +2536,7 @@
       ],
       "post": {
         "operationId": "resumeRollout",
-        "description": "Admin only. paused → running. Failures seen so far are accepted and stop counting against the thresholds. 409 invalid_state when the state does not allow it. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "description": "Admin or operator. paused → running. Failures seen so far are accepted and stop counting against the thresholds. 409 invalid_state when the state does not allow it. Answers 404 config_management_disabled unless the server runs with --config-management.",
         "responses": {
           "200": {
             "description": "Rollout after the action",
@@ -2582,7 +2582,7 @@
       ],
       "post": {
         "operationId": "rollbackRollout",
-        "description": "Admin only. running or paused → rolling_back: released targets return to the assignment's version; the rollout ends rolled_back once every connected released target reports it, or after the wave timeout. A creating rollout removes its assignment. 409 invalid_state when the state does not allow it. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "description": "Admin or operator. running or paused → rolling_back: released targets return to the assignment's version; the rollout ends rolled_back once every connected released target reports it, or after the wave timeout. A creating rollout removes its assignment. 409 invalid_state when the state does not allow it. Answers 404 config_management_disabled unless the server runs with --config-management.",
         "responses": {
           "200": {
             "description": "Rollout after the action",
@@ -2628,7 +2628,7 @@
       ],
       "post": {
         "operationId": "cancelRollout",
-        "description": "Admin only. Any active state → cancelled at once; released targets return to the assignment's version without waiting. A creating rollout removes its assignment. 409 invalid_state when the state does not allow it. Answers 404 config_management_disabled unless the server runs with --config-management.",
+        "description": "Admin or operator. Any active state → cancelled at once; released targets return to the assignment's version without waiting. A creating rollout removes its assignment. 409 invalid_state when the state does not allow it. Answers 404 config_management_disabled unless the server runs with --config-management.",
         "responses": {
           "200": {
             "description": "Rollout after the action",
@@ -2667,7 +2667,7 @@
       "managementBearer": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Generated database credential with reader or admin role; agent tokens never authorize this API. Memory development uses LINEA_FLEET_API_TOKEN for read-only access. A delegating client may also send X-Fleet-Acting-ID (required with the others, at most 256 bytes), X-Fleet-Acting-Name (at most 128 bytes) and X-Fleet-Acting-Request (at most 128 bytes), each once, printable UTF-8 without surrounding space, to name the user it acts for; fleet records them on the request's events and forwards them on plugin API calls, never authorizes on them, and refuses malformed values with HTTP 400 invalid_acting_for."
+        "description": "Generated database credential with reader, operator or admin role; agent tokens never authorize this API. Memory development uses LINEA_FLEET_API_TOKEN for read-only access. A delegating client may also send X-Fleet-Acting-ID (required with the others, at most 256 bytes), X-Fleet-Acting-Name (at most 128 bytes) and X-Fleet-Acting-Request (at most 128 bytes), each once, printable UTF-8 without surrounding space, to name the user it acts for; fleet records them on the request's events and forwards them on plugin API calls, never authorizes on them, and refuses malformed values with HTTP 400 invalid_acting_for."
       }
     },
     "responses": {
@@ -3057,6 +3057,7 @@
           "role": {
             "enum": [
               "admin",
+              "operator",
               "reader",
               "agent"
             ]
@@ -3068,7 +3069,7 @@
           "expires_at": {
             "type": "string",
             "format": "date-time",
-            "description": "Absent on an admin or reader credential that is valid until revoked. Agent credentials always have one."
+            "description": "Absent on an admin, operator or reader credential that is valid until revoked. Agent credentials always have one."
           },
           "revoked_at": {
             "type": "string",
@@ -3091,7 +3092,7 @@
           "name",
           "role"
         ],
-        "description": "Caller chooses a unique credential ID for lost-response reconciliation. Agent bearer tokens are reusable across Collectors: no UID binding or pre-registration. An expiry must be future and within 365 days. Agent credentials require one; an admin or reader credential without one is valid until revoked.",
+        "description": "Caller chooses a unique credential ID for lost-response reconciliation. Agent bearer tokens are reusable across Collectors: no UID binding or pre-registration. An expiry must be future and within 365 days. Agent credentials require one; an admin, operator or reader credential without one is valid until revoked.",
         "properties": {
           "id": {
             "$ref": "#/components/schemas/AgentID"
@@ -3104,6 +3105,7 @@
           "role": {
             "enum": [
               "admin",
+              "operator",
               "reader",
               "agent"
             ]
@@ -3706,7 +3708,7 @@
           },
           "body": {
             "type": "string",
-            "description": "Collector YAML. Returned only to admin reads of a single version."
+            "description": "Collector YAML. Returned only to admin or operator reads of a single version."
           }
         }
       },

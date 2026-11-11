@@ -153,7 +153,7 @@ permission applies on top (see [team server](team-server.md#fleet-and-live-captu
   says so and names `raw_principals`.
 - The debugger's deployments grant it with a setting, off by default: in
   the Compose stack's `livecapture.json`, `raw_principals` with the
-  server's fleet credential ID (the middle field of `secrets/fleet_token`), or
+  server's fleet credential ID (the middle field of `secrets/fleet_operator_token`), or
   `fleet.deploy.livecapture.rawCapture: true` in the Helm chart, which puts
   the server's own fleet credential into `raw_principals`. For a fleet you
   run yourself, add the server credential's ID to the plugin's

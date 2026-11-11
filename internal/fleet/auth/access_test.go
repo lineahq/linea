@@ -131,10 +131,10 @@ func TestGenerateNamesTheInvalidField(t *testing.T) {
 	}
 }
 
-// Admin and reader credentials without an expiry stay valid until revoked.
+// Admin, operator and reader credentials without an expiry stay valid until revoked.
 func TestCredentialsWithoutExpiry(t *testing.T) {
 	now := time.Now()
-	for _, role := range []string{"admin", "reader"} {
+	for _, role := range []string{"admin", "operator", "reader"} {
 		i, err := Generate(CredentialRequest{ID: strings.Repeat("b", 32), Name: role, Role: role}, now)
 		if err != nil {
 			t.Fatalf("%s: %v", role, err)

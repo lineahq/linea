@@ -67,10 +67,17 @@ fleet:
   existingSecret: ""
   # Fleet and the live-capture plugin in this release, connected to the
   # server on their own (docs/debugger/deploy-kubernetes.md#fleet-and-live-capture).
-  # The chart generates the server's fleet token once, keeps it in a Secret
-  # and installs it as fleet's first admin; it does not expire. Each runs one
-  # pod that is replaced, not rolled, so its migrations, run by an init
-  # container, never overlap a running instance.
+  # The chart generates two fleet tokens once and keeps them, neither
+  # expiring, in the Secret <fullname>-fleet (the release's fullname and
+  # -fleet): operator-token, which it installs as an operator credential and
+  # gives the server, and token, which it installs as fleet's first admin and
+  # the server never gets. The admin token is for whoever administers fleet,
+  # to issue credentials and run plugin operations:
+  #   kubectl -n <namespace> get secret <fullname>-fleet -o jsonpath='{.data.token}' | base64 -d
+  # An upgrade of an earlier release keeps its token as the admin token and
+  # generates the operator token. Fleet and the plugin each run one pod that
+  # is replaced, not rolled, so their migrations, run by an init container,
+  # never overlap a running instance.
   deploy:
     enabled: false
     # The fleet identity recorded in its database; never change it later.
@@ -112,8 +119,8 @@ fleet:
     tolerations: []
     affinity: {}
     livecapture:
-      # Lets the server's fleet credential capture points a Collector marks
-      # raw (the plugin's raw_principals). Who may then capture raw is the
+      # Lets the server's fleet operator credential capture points a
+      # Collector marks raw (the plugin's raw_principals). Who may then capture raw is the
       # debugger's capture.raw permission. Off: only redacted points.
       rawCapture: false
       image:

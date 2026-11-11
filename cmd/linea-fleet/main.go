@@ -64,6 +64,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		fs.SetOutput(stderr)
 		id := fs.String("server-id", "", "stable fleet identity (bootstrap)")
 		name := fs.String("name", "initial-admin", "bootstrap credential name")
+		operatorName := fs.String("operator-name", "linea-server", "operator credential name (bootstrap, with LINEA_FLEET_OPERATOR_TOKEN)")
 		runtimeRole := fs.String("runtime-role", "", "existing runtime role to grant narrow DML privileges (migrate)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
@@ -106,6 +107,21 @@ func run(args []string, stdout, stderr io.Writer) error {
 				fmt.Fprintln(stdout, "fleet admin created")
 			} else {
 				fmt.Fprintln(stdout, "fleet admin is current")
+			}
+			operatorToken, err := secret("LINEA_FLEET_OPERATOR_TOKEN")
+			if err != nil {
+				return err
+			}
+			if operatorToken != "" {
+				created, err := postgres.InstallOperatorToken(ctx, database, *id, *operatorName, operatorToken)
+				if err != nil {
+					return err
+				}
+				if created {
+					fmt.Fprintln(stdout, "fleet operator created")
+				} else {
+					fmt.Fprintln(stdout, "fleet operator is current")
+				}
 			}
 			return nil
 		}

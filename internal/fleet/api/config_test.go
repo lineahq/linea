@@ -20,7 +20,7 @@ type roles struct{}
 
 func (roles) Authenticate(_ context.Context, r *http.Request) (auth.Principal, error) {
 	role := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if role != "admin" && role != "reader" {
+	if role != "admin" && role != "operator" && role != "reader" {
 		return auth.Principal{}, auth.ErrUnauthorized
 	}
 	return auth.Principal{ID: role + "-id", Role: role}, nil
@@ -111,7 +111,7 @@ func call(t *testing.T, h http.Handler, method, path, role string, body any) *ht
 	if body != nil {
 		r.Header.Set("Content-Type", "application/json")
 	}
-	if method == "PATCH" || method == "DELETE" {
+	if method == "PATCH" || method == "DELETE" || method == "PUT" {
 		r.Header.Set("If-Match", `"1"`)
 	}
 	w := httptest.NewRecorder()

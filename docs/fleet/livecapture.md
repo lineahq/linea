@@ -170,7 +170,7 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8080/api/v1/credentials -Headers
 | --- | --- |
 | Label key | The plugin option `capture_label` selects another key |
 | Collector settings | Provision the plugin CA and the returned token securely. Set matching control and delivery addresses. Supply `LINEA_FLEET_AGENT_TOKEN`, `OTEL_CAPTURE_GROUP`, `POD_NAME`, `CLUSTER_NAME`, `POD_NAMESPACE` |
-| Reuse | Every replica can reuse the same credential. No UID binding or per-pod registration |
+| Reuse | Every replica can reuse the same credential. No per-pod registration. A Collector instance UID is bound to the credential that registered it while connected: another credential is refused, and pod churn creates new UIDs ([identity](README.md#register-collectors-with-a-deployment-token)) |
 | Registration | The first authenticated control report registers the capture peer and its catalog. The credential's label must include its reported collector group |
 | Refusal | A credential that is not an active agent credential with a valid label is refused (`Unauthenticated`) |
 | Revocation | Revoking, expiring or relabeling the credential in core closes affected streams within 10 s |
@@ -222,7 +222,7 @@ at `v1/openapi.json` through this authenticated ingress.
 
 | Rule | Detail |
 | --- | --- |
-| Credential | A fleet admin credential. Readers can discover peers and schemas but cannot create channels or captures |
+| Credential | A fleet admin or operator credential. Readers can discover peers and schemas but cannot create channels or captures |
 | Ownership | Capture and channel reads and receipts are owner-only, even between admins |
 | Raw data | Default selection permits only catalog points marked redacted. Operator `raw_principals` is an explicit grant of credential IDs; admin alone never grants raw |
 | Delegating clients | A client acting for its users (a shared team service) may send fleet's `X-Fleet-Acting-ID`, `-Name` and `-Request` headers ([plugins](plugins.md#opaque-public-api)). The plugin records them on the capture as `acting_for` and persists them with the operation (plugin migration 3, API schema 2.2.0) |

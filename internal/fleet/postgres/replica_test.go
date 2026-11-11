@@ -2,8 +2,10 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -119,6 +121,72 @@ func TestPostgresReplicas(t *testing.T) {
 	}
 	if got, err := a.GetAgent(ctx, twin); err != nil || !got.IdentityConflict {
 		t.Fatal("duplicate identity was not flagged")
+	}
+
+	// The UID is bound to its credential while connected: another credential
+	// is refused without touching the row, the holder's own credential still
+	// takes over, and a disconnected UID changes hands with an event.
+	intruder := credential("00000000000000000000000000000034")
+	bindingStart, err := a.Events(ctx, "", 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, _, err := b.ConnectAgent(ctx, twin, agent, fleet.Report{Capabilities: 5}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []struct {
+		name       string
+		via        *Store
+		credential string
+		disconnect bool // release the holder's session first
+		wantErr    error
+		wantHolder string
+	}{
+		{name: "another credential while connected", via: a, credential: intruder, wantErr: fleet.ErrUIDHeld, wantHolder: agent},
+		{name: "retry within the event window", via: a, credential: intruder, wantErr: fleet.ErrUIDHeld, wantHolder: agent},
+		{name: "holder takes over its own connection", via: a, credential: agent, wantHolder: agent},
+		{name: "another credential after a disconnect", via: b, credential: intruder, disconnect: true, wantHolder: intruder},
+	} {
+		if step.disconnect {
+			if err := a.DisconnectAgent(ctx, twin, held, time.Now()); err != nil {
+				t.Fatal(step.name, err)
+			}
+		}
+		generation, _, err := step.via.ConnectAgent(ctx, twin, step.credential, fleet.Report{Capabilities: 1}, time.Now())
+		if !errors.Is(err, step.wantErr) {
+			t.Fatalf("%s: error = %v, want %v", step.name, err, step.wantErr)
+		}
+		got, err := a.GetAgent(ctx, twin)
+		if err != nil || got.CredentialID != step.wantHolder || !got.Connected {
+			t.Fatalf("%s: agent = %+v, err %v", step.name, got, err)
+		}
+		if step.wantErr != nil {
+			if generation != 0 || got.Generation != held || got.Capabilities != 5 {
+				t.Fatalf("%s: refusal changed the row: generation %d, %+v", step.name, generation, got)
+			}
+		} else {
+			held = generation
+		}
+	}
+	var refused, changed []fleet.Event
+	bindingEvents, err := a.Events(ctx, bindingStart.NextCursor, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range bindingEvents.Items {
+		switch e.Kind {
+		case "agent.credential_refused":
+			refused = append(refused, e)
+		case "agent.credential_changed":
+			changed = append(changed, e)
+		}
+	}
+	if len(refused) != 1 || refused[0].SubjectID != twin || refused[0].ActorID != intruder || len(refused[0].Detail) != 0 {
+		t.Fatalf("refusal events = %+v", refused)
+	}
+	if len(changed) != 1 || changed[0].SubjectID != twin || changed[0].ActorID != intruder || !jsonEqual(changed[0].Detail, `{"previous_credential":"`+agent+`"}`) {
+		t.Fatalf("change events = %+v", changed)
 	}
 
 	// Revocation reaches every replica as a hint.
@@ -277,7 +345,7 @@ func TestPostgresReplicas(t *testing.T) {
 		t.Fatal("restored history unreadable:", err)
 	}
 	// Live and starting replicas both refuse migration.
-	if _, err := maintenance.Exec(ctx, "DELETE FROM fleet.schema_version WHERE version=11"); err != nil {
+	if _, err := maintenance.Exec(ctx, "DELETE FROM fleet.schema_version WHERE version=12"); err != nil {
 		t.Fatal(err)
 	}
 	if err := Migrate(ctx, url); !errors.Is(err, ErrReplicasActive) {
@@ -401,4 +469,11 @@ func TestPostgresReapBudget(t *testing.T) {
 	if got, err := s.GetAgent(ctx, orphan); err != nil || !got.Connected || got.Generation != 3 {
 		t.Fatalf("orphan reconnect = %+v, err %v", got, err)
 	}
+}
+
+// jsonEqual compares JSON documents regardless of the spacing PostgreSQL's
+// jsonb gives them.
+func jsonEqual(got json.RawMessage, want string) bool {
+	var a, b any
+	return json.Unmarshal(got, &a) == nil && json.Unmarshal([]byte(want), &b) == nil && reflect.DeepEqual(a, b)
 }

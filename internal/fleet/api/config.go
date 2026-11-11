@@ -73,7 +73,7 @@ func (h *Handler) configCollection(w http.ResponseWriter, r *http.Request, p aut
 	}
 	ctx := r.Context()
 	if r.Method == "POST" {
-		if !admin(w, p) || !noQuery(w, r) {
+		if !manager(w, p) || !noQuery(w, r) {
 			return
 		}
 		var body struct {
@@ -139,7 +139,7 @@ func (h *Handler) configItem(w http.ResponseWriter, r *http.Request, p auth.Prin
 		writeJSON(w, 200, c)
 		return
 	}
-	if !admin(w, p) {
+	if !manager(w, p) {
 		return
 	}
 	revision, ok := precondition(w, r)
@@ -186,7 +186,7 @@ func (h *Handler) versionCollection(w http.ResponseWriter, r *http.Request, p au
 	}
 	ctx := r.Context()
 	if r.Method == "POST" {
-		if !admin(w, p) || !noQuery(w, r) {
+		if !manager(w, p) || !noQuery(w, r) {
 			return
 		}
 		var body struct {
@@ -239,7 +239,7 @@ func (h *Handler) version(w http.ResponseWriter, r *http.Request, p auth.Princip
 		failure(w, fleet.Invalid("the version must be a number of at least 1"))
 		return
 	}
-	version, err := h.configs.GetVersion(r.Context(), id, v, p.Role == "admin")
+	version, err := h.configs.GetVersion(r.Context(), id, v, p.Role == "admin" || p.Role == "operator")
 	if err != nil {
 		failure(w, err)
 		return
@@ -313,7 +313,7 @@ func (h *Handler) assignmentCollection(w http.ResponseWriter, r *http.Request, p
 	}
 	ctx := r.Context()
 	if r.Method == "POST" {
-		if !admin(w, p) || !noQuery(w, r) {
+		if !manager(w, p) || !noQuery(w, r) {
 			return
 		}
 		body := assignmentBody{Rollout: defaultRollout()}
@@ -524,7 +524,7 @@ func (h *Handler) agentConfig(w http.ResponseWriter, r *http.Request, p auth.Pri
 	}
 	ctx := r.Context()
 	if retry {
-		if !method(w, r, "POST") || !admin(w, p) || !noQuery(w, r) {
+		if !method(w, r, "POST") || !manager(w, p) || !noQuery(w, r) {
 			return
 		}
 		if err := h.configs.ClearHold(ctx, p.ID, id); err != nil {

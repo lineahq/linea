@@ -163,9 +163,14 @@ app.kubernetes.io/component: livecapture
 {{- if or .Values.fleet.allowHTTP (include "linea.fleetDeployed" .) }}true{{ end -}}
 {{- end -}}
 
-{{/* The server's fleet admin token, which fleet's bootstrap installs. */}}
-{{- define "linea.fleetToken" -}}
+{{/* The deployment's fleet admin token, which fleet's bootstrap installs as the first admin. Only its Secret holds it: the server never gets it. */}}
+{{- define "linea.fleetAdminToken" -}}
 {{- include "linea.keptSecret" (list . (include "linea.fleetName" .) "token" "" "fleet") -}}
+{{- end -}}
+
+{{/* The server's fleet operator token, which fleet's bootstrap installs as an operator credential. */}}
+{{- define "linea.fleetOperatorToken" -}}
+{{- include "linea.keptSecret" (list . (include "linea.fleetName" .) "operator-token" "" "fleet") -}}
 {{- end -}}
 
 {{/* The Secret with fleet's and the plugin's database URLs. */}}

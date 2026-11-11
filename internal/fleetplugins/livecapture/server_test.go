@@ -405,6 +405,30 @@ func TestPluginHTTPAuthorizesOwnerAndEpoch(t *testing.T) {
 	}
 }
 
+func TestPluginHTTPRoleWrites(t *testing.T) {
+	s, _, _ := fixture(t)
+	call := func(role string) int {
+		req := httptest.NewRequest("POST", pluginsdk.APIPath+"v1/captures", strings.NewReader("{}"))
+		req.Header.Set("Authorization", "Bearer "+s.config.serviceToken)
+		req.Header.Set(pluginsdk.CallerIDHeader, "owner")
+		req.Header.Set(pluginsdk.CallerRoleHeader, role)
+		req.Header.Set(pluginsdk.InstanceHeader, s.instance)
+		req.Header.Set(pluginsdk.EpochHeader, s.epoch)
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, req)
+		return w.Code
+	}
+	admin := call("admin")
+	if admin == 403 {
+		t.Fatal("admin write was refused")
+	}
+	for role, refused := range map[string]bool{"admin": false, "operator": false, "reader": true, "agent": true, "": true} {
+		if got := call(role); (got == 403) != refused || !refused && got != admin {
+			t.Fatalf("role %q answered %d, admin answered %d", role, got, admin)
+		}
+	}
+}
+
 func TestDeliveryCapacityWithdrawsCapture(t *testing.T) {
 	s, r, _ := fixture(t)
 	op, err := s.Create(context.Background(), "owner", r)

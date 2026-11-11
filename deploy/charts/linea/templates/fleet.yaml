@@ -1,8 +1,9 @@
 {{- /*
 Fleet and the live-capture plugin in this release (fleet.deploy.enabled),
 like the Compose overlay compose.fleet.yaml: their own databases and roles,
-migrations before each start, and the server's generated fleet token
-installed as the first fleet admin, so the server connects on its own.
+migrations before each start, a generated fleet admin token kept for the
+operator of the release, and a generated fleet operator token that the server
+uses, so it connects on its own.
 */}}
 {{- if include "linea.fleetDeployed" . }}
 {{- $fleet := include "linea.fleetName" . }}
@@ -14,8 +15,11 @@ installed as the first fleet admin, so the server connects on its own.
 {{- $serviceToken := include "linea.livecaptureToken" (list . "service-token") }}
 {{- $metricsToken := include "linea.livecaptureToken" (list . "metrics-token") }}
 {{- $pluginsJSON := dict "plugins" (list (dict "id" "livecapture" "version" "0.4.0" "api_version" "2" "endpoint" (printf "http://%s-plugin:8090" $capture) "enabled" true "allow_insecure_http" true "permissions" (list "agents.read" "credentials.introspect") "host_token_file" "/etc/fleet/plugins/host-token" "service_token_file" "/etc/fleet/plugins/service-token")) | toJson }}
-{{- $configJSON := dict "id" "livecapture" "version" "0.4.0" "host_endpoint" (printf "http://%s:8081" $fleet) "allow_insecure_host" true "host_token_file" "/etc/livecapture/host-token" "service_token_file" "/etc/livecapture/service-token" "metrics_token_file" "/etc/livecapture/metrics-token" "http_listen" "0.0.0.0:8090" "control_listen" "0.0.0.0:4340" "delivery_listen" "0.0.0.0:4341" "tls_cert_file" "/etc/livecapture/tls.crt" "tls_key_file" "/etc/livecapture/tls.key" "test_insecure" false "capture_label" "capture" "raw_principals" (ternary (list (index (splitList "_" (include "linea.fleetToken" .)) 1)) (list) (eq (toString $lc.rawCapture) "true")) "max_peers" 256 | toJson }}
-# The server's fleet admin token, generated once and kept.
+{{- $configJSON := dict "id" "livecapture" "version" "0.4.0" "host_endpoint" (printf "http://%s:8081" $fleet) "allow_insecure_host" true "host_token_file" "/etc/livecapture/host-token" "service_token_file" "/etc/livecapture/service-token" "metrics_token_file" "/etc/livecapture/metrics-token" "http_listen" "0.0.0.0:8090" "control_listen" "0.0.0.0:4340" "delivery_listen" "0.0.0.0:4341" "tls_cert_file" "/etc/livecapture/tls.crt" "tls_key_file" "/etc/livecapture/tls.key" "test_insecure" false "capture_label" "capture" "raw_principals" (ternary (list (index (splitList "_" (include "linea.fleetOperatorToken" .)) 1)) (list) (eq (toString $lc.rawCapture) "true")) "max_peers" 256 | toJson }}
+# The fleet admin token (token) stays with the operator of the release: it
+# issues credentials and runs plugin operations, and the server never gets it.
+# The server's fleet operator token (operator-token) is the server's credential.
+# Both are generated once and kept.
 apiVersion: v1
 kind: Secret
 metadata:
@@ -24,7 +28,8 @@ metadata:
     {{- include "linea.labels" . | nindent 4 }}
 type: Opaque
 stringData:
-  token: {{ include "linea.fleetToken" . | quote }}
+  token: {{ include "linea.fleetAdminToken" . | quote }}
+  operator-token: {{ include "linea.fleetOperatorToken" . | quote }}
 ---
 {{- if not $d.database.existingSecret }}
 {{- $url := "postgres://%s:%s@%s:5432/%s?sslmode=disable" }}
@@ -261,19 +266,21 @@ spec:
             limits: {memory: 128Mi}
           volumeMounts:
             - {name: migrate-url, mountPath: /etc/fleet/migrate, readOnly: true}
-        # Installs the server's token as the first admin; no change once it is.
+        # Installs the admin token as the first admin and the server's token as
+        # an operator; no change once they are.
         - name: bootstrap
           image: {{ include "linea.image" (dict "repository" $d.image.repository "tag" ($d.image.tag | default .Chart.AppVersion)) | quote }}
           imagePullPolicy: {{ $d.image.pullPolicy }}
-          args: [bootstrap, --server-id, {{ $d.serverID | quote }}, --name, linea-server]
+          args: [bootstrap, --server-id, {{ $d.serverID | quote }}, --name, deployment-admin, --operator-name, linea-server]
           env:
             - {name: LINEA_FLEET_DATABASE_URL_FILE, value: /etc/fleet/runtime/url}
-            - {name: LINEA_FLEET_BOOTSTRAP_TOKEN_FILE, value: /etc/fleet/admin/token}
+            - {name: LINEA_FLEET_BOOTSTRAP_TOKEN_FILE, value: /etc/fleet/bootstrap/token}
+            - {name: LINEA_FLEET_OPERATOR_TOKEN_FILE, value: /etc/fleet/bootstrap/operator-token}
           securityContext: *hardened
           resources: *initResources
           volumeMounts:
             - {name: runtime-url, mountPath: /etc/fleet/runtime, readOnly: true}
-            - {name: admin-token, mountPath: /etc/fleet/admin, readOnly: true}
+            - {name: bootstrap-tokens, mountPath: /etc/fleet/bootstrap, readOnly: true}
       containers:
         - name: fleet
           image: {{ include "linea.image" (dict "repository" $d.image.repository "tag" ($d.image.tag | default .Chart.AppVersion)) | quote }}
@@ -322,10 +329,10 @@ spec:
           secret:
             secretName: {{ $dbSecret }}
             items: [{key: fleet-runtime-url, path: url}]
-        - name: admin-token
+        - name: bootstrap-tokens
           secret:
             secretName: {{ include "linea.fleetSecret" . }}
-            items: [{key: token, path: token}]
+            items: [{key: token, path: token}, {key: operator-token, path: operator-token}]
         - name: plugins
           projected:
             sources:

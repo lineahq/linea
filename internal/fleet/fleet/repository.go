@@ -140,7 +140,7 @@ type PluginLifecycleRepository interface {
 
 // The memory store remains a deliberately ephemeral development adapter.
 func (s *Store) ConnectAgent(_ context.Context, id, credential string, report Report, now time.Time) (uint64, Report, error) {
-	generation, err := s.Connect(id, report, now)
+	generation, err := s.connect(id, &credential, report, now)
 	if err != nil {
 		return 0, Report{}, err
 	}
@@ -150,7 +150,6 @@ func (s *Store) ConnectAgent(_ context.Context, id, credential string, report Re
 	if r == nil || r.Generation != generation {
 		return generation, report, nil
 	}
-	r.CredentialID = credential
 	return generation, r.report(), nil
 }
 func (s *Store) ObserveAgent(_ context.Context, id, _ string, gen uint64, report Report, now time.Time) error {

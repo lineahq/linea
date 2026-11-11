@@ -42,7 +42,7 @@ func (s *Store) CreateConfig(ctx context.Context, actor string, c configmgmt.Con
 		return c, err
 	}
 	err := s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		if err := requireAdmin(ctx, tx, actor); err != nil {
+		if err := requireManager(ctx, tx, actor); err != nil {
 			return err
 		}
 		var count int
@@ -105,7 +105,7 @@ func (s *Store) UpdateConfig(ctx context.Context, actor string, c configmgmt.Con
 		return c, fleet.ErrInvalid
 	}
 	err := s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		if err := requireAdmin(ctx, tx, actor); err != nil {
+		if err := requireManager(ctx, tx, actor); err != nil {
 			return err
 		}
 		var revision int64
@@ -129,7 +129,7 @@ func (s *Store) UpdateConfig(ctx context.Context, actor string, c configmgmt.Con
 // references it.
 func (s *Store) DeleteConfig(ctx context.Context, actor, id string, expected int64) error {
 	return s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		if err := requireAdmin(ctx, tx, actor); err != nil {
+		if err := requireManager(ctx, tx, actor); err != nil {
 			return err
 		}
 		var revision int64
@@ -169,7 +169,7 @@ func (s *Store) CreateVersion(ctx context.Context, actor, configID string, body 
 	digest := sha256.Sum256(body)
 	v.SHA256 = hex.EncodeToString(digest[:])
 	err := s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		if err := requireAdmin(ctx, tx, actor); err != nil {
+		if err := requireManager(ctx, tx, actor); err != nil {
 			return err
 		}
 		if err := tx.QueryRow(ctx, "UPDATE fleet.configs SET latest_version=latest_version+1 WHERE id=$1 RETURNING latest_version", configID).Scan(&v.Version); err != nil {
@@ -399,7 +399,7 @@ func loadTargets(ctx context.Context, tx pgx.Tx) ([]configmgmt.Target, error) {
 // agent so its owning replica drops the hold it carries in the session.
 func (s *Store) ClearHold(ctx context.Context, actor, agentID string) error {
 	return s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		if err := requireAdmin(ctx, tx, actor); err != nil {
+		if err := requireManager(ctx, tx, actor); err != nil {
 			return err
 		}
 		var held *string

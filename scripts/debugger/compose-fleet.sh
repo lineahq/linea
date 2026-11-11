@@ -5,8 +5,8 @@
 #   1. creates the fleet and livecapture databases and roles (idempotent);
 #   2. stops fleet and the plugin and migrates both schemas (migrations stay
 #      explicit, and the plugin refuses to migrate while it runs);
-#   3. installs the fleet token as the first fleet admin (no change once
-#      it is);
+#   3. installs the admin token as the first fleet admin and the operator
+#      token as linea-server's fleet operator (no change once they are);
 #   4. starts the whole stack.
 # Nothing is generated: the secrets are files in the stack's secrets/
 # directory (LINEA_SECRETS_DIR), which the header of compose.fleet.yaml
@@ -22,7 +22,14 @@ compose() { docker compose --project-directory "$dir" -f "$dir/compose.yaml" -f 
 # Every secret and config file must exist.
 config="$(compose config)"
 while IFS= read -r f; do
-  [ -f "$f" ] || { echo "missing $f: create it as the header of compose.fleet.yaml shows" >&2; exit 1; }
+  if [ ! -f "$f" ]; then
+    echo "missing $f: create it as the header of compose.fleet.yaml shows" >&2
+    # An earlier stack's single fleet token is the admin token.
+    if [ "${f##*/}" = fleet_admin_token ] && [ -f "${f%/*}/fleet_token" ]; then
+      echo "the earlier fleet_token stays the fleet admin token: rename it to fleet_admin_token" >&2
+    fi
+    exit 1
+  fi
 done < <(sed -n 's/^    file: //p' <<<"$config")
 case "${1:-}" in
   --build) compose build fleet livecapture-plugin ;;
@@ -38,7 +45,7 @@ compose stop livecapture-plugin fleet >/dev/null 2>&1 || true
 compose run --rm -T fleet-migrate
 compose run --rm -T capture-migrate
 
-echo '== fleet admin'
+echo '== fleet admin and operator'
 compose run --rm -T fleet-bootstrap
 
 echo '== stack'

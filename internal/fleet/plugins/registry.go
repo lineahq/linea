@@ -263,7 +263,7 @@ func (r *Registry) Get(id string) (Info, error) {
 }
 
 func (r *Registry) Status(ctx context.Context, id string, caller auth.Principal) (json.RawMessage, error) {
-	if caller.Role != "reader" && caller.Role != "admin" {
+	if caller.Role != "reader" && caller.Role != "operator" && caller.Role != "admin" {
 		return nil, auth.ErrForbidden
 	}
 	e := r.find(id)

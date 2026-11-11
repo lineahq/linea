@@ -138,11 +138,13 @@ roots, and a public identity provider would then fail verification.
 `fleet.deploy.enabled`; `linea.fleetDeployed` checks the values.
 
 - **Tokens.** `linea.keptSecret` takes a format: `fleet` gives an
-  `of1_<32 hex>_<64 hex>` admin token, `hex` 64 lowercase hex characters for
+  `of1_<32 hex>_<64 hex>` fleet token, `hex` 64 lowercase hex characters for
   the plugin's host, service and metrics tokens (`pluginsdk.ValidToken`).
-  Fleet's `bootstrap` installs the admin token from
-  `LINEA_FLEET_BOOTSTRAP_TOKEN_FILE`, so the chart never reads a token back
-  from fleet.
+  The fleet Secret holds two: `token`, the admin token (the key an existing
+  release already kept), and `operator-token`, the server's. Fleet's
+  `bootstrap` installs the admin from `LINEA_FLEET_BOOTSTRAP_TOKEN_FILE` and
+  the operator from `LINEA_FLEET_OPERATOR_TOKEN_FILE`, so the chart never
+  reads a token back from fleet. The server mounts only `operator-token`.
 - **One pod each, `Recreate`.** The plugin holds an advisory lock on its
   database while it runs and its migration takes the same lock; fleet's
   migration expects no running instance either. Migrations run as init

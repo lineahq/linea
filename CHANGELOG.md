@@ -74,14 +74,16 @@ the first item below.
   4. With `compose.fleet.yaml`: the 0.2.0 overlay kept its secrets in the
      `linea_setup` volume, which the next step removes, and the new one reads
      files. Copy the three that must not change before removing it: the fleet
-     token, because fleet keeps its first admin, and the plugin's certificate
-     and key, because Collectors trust that certificate. Create the other
-     fleet files as in `docs/debugger/deploy-compose.md#fleet-and-live-capture`,
-     and replace `LINEA_CAPTURE_RAW=true` by the server's credential ID in
+     token, which becomes the fleet admin token (`fleet_admin_token`) because
+     fleet keeps its first admin, and the plugin's certificate and key,
+     because Collectors trust that certificate. Create the other fleet files,
+     the new `fleet_operator_token` included, as in
+     `docs/debugger/deploy-compose.md#fleet-and-live-capture`, and replace
+     `LINEA_CAPTURE_RAW=true` by the operator token's credential ID in
      `raw_principals` of `livecapture.json`.
 
      ```sh
-     for f in linea/fleet_token:fleet_token livecapture/tls_cert.pem:capture_tls.crt livecapture/tls_key.pem:capture_tls.key; do
+     for f in linea/fleet_token:fleet_admin_token livecapture/tls_cert.pem:capture_tls.crt livecapture/tls_key.pem:capture_tls.key; do
        docker run --rm -v linea_setup:/setup:ro busybox cat "/setup/${f%%:*}" > "secrets/${f##*:}"
      done
      chmod 644 secrets/capture_tls.key
@@ -141,6 +143,30 @@ the first item below.
   builder that uses an internal module proxy, git host or registry needs a
   `builderEgress` rule for it. The team server docs say what a project
   isolates: one server is one trust boundary.
+- The debugger's fleet token is now a fleet **operator** credential, not a
+  fleet admin: `linea-server` can no longer issue fleet credentials or run
+  plugin lifecycle operations. The Compose overlay and the Helm chart now
+  generate a separate fleet admin token that stays with whoever administers
+  fleet, and a fleet operator token that the server uses. `linea-fleet
+  bootstrap` installs the operator from `LINEA_FLEET_OPERATOR_TOKEN` (or
+  `_FILE`) after the admin, named by `--operator-name` (default
+  `linea-server`), and prints `fleet operator created` or `fleet operator is
+  current`.
+
+  **Upgrading:** the token a stack or release already has stays fleet's
+  admin; bootstrap finds it current. A new operator token is installed on the
+  next bootstrap.
+  - Helm: nothing to do. The chart keeps the existing token in the Secret
+    `<release>-linea-fleet` under `token` (now the admin token), generates
+    `operator-token` in the same Secret, and gives the server the operator
+    token. Read the admin token with `kubectl get secret ... -o
+    jsonpath='{.data.token}'`.
+  - Compose: rename `secrets/fleet_token` to `secrets/fleet_admin_token`,
+    create `secrets/fleet_operator_token` with `printf 'of1_%s_%s\n'
+    "$(openssl rand -hex 16)" "$(openssl rand -hex 32)"` (a different token), run
+    `scripts/debugger/compose-fleet.sh` and restart `linea`. If you set
+    `raw_principals` to the server's credential ID, change it to the second
+    `_`-separated field of the operator token.
 
 ## [0.2.0]
 

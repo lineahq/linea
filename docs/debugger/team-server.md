@@ -568,9 +568,11 @@ the limit's key.
 
 ## Fleet and live capture
 
-A team server reaches fleet with one management token (`--fleet-url`,
-`--fleet-token-file`; `--fleet-allow-http` allows plain HTTP to a non-loopback
-fleet on a protected network). On each call for a signed-in principal it also
+A team server reaches fleet with one management token, a fleet operator
+credential (`--fleet-url`, `--fleet-token-file`; `--fleet-allow-http` allows
+plain HTTP to a non-loopback fleet on a protected network). The deployments
+generate it, and keep a separate fleet admin token for whoever administers
+fleet. On each call for a signed-in principal it also
 sends who it acts for, which fleet records as attribution on its events. Fleet
 still authorizes the debugger's token, and the debugger's audit log stays the
 authoritative record. The debugger's fleet event feed (Fleet → Events,

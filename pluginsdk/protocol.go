@@ -40,7 +40,7 @@ const (
 const AgentsPath = "/fleet-host/v3/agents"
 
 // Headers fleet sets on status and API calls: the authenticated management
-// credential ID and its role, "reader" or "admin".
+// credential ID and its role, "reader", "operator" or "admin".
 const (
 	CallerIDHeader   = "X-Fleet-Caller-ID"
 	CallerRoleHeader = "X-Fleet-Caller-Role"

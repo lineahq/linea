@@ -17,7 +17,7 @@ or plugins.
 | Term | Meaning |
 | --- | --- |
 | Agent | A Collector (or an OpAMP supervisor) that connects to fleet |
-| Credential | A bearer token. An *agent* credential lets Collectors enroll and report. A *reader* or *admin* credential calls the management API |
+| Credential | A bearer token. An *agent* credential lets Collectors enroll and report. A *reader*, *operator* or *admin* credential calls the management API |
 | Group | A named set of agents: a static list or a selector |
 | Plugin | A separate process that extends fleet, such as live capture |
 
@@ -44,7 +44,7 @@ flowchart LR
   gw -.->|"remote config to opted-in agents"| agent
   gw -->|"asks per agent"| cm
   cm -->|"reads desired state"| db
-  client -->|"reader or admin credential"| api
+  client -->|"reader, operator or admin credential"| api
   api --> db
   api -->|"plugin API calls"| host
   host -->|"service token"| plugin
@@ -60,7 +60,7 @@ path that sends configuration.*
 | Listener | Port | Takes | Credential |
 | --- | --- | --- | --- |
 | Agent | 4320 | OpAMP at `/v1/opamp` | Agent |
-| Management | 8080 | HTTP API, `/metrics`, probes | Reader or admin |
+| Management | 8080 | HTTP API, `/metrics`, probes | Reader, operator or admin |
 | Plugin host | 8081 | Plugin host services | Plugin host token |
 
 One server holds up to 10,000 Collectors. For availability, use
@@ -110,10 +110,16 @@ connections without hundreds of Collector processes.
 
 ## Public API
 
-Data and metrics endpoints need a reader or admin database credential. Agent
+Data and metrics endpoints need a reader, operator or admin database credential. Agent
 credentials enroll and report for many Collectors and cannot read the
 management API. JSON requests are strict and at most 64 KiB. Failed requests
 return an error object with `code` and `message`.
+
+| Role | May |
+| --- | --- |
+| `reader` | Read inventory, groups, events, metrics, plugin discovery and status, and the plugin API reads a plugin allows |
+| `operator` | Everything a reader may, plus write groups, configs, config versions, assignments and rollouts, retry an agent's config, read config version bodies and use plugin API writes. Config management still needs `--config-management`. No credentials API, no plugin lifecycle |
+| `admin` | Everything an operator may, plus the credentials API and plugin lifecycle |
 
 | Endpoint | Access / behavior |
 | --- | --- |
@@ -123,13 +129,13 @@ return an error object with `code` and `message`.
 | GET /api/v1/agents/{id} | Current agent detail: attributes, health, components, config hash |
 | GET /api/v1/summary | Inventory aggregates, optionally `group_by` a promoted attribute |
 | GET /api/v1/plugins, GET /api/v1/plugins/{id} | Configured plugin identity, permissions and readiness |
-| GET /api/v1/plugins/{id}/status | Reader/admin; bounded plugin-owned status |
+| GET /api/v1/plugins/{id}/status | Reader, operator or admin; bounded plugin-owned status |
 | POST /api/v1/plugins/{id}/lifecycle | Admin; durable drain, disable or enable with `If-Match` revision |
 | /api/v1/plugins/{id}/api/{path} | Authenticated opaque JSON ingress; the plugin owns schemas and domain authorization |
 | GET /api/v1/events | Bounded meaningful changes: `cursor`, `limit`, `wait` (long-poll up to 30 s) |
 | GET /api/v1/groups, GET /api/v1/groups/{id} | Group metadata; static members or canonical selector |
 | GET /api/v1/groups/{id}/agents | Current members as agent pages |
-| PUT /api/v1/groups/{id}, DELETE /api/v1/groups/{id} | Admin; static `agent_ids` or selector; quoted `If-Match` revision required |
+| PUT /api/v1/groups/{id}, DELETE /api/v1/groups/{id} | Admin or operator; static `agent_ids` or selector; quoted `If-Match` revision required |
 | GET /api/v1/credentials, GET /api/v1/credentials/{id} | Admin; metadata only, never tokens or hashes |
 | POST /api/v1/credentials, DELETE /api/v1/credentials/{id} | Admin; one-time issuance, persistent revocation |
 | PATCH /api/v1/credentials/{id} | Admin; sets the `remote_config` opt-in ([config management](config-management.md)) |
@@ -146,9 +152,11 @@ Reading data:
   cluster. Refresh state and start again without a cursor.
 - Connectivity, health and telemetry delivery are separate facts. A crashed
   replica's agents read as disconnected within 10 s, with health preserved.
-- A second connection with an active UID takes over and advances
-  `generation`. Three takeovers within a minute flag `identity_conflict`
-  (cloned identities).
+- A second connection with an active UID and the same credential takes
+  over and advances `generation`. Three takeovers within a minute flag
+  `identity_conflict` (two processes sharing one UID and credential). A
+  different credential cannot take over a connected UID: the connection is
+  refused (see Identity).
 
 ## Register Collectors with a deployment token
 
@@ -184,16 +192,32 @@ On every Collector of that deployment:
 | `LINEA_FLEET_OPAMP_ENDPOINT` | `ws://127.0.0.1:4320/v1/opamp` for local Compose |
 | Collector config | The [same file](../../examples/fleet-collector.yaml) for every replica; the OpAMP extension generates a distinct instance UID |
 
-Each first authenticated report registers its Collector. Credentials have no
-UID binding.
+Each first authenticated report registers its Collector under the instance
+UID it reports, and binds that UID to the credential that registered it.
 
 Identity:
 
 - Automatic UIDs change when the Collector restarts. For a stable inventory
   identity, set a unique `instance_uid` per instance locally. Fleet still
   needs no pre-registration.
-- The token authenticates deployment membership; the UID is self-reported. A
-  second connection with the same UID replaces the first.
+- The token authenticates deployment membership; the UID is the standard
+  OpAMP `instance_uid`, self-reported by the Collector. Fleet never invents
+  one. A UID is bound to the credential that holds it:
+  - The same credential reconnecting takes the UID over and replaces its
+    previous connection, including a half-open one.
+  - Another credential is refused while the UID is connected: the server
+    answers with an OpAMP error response, closes the connection and changes
+    nothing in the inventory. It records `agent.credential_refused` (subject:
+    the agent, actor: the refused credential; at most one per agent and
+    credential per minute on each replica) and counts the refusal in
+    `linea_fleet_agent_credential_refused_total`.
+  - Another credential can take a disconnected UID. The inventory then shows
+    the new credential, and `agent.credential_changed` records the previous
+    credential ID in its detail.
+  - On Kubernetes, pod churn creates new UIDs, so replicas of one deployment
+    do not collide. A restarted pod that keeps its UID reconnects with the
+    same credential and takes over. Only a pod holding a different
+    credential is refused while the first one is connected.
 - The example is verified with the official Collector Contrib 0.162.0 Linux
   image over WebSockets. It disables sensitive config reporting and restart
   capability.
@@ -207,7 +231,7 @@ Credential rules:
 | IDs | Caller-chosen, exactly 32 lowercase hex characters (a GUID in `N` format). Anything else, such as a name, is refused with 400 `invalid_argument` and `invalid request: id must be 32 lowercase hexadecimal characters`. Group, config and rollout IDs use the same format |
 | Error messages | Every `invalid_argument` names the field and the rule it broke, never the submitted value |
 | Retry | Retrying a successful create returns 409 and does not disclose the token again. After an uncertain disclosure, query, revoke and reissue with a new ID |
-| Expiry | At most 365 days. Required for agent credentials. An admin or reader credential created without `expires_at` is valid until revoked, for a service such as the debugger |
+| Expiry | At most 365 days. Required for agent credentials. An admin, operator or reader credential created without `expires_at` is valid until revoked, for a service such as the debugger |
 | `agent_id` | Not accepted by the credential API |
 | `labels` | Up to 16, used by plugins and config management ([labels](plugins.md#serving-an-unchanged-collector-component)) |
 | Revocation | Closes every session using the credential and blocks new registrations and state publication |

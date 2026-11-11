@@ -19,7 +19,7 @@ holds no plugin-specific constants, routes or types.
 
 **Plugin or integration?** A program that only reads or changes fleet data
 (alerting, CMDB sync, reports) is an integration. It uses the [public
-API](../../internal/fleet/api/openapi.json) with its own reader or admin
+API](../../internal/fleet/api/openapi.json) with its own reader, operator or admin
 credential. Build a plugin when you need one of:
 
 - your own API under fleet's authentication
@@ -31,7 +31,7 @@ credential. Build a plugin when you need one of:
 
 ```
  API client ── /api/v1/plugins/{id}/api/... ──▶ fleet ── /fleet-plugin/v3/api/... ──▶ plugin
- (reader/admin credential)                     │  ▲      (service token, caller,       │
+ (management credential)                       │  ▲      (service token, caller,       │
                                                │  │       instance, epoch)             │
                     manifest probe every 1 s ──┘  └── /fleet-host/v3/... ◀─────────────┘
                     (service token)                   (host token, instance, epoch)
@@ -74,7 +74,7 @@ sequenceDiagram
     P->>F: GET /fleet-host/v3/session (host token, instance)
     F-->>P: epoch, revision, permissions
   end
-  C->>F: /api/v1/plugins/ID/api/PATH (reader or admin token)
+  C->>F: /api/v1/plugins/ID/api/PATH (reader, operator or admin token)
   F->>P: /fleet-plugin/v3/api/PATH (service token, caller, instance, epoch)
   P-->>F: JSON answer
   F-->>C: same status and body
@@ -177,7 +177,7 @@ Tokens and the host listener:
 
 ## Discovery and status
 
-`GET /api/v1/plugins` and `GET /api/v1/plugins/{id}` need a reader or admin
+`GET /api/v1/plugins` and `GET /api/v1/plugins/{id}` need a reader, operator or admin
 credential. They return `id`, the pinned `version`, `protocol_version`, the
 `enabled` ceiling, `permissions`, `api_version`, `state`, `desired`,
 `revision`, `epoch`, `instance_id` and `checked_at` (last probe).
@@ -190,7 +190,7 @@ credential. They return `id`, the pinned `version`, `protocol_version`, the
 | `incompatible` | The manifest's ID, version, protocol version or API version differs from the registration, or its instance ID is not 32 lowercase hex characters |
 | `ready` | A matching manifest answered within the last 3 s |
 
-`GET /api/v1/plugins/{id}/status` (reader or admin) makes one bounded call to
+`GET /api/v1/plugins/{id}/status` (reader, operator or admin) makes one bounded call to
 the plugin's status route and returns `{"plugin_id": ..., "data": {...}}`.
 The plugin defines `data`. An unavailable plugin returns a sanitized 503.
 
@@ -310,7 +310,7 @@ Fleet checks before forwarding:
 
 | Check | Rule |
 | --- | --- |
-| Caller | A management credential with role `reader` or `admin`. Agent credentials never reach the API |
+| Caller | A management credential with role `reader`, `operator` or `admin`. Agent credentials never reach the API |
 | Method | GET, POST, PUT, PATCH, DELETE |
 | Body | At most 64 KiB; valid JSON when present |
 | `{path}` | 1 to 512 bytes of segments of 1 to 128 characters from `A-Za-z0-9-_.`. Empty, `.`, `..` and percent-escaped segments are refused |
@@ -325,7 +325,7 @@ Headers the plugin receives:
 | --- | --- |
 | `Authorization` | Service token |
 | `X-Fleet-Caller-ID` | The credential ID |
-| `X-Fleet-Caller-Role` | `reader` or `admin` |
+| `X-Fleet-Caller-Role` | `reader`, `operator` or `admin` |
 | `X-Fleet-Plugin-Instance`, `X-Fleet-Plugin-Epoch` | Check both equal your current session; answer 409 otherwise |
 | `Content-Type` | `application/json` |
 | `If-Match` | Optional |
@@ -367,7 +367,7 @@ free of request data, secrets and upstream text.
 
 Fleet authenticates the caller and passes its identity. The plugin decides
 what each role may do. Livecapture, for example, lets readers list and
-admins start captures, and scopes captures to the credential that created
+admins and operators start captures, and scopes captures to the credential that created
 them. The caller ID is stable for a credential: use it as the owner of
 records the plugin creates. Document the rules in the plugin's API schema.
 
@@ -543,7 +543,7 @@ does not pin stays `incompatible` and receives no traffic.
 - Compare the service token in constant time on every route, the manifest
   included.
 - Accept status and API calls only with exactly one caller ID and a role of
-  `reader` or `admin`. Enforce your own per-role rules.
+  `reader`, `operator` or `admin`. Enforce your own per-role rules.
 - On API calls, check instance and epoch against your current session.
 - Stop admitted work and clear host-derived caches when the epoch changes.
 - Bound every request body, page and loop. Refuse rather than queue when busy.

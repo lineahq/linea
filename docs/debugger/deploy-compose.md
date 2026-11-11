@@ -507,7 +507,8 @@ lists them all:
 | --- | --- |
 | `fleet_database_url`, `fleet_migrate_database_url` | Full URLs of the roles `fleet_app` and `fleet_migrator` on the database `fleet`, with random hex passwords: `postgres://fleet_app:<password>@postgres:5432/fleet?sslmode=disable` |
 | `capture_database_url`, `capture_migrate_database_url` | The same for `capture_app` and `capture_migrator` on `livecapture` |
-| `fleet_token` | `linea-server`'s fleet token, `of1_<32 hex>_<64 hex>` |
+| `fleet_admin_token` | The fleet admin token, `of1_<32 hex>_<64 hex>`. `fleet-bootstrap` installs it as the first fleet admin. It stays with you, to issue fleet credentials and run plugin operations; `linea-server` never gets it. |
+| `fleet_operator_token` | `linea-server`'s fleet token, a different `of1_<32 hex>_<64 hex>`. `fleet-bootstrap` installs it as a fleet operator: admin without the credentials API and plugin lifecycle operations. |
 | `capture_host_token`, `capture_service_token`, `capture_metrics_token` | The plugin's tokens |
 | `capture_tls.crt`, `capture_tls.key` | The plugin's TLS certificate and key. Collectors need the certificate as their CA. The plugin runs as uid 65532, so the key must be readable by it (`chmod 644`). |
 
@@ -524,7 +525,9 @@ url fleet_database_url fleet_app fleet
 url fleet_migrate_database_url fleet_migrator fleet
 url capture_database_url capture_app livecapture
 url capture_migrate_database_url capture_migrator livecapture
-printf 'of1_%s_%s\n' "$(openssl rand -hex 16)" "$(openssl rand -hex 32)" > secrets/fleet_token
+for name in fleet_admin_token fleet_operator_token; do
+  printf 'of1_%s_%s\n' "$(openssl rand -hex 16)" "$(openssl rand -hex 32)" > secrets/$name
+done
 for name in capture_host_token capture_service_token capture_metrics_token; do
   openssl rand -hex 32 > secrets/$name
 done
@@ -536,7 +539,14 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 825 -subj /CN=livecapture-plugin
 
 To let the debugger capture raw points, add `linea-server`'s credential ID to
 `raw_principals` in `livecapture.json`: it is the second `_`-separated field
-of the fleet token (`cut -d_ -f2 secrets/fleet_token`).
+of the operator token (`cut -d_ -f2 secrets/fleet_operator_token`).
+
+A stack set up with a single `fleet_token` file keeps it as the admin token:
+rename it to `fleet_admin_token` (`mv secrets/fleet_token secrets/fleet_admin_token`)
+and create `fleet_operator_token` as above. The script's bootstrap step then
+installs the operator and `linea-server` connects with it; its raw-capture
+entry in `raw_principals`, if you set one, must name the operator token's
+credential ID instead.
 
 Start it from the repository root with `scripts/debugger/compose-fleet.sh`
 (add `--build` with `LINEA_VERSION=dev`), and pass both files to every later

@@ -12,9 +12,14 @@
 #   fleet_migrate_database_url    postgres://fleet_migrator:<pw>@postgres:5432/fleet?sslmode=disable
 #   capture_database_url          postgres://capture_app:<pw>@postgres:5432/livecapture?sslmode=disable
 #   capture_migrate_database_url  postgres://capture_migrator:<pw>@postgres:5432/livecapture?sslmode=disable
-#   fleet_token                   linea-server's fleet admin token, which
-#       fleet-bootstrap installs as the first fleet admin:
-#       printf 'of1_%s_%s\n' "$(openssl rand -hex 16)" "$(openssl rand -hex 32)" > secrets/fleet_token
+#   fleet_admin_token             the fleet admin token, which fleet-bootstrap
+#       installs as the first fleet admin. It stays with you, for issuing
+#       fleet credentials and plugin operations; linea-server never gets it:
+#       printf 'of1_%s_%s\n' "$(openssl rand -hex 16)" "$(openssl rand -hex 32)" > secrets/fleet_admin_token
+#   fleet_operator_token          linea-server's fleet credential, which
+#       fleet-bootstrap installs as a fleet operator (admin without the
+#       credentials API and plugin lifecycle operations); a different token:
+#       printf 'of1_%s_%s\n' "$(openssl rand -hex 16)" "$(openssl rand -hex 32)" > secrets/fleet_operator_token
 #   capture_host_token, capture_service_token, capture_metrics_token
 #                                 the plugin's tokens (openssl rand -hex 32)
 #   capture_tls.crt, capture_tls.key
@@ -29,13 +34,14 @@
 # The plugin's settings are livecapture.json beside this file, and fleet's
 # plugin list fleet-plugins.json. To let captures include raw points, add
 # credential IDs to raw_principals in livecapture.json; linea-server's is the
-# second _-separated field of its fleet token. LINEA_CAPTURE_CONFIG names
+# second _-separated field of fleet_operator_token. LINEA_CAPTURE_CONFIG names
 # another copy of it, kept out of the files an upgrade replaces.
 #
 # Initialize once, and again after an upgrade (migrations stay explicit):
 #   scripts/debugger/compose-fleet.sh            (from the repository root)
 # It creates the databases and roles, migrates both schemas, installs the
-# fleet token as the first fleet admin and starts the stack. After changing
+# admin token as the first fleet admin and the operator token as linea-server's
+# fleet operator, and starts the stack. After changing
 # a secret file, run it again, then restart the services that read it.
 #
 # Optional settings, in .env:
@@ -191,8 +197,8 @@ services:
 
   # The base stack's flags, plus the fleet connection.
   linea:
-    command: [--addr, "0.0.0.0:7070", --allow-http, --mcp, --drain-timeout, 25s, --fleet-url, "http://fleet:8080", --fleet-allow-http, --fleet-token-file, /run/secrets/fleet_token]
-    secrets: [fleet_token]
+    command: [--addr, "0.0.0.0:7070", --allow-http, --mcp, --drain-timeout, 25s, --fleet-url, "http://fleet:8080", --fleet-allow-http, --fleet-token-file, /run/secrets/fleet_operator_token]
+    secrets: [fleet_operator_token]
     networks: [fleet]
     depends_on:
       fleet:
@@ -219,17 +225,19 @@ services:
     secrets: [capture_migrate_database_url]
     networks: [database]
     restart: "no"
-  # Installs linea-server's token as the first fleet admin; repeating it
-  # changes nothing while that admin is active.
+  # Installs the admin token as the first fleet admin and linea-server's
+  # token as a fleet operator; repeating it changes nothing while they are
+  # active.
   fleet-bootstrap:
     <<: *fleet-hardened
     image: ghcr.io/lineahq/linea-fleet:${LINEA_VERSION:-0.2.0}
     profiles: [fleet-init]
-    command: [bootstrap, --server-id, "${LINEA_FLEET_SERVER_ID:-linea-fleet}", --name, linea-server]
+    command: [bootstrap, --server-id, "${LINEA_FLEET_SERVER_ID:-linea-fleet}", --name, deployment-admin, --operator-name, linea-server]
     environment:
       LINEA_FLEET_DATABASE_URL_FILE: /run/secrets/fleet_database_url
-      LINEA_FLEET_BOOTSTRAP_TOKEN_FILE: /run/secrets/fleet_token
-    secrets: [fleet_database_url, fleet_token]
+      LINEA_FLEET_BOOTSTRAP_TOKEN_FILE: /run/secrets/fleet_admin_token
+      LINEA_FLEET_OPERATOR_TOKEN_FILE: /run/secrets/fleet_operator_token
+    secrets: [fleet_database_url, fleet_admin_token, fleet_operator_token]
     networks: [database]
     restart: "no"
 
@@ -244,8 +252,10 @@ secrets:
     file: ${LINEA_SECRETS_DIR:-./secrets}/capture_database_url
   capture_migrate_database_url:
     file: ${LINEA_SECRETS_DIR:-./secrets}/capture_migrate_database_url
-  fleet_token:
-    file: ${LINEA_SECRETS_DIR:-./secrets}/fleet_token
+  fleet_admin_token:
+    file: ${LINEA_SECRETS_DIR:-./secrets}/fleet_admin_token
+  fleet_operator_token:
+    file: ${LINEA_SECRETS_DIR:-./secrets}/fleet_operator_token
   capture_host_token:
     file: ${LINEA_SECRETS_DIR:-./secrets}/capture_host_token
   capture_service_token:

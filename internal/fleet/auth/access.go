@@ -146,8 +146,8 @@ func Generate(req CredentialRequest, now time.Time) (Issued, error) {
 		return Issued{}, fleet.Invalid("id " + fleet.IDRule)
 	case !SafeName(req.Name):
 		return Issued{}, fleet.Invalid(NameRule)
-	case req.Role != "admin" && req.Role != "reader" && req.Role != "agent":
-		return Issued{}, fleet.Invalid("role must be admin, reader or agent")
+	case req.Role != "admin" && req.Role != "operator" && req.Role != "reader" && req.Role != "agent":
+		return Issued{}, fleet.Invalid("role must be admin, operator, reader or agent")
 	case req.ExpiresAt == nil && req.Role == "agent":
 		return Issued{}, fleet.Invalid("expires_at is required for agent credentials")
 	case req.ExpiresAt != nil && (!req.ExpiresAt.After(now) || req.ExpiresAt.After(now.Add(365*24*time.Hour))):
