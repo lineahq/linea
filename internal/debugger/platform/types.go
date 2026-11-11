@@ -15,6 +15,7 @@ import (
 	"github.com/lineahq/linea/internal/debugger/instrument"
 	"github.com/lineahq/linea/internal/debugger/ottldebug"
 	"github.com/lineahq/linea/internal/debugger/recommend"
+	"github.com/lineahq/linea/internal/debugger/release"
 	"github.com/lineahq/linea/internal/debugger/statementedit"
 	"github.com/lineahq/linea/internal/debugger/topology"
 )
@@ -83,6 +84,10 @@ const TimestampsRebased = engine.TimestampsRebased
 // ModeStandIn is the execution mode of a component whose type is not in the
 // distribution.
 const ModeStandIn = topology.ModeStandIn
+
+// ProductVersion is the version of this build of linea, as a release stamps
+// it, for adapters that describe the process (the server's metrics resource).
+func ProductVersion() string { return release.ProductVersion }
 
 // ReferenceStandIn is the source of a reference that resolved to a stand-in
 // string.

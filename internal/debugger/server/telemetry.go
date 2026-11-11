@@ -16,7 +16,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	"go.uber.org/zap"
 
-	"github.com/lineahq/linea/internal/debugger/release"
+	"github.com/lineahq/linea/internal/debugger/platform"
 )
 
 // linea-server exports its own metrics (the run queue, leases, workers,
@@ -89,7 +89,7 @@ func serverMeterProvider(ctx context.Context, lookup envLookup, logger *zap.Logg
 	res, err := resource.New(ctx,
 		resource.WithAttributes(
 			attribute.String("service.name", "linea-server"),
-			attribute.String("service.version", release.ProductVersion),
+			attribute.String("service.version", platform.ProductVersion()),
 			attribute.String("service.instance.id", hex.EncodeToString(instance)),
 		),
 		resource.WithFromEnv(),
