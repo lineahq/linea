@@ -209,9 +209,13 @@ Do not run the full test suite on a shared or constrained machine.
 
 `.github/workflows/dco.yml` checks every pull request commit for a
 `Signed-off-by` trailer (`CONTRIBUTING.md`). `.github/workflows/ci.yml` runs on
-pull requests (and by hand from the Actions tab), not on push, and only builds the product images (`linea-server`,
+pull requests (and by hand from the Actions tab), not on push. It builds the product images (`linea-server`,
 `linea-worker`, `linea-builder`, `linea-fleet`, `linea-fleet-livecapture`)
-with the repository root as context. Tests and the test-only images run
+with the repository root as context, and runs `scripts/test-light.sh` (the
+packages whose test binaries do not link the Collector registry, and
+`pluginsdk`) and `scripts/check-deploy.sh` (chart and Compose files);
+`release.yml` runs both again before publishing. Actions are pinned by commit
+SHA. The other tests and the test-only images run
 locally: before a release, run the checklist in "Before a release" in
 `docs/internals/development.md` (every module, the 0.160 runtime, the store,
 the fan-out gate, web, the test-only images, Collector live capture and the

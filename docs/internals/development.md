@@ -461,11 +461,23 @@ Fleet and Collector component checks are listed in `AGENTS.md`
 ## Before a release
 
 CI (`.github/workflows/ci.yml`) runs on pull requests and by hand, not
-on push, and only builds the five product images (`linea-server`, `linea-worker`,
+on push. It builds the five product images (`linea-server`, `linea-worker`,
 `linea-builder`, `linea-fleet`, `linea-fleet-livecapture`), the ones
-`release.yml` publishes. Tests and the test-only images run locally,
-so before tagging a release run these on a machine with Docker and enough
-memory, one at a time, and record the result in the pull request:
+`release.yml` publishes, and runs two scripts that fit a hosted runner;
+`release.yml` runs them again on the tagged commit before it publishes:
+
+- `scripts/test-light.sh` vets and tests every root-module package whose
+  test binary does not link the Collector registry (`--list` prints them:
+  fleet, live capture, the server and the debugger packages that never run
+  a pipeline), then `pluginsdk`. A test that only needs a Collector-shaped
+  dependency should not import `engine/local`, or its package drops out of
+  this set.
+- `scripts/check-deploy.sh` lints and renders the Helm chart with fleet off
+  and on, and resolves every Compose file with each overlay.
+
+The other tests and the test-only images run locally, so before tagging a
+release run these on a machine with Docker and enough memory, one at a
+time, and record the result in the pull request:
 
 - Each module in `go.work` (`.`, `collector/distribution`,
   `collector/livecapture`, `collector/provider`, `pluginsdk`, `collector/tools/testlab`,
