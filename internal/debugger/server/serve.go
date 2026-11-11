@@ -147,6 +147,19 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 	if err != nil {
 		return err
 	}
+	meters, protocol, err := serverMeterProvider(ctx, processEnvironment().lookup, logger)
+	if err != nil {
+		return err
+	}
+	if meters != nil {
+		// Deferred before the service's Close, it runs after it: the last
+		// collection is sent once the service has stopped.
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = meters.Shutdown(shutdownCtx)
+		}()
+	}
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return err
@@ -208,7 +221,7 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 		Logger: logger,
 		Access: tm.access, BuiltInOnWorkers: true, WorkerToken: tm.workerToken, BuilderToken: tm.buildToken, BuildExport: tm.buildExport,
 		QueueCapacity: tm.queue, Limits: tm.principals, Retention: tm.retention, Shared: true, Capture: captureOptions,
-		GitCloneBytes: tm.gitClone, AdminPassword: tm.adminPassword,
+		GitCloneBytes: tm.gitClone, AdminPassword: tm.adminPassword, MeterProvider: meterProvider(meters),
 	})
 	if err != nil {
 		return err
@@ -307,6 +320,9 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 	}
 	fmt.Fprintf(stderr, "team mode: requests are authenticated by %s, authorized by the server config's bindings, and run on the team's default runtime unless they name one\n",
 		strings.Join(methods, ", "))
+	if meters != nil {
+		fmt.Fprintf(stderr, "exporting server metrics over OTLP (%s)\n", protocol)
+	}
 	if captureOptions.Fleet.Endpoint != "" {
 		fmt.Fprintf(stderr, "live capture through fleet at %s\n", captureOptions.Fleet.Endpoint)
 	}
