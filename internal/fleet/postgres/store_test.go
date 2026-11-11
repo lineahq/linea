@@ -384,16 +384,21 @@ func TestPostgresLifecycle(t *testing.T) {
 	}
 	// Fault injection: history publication fails after the inventory UPDATE.
 	// Both must roll back; no uncommitted observation can become visible.
+	// LastReportAt may still move: the identical report above was a heartbeat,
+	// which flushSeen writes on its own tick. The faulted observation carries
+	// a time no heartbeat has, so a leak of it shows.
 	beforeFault, _ := s.GetAgent(ctx, id)
 	if _, err := s.pool.Exec(ctx, "ALTER TABLE fleet.events ADD CONSTRAINT fixture_reject_update CHECK(kind <> 'agent.changed') NOT VALID"); err != nil {
 		t.Fatal(err)
 	}
 	unhealthy := false
-	if err := s.ObserveAgent(ctx, id, agent.Credential.ID, beforeFault.Generation, fleet.Report{Capabilities: 77, Healthy: &unhealthy}, time.Now()); err == nil {
+	faultedAt := time.Now().Add(time.Hour)
+	if err := s.ObserveAgent(ctx, id, agent.Credential.ID, beforeFault.Generation, fleet.Report{Capabilities: 77, Healthy: &unhealthy}, faultedAt); err == nil {
 		t.Fatal("failed history publication was accepted")
 	}
 	afterFault, _ := s.GetAgent(ctx, id)
-	if afterFault.Capabilities != beforeFault.Capabilities || afterFault.Health.Healthy != beforeFault.Health.Healthy || !afterFault.LastReportAt.Equal(*beforeFault.LastReportAt) {
+	if afterFault.Capabilities != beforeFault.Capabilities || afterFault.Health.Healthy != beforeFault.Health.Healthy ||
+		!afterFault.Health.ObservedAt.Equal(beforeFault.Health.ObservedAt) || !afterFault.LastReportAt.Before(faultedAt.Add(-time.Minute)) {
 		t.Fatal("inventory escaped a rolled-back history transaction")
 	}
 	if _, err := s.pool.Exec(ctx, "ALTER TABLE fleet.events DROP CONSTRAINT fixture_reject_update"); err != nil {
