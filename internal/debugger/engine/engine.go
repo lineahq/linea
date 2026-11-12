@@ -87,6 +87,8 @@ type Request struct {
 	// Observer, if set, receives every event of the instrumented run as it
 	// is recorded. It must return quickly.
 	Observer func(instrument.Event) `json:"-"`
+	// Phases, if set, records where the execution's time went (phases.go).
+	Phases *Phases `json:"-"`
 	// ConfigSnapshot is an internal prepared provider source. It is never client
 	// JSON; Prepare captures one when absent, before platform admission.
 	ConfigSnapshot *config.Snapshot `json:"-"`
@@ -269,6 +271,15 @@ var ErrInvalidRequest = errors.New("invalid request")
 // Execute runs the request. Errors wrapping ErrInvalidRequest describe a
 // malformed request; other errors come from configuration or execution.
 func Execute(ctx context.Context, req Request) (*Report, error) {
+	t := req.Phases.Track()
+	rep, err := execute(ctx, req, t)
+	t.Done(err)
+	return rep, err
+}
+
+// execute is Execute, timing its phases on t.
+func execute(ctx context.Context, req Request, t *PhaseTracker) (*Report, error) {
+	t.Next(PhaseConfigResolve)
 	var err error
 	req, err = Prepare(ctx, req)
 	if err != nil {
@@ -319,12 +330,14 @@ func Execute(ctx context.Context, req Request) (*Report, error) {
 	rep.References = resolved.References
 	rep.Timestamps = timestamps(opts.Inputs, rebase, c.WallClockReads(resolved.Config), time.Now())
 
+	t.Next(PhaseCollectorRun)
 	if rep.Result, err = c.Run(ctx, opts); err != nil {
 		return nil, err
 	}
 	if req.Normalize {
 		rep.Result.Canonicalize()
 	}
+	t.Next(PhaseAnalysis)
 	// Missing output is final only when the run completed: a clean Collector
 	// shutdown flushes buffering processors.
 	if rep.Stages, err = analysis.Analyze(rep.Result.Events, rep.Result.Snapshots, rep.Result.Completed()); err != nil {
@@ -373,6 +386,7 @@ func Execute(ctx context.Context, req Request) (*Report, error) {
 		}
 	}
 	if req.Compare {
+		t.Next(PhaseCollectorReference)
 		if rep.Reference, err = c.RunReference(ctx, opts); err != nil {
 			return nil, fmt.Errorf("reference run: %w", err)
 		}

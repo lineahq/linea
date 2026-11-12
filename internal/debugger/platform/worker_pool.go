@@ -341,7 +341,7 @@ func (p *poolWorker) Execute(ctx context.Context, req engine.Request) (*engine.R
 	if err != nil {
 		return nil, err
 	}
-	rep, err := e.conn.client.ExecuteJob(ctx, worker.Job{RunID: req.RunID, Bundle: bundle, Observer: req.Observer, Log: req.Log, Binary: b})
+	rep, err := e.conn.client.ExecuteJob(ctx, worker.Job{RunID: req.RunID, Bundle: bundle, Observer: req.Observer, Log: req.Log, Phases: req.Phases, Binary: b})
 	return rep, p.s.suspected(e, b, err)
 }
 
@@ -480,12 +480,12 @@ func (s *Service) freedLocked() {
 // runPooled executes a job on the connected worker that claimed it. With
 // object storage, a bundle above worker.InlineLimit travels as a presigned
 // URL and a large result comes back through a staged upload.
-func (s *Service) runPooled(job *pendingRun) (*engine.Report, error) {
+func (s *Service) runPooled(job *pendingRun, phases *engine.Phases) (*engine.Report, error) {
 	r := job.handle
 	r.mu.Lock()
 	raw, attempt := r.bundle, r.attempt
 	r.mu.Unlock()
-	j := worker.Job{RunID: r.id, Observer: job.request.Observer, Log: job.request.Log}
+	j := worker.Job{RunID: r.id, Observer: job.request.Observer, Log: job.request.Log, Phases: phases}
 	var err error
 	if job.exec.pool() != "" {
 		// The binary the run was pinned to, which the pool claimed it for,

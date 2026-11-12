@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -250,7 +251,9 @@ func TestPayloadsTravelThroughPresignedURLs(t *testing.T) {
 		t.Fatal(err)
 	}
 	var fetched struct{ digest string }
+	phases := engine.NewPhases(time.Now())
 	got, err := c.ExecuteJob(ctx, Job{
+		Phases:    phases,
 		BundleURL: srv.URL + "/bundle", BundleDigest: Digest(bundle), BundleSize: int64(len(bundle)),
 		ResultURL: srv.URL + "/result",
 		FetchResult: func(_ context.Context, digest string, size int64) ([]byte, error) {
@@ -272,11 +275,17 @@ func TestPayloadsTravelThroughPresignedURLs(t *testing.T) {
 	if a, b := encode(t, want), encode(t, got); !bytes.Equal(a, b) {
 		t.Fatalf("uploaded report differs from the inline one\ninline:   %.2000s\nuploaded: %.2000s", a, b)
 	}
+	// The worker timed every part of the run, in order, and none failed.
+	checkPhases(t, phases.List(), []string{engine.PhaseBundleFetch, engine.PhaseBundleDecode, engine.PhaseConfigResolve,
+		engine.PhaseCollectorRun, engine.PhaseAnalysis, engine.PhaseResultEncode, engine.PhaseResultUpload}, "")
 
-	_, err = c.ExecuteJob(ctx, Job{BundleURL: srv.URL + "/bundle", BundleDigest: Digest([]byte("other")), BundleSize: int64(len(bundle))})
+	phases = engine.NewPhases(time.Now())
+	_, err = c.ExecuteJob(ctx, Job{BundleURL: srv.URL + "/bundle", BundleDigest: Digest([]byte("other")), BundleSize: int64(len(bundle)), Phases: phases})
 	if !errors.Is(err, engine.ErrBundle) {
 		t.Fatalf("a bundle with another digest = %v, want ErrBundle", err)
 	}
+	// A failed fetch ends the timings there.
+	checkPhases(t, phases.List(), []string{engine.PhaseBundleFetch}, engine.PhaseBundleFetch)
 	_, err = c.ExecuteJob(ctx, Job{BundleURL: srv.URL + "/missing", BundleDigest: Digest(bundle), BundleSize: int64(len(bundle))})
 	if !errors.Is(err, engine.ErrRuntimeUnavailable) {
 		t.Fatalf("a missing bundle = %v, want ErrRuntimeUnavailable", err)
@@ -337,5 +346,26 @@ func TestParseServerURL(t *testing.T) {
 		case tc.want == "" && !errors.Is(err, engine.ErrInvalidRequest):
 			t.Errorf("parseServerURL(%q) = %v, want an invalid request", tc.raw, err)
 		}
+	}
+}
+
+// checkPhases asserts the phases' names in order, that offsets and
+// durations follow one another, and that only failed, if set, failed.
+func checkPhases(t *testing.T, got []engine.Phase, want []string, failed string) {
+	t.Helper()
+	names := make([]string, len(got))
+	var end time.Duration
+	for i, p := range got {
+		names[i] = p.Name
+		if p.Offset < end || p.Duration < 0 {
+			t.Errorf("phase %s at %v for %v overlaps the one before, which ended at %v", p.Name, p.Offset, p.Duration, end)
+		}
+		end = p.Offset + p.Duration
+		if p.Failed != (p.Name == failed) {
+			t.Errorf("phase %s failed = %v", p.Name, p.Failed)
+		}
+	}
+	if !slices.Equal(names, want) {
+		t.Fatalf("phases %v, want %v", names, want)
 	}
 }

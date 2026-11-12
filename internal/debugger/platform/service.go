@@ -821,15 +821,25 @@ func (s *Service) work() {
 // run executes a job on the connected worker that claimed it, on its built
 // runtime, or with the service's executor.
 func (s *Service) run(job *pendingRun) (*engine.Report, error) {
+	span, phases := s.startExecuteSpan(job.span)
+	report, err := s.runOn(job, phases)
+	s.endExecuteSpan(span, phases, err)
+	return report, err
+}
+
+// runOn is run, recording the execution's phases on phases.
+func (s *Service) runOn(job *pendingRun, phases *engine.Phases) (*engine.Report, error) {
+	req := job.request
+	req.Phases = phases
 	b := job.runtime
 	if b == nil {
-		return s.executor(job.ctx, job.request)
+		return s.executor(job.ctx, req)
 	}
 	var report *engine.Report
 	var err error
 	if job.pooled {
-		report, err = s.runPooled(job)
-	} else if report, err = b.worker.Execute(job.ctx, job.request); errors.Is(err, engine.ErrRuntimeUnavailable) {
+		report, err = s.runPooled(job, phases)
+	} else if report, err = b.worker.Execute(job.ctx, req); errors.Is(err, engine.ErrRuntimeUnavailable) {
 		s.unbind(b)
 	}
 	if report != nil {

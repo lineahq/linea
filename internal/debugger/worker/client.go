@@ -327,7 +327,7 @@ func (c *Client) Execute(ctx context.Context, req engine.Request) (*engine.Repor
 	if err != nil {
 		return nil, err
 	}
-	return c.ExecuteJob(ctx, Job{RunID: req.RunID, Bundle: bundle, Observer: req.Observer, Log: req.Log})
+	return c.ExecuteJob(ctx, Job{RunID: req.RunID, Bundle: bundle, Observer: req.Observer, Log: req.Log, Phases: req.Phases})
 }
 
 // Job is an admitted run as a server assigns it: its bundle
@@ -345,6 +345,9 @@ type Job struct {
 	FetchResult func(ctx context.Context, digest string, size int64) ([]byte, error)
 	Observer    func(instrument.Event)
 	Log         *engine.LogTail
+	// Phases, when set, receives the phases the worker timed, as it sent
+	// them: offset from its receipt of the request.
+	Phases *engine.Phases
 	// Binary is the runtime a pool worker runs the job on; nil for a
 	// worker of one runtime.
 	Binary *PoolBinary
@@ -375,6 +378,7 @@ func (c *Client) ExecuteJob(ctx context.Context, job Job) (*engine.Report, error
 	if err != nil {
 		return nil, err
 	}
+	job.Phases.Add(r.Phases...)
 	if err := decodeError(r.Error); err != nil {
 		return nil, err
 	}

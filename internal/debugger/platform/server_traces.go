@@ -3,11 +3,14 @@ package platform
 import (
 	"context"
 	"errors"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
+
+	"github.com/lineahq/linea/internal/debugger/engine"
 )
 
 // The server's own traces: one linea.run span per run attempt this instance
@@ -22,6 +25,9 @@ import (
 const (
 	spanRun        = "linea.run"
 	spanRunPublish = "linea.run.publish"
+	spanRunExecute = "linea.run.execute"
+	// spanPhase prefixes the span of each phase an execution reports.
+	spanPhase = "linea.worker."
 
 	attrRunID       = "linea.run.id"
 	attrRunMode     = "linea.run.mode"
@@ -30,6 +36,10 @@ const (
 	attrRunState    = "linea.run.state"
 	attrErrorCode   = "linea.error.code"
 	attrRunEvidence = "linea.run.evidence"
+	attrPhases      = "linea.worker.phases"
+
+	// maxPhases bounds the phases one execution may report.
+	maxPhases = 16
 
 	// runReleased is the state of an attempt this instance handed back to
 	// the queue, for another instance or a later attempt.
@@ -114,4 +124,55 @@ func endPublishSpan(span trace.Span, evidence, failed bool) {
 		span.SetStatus(codes.Error, string(CodeStorageError))
 	}
 	span.End()
+}
+
+// startExecuteSpan starts the span of a run's execution under the run span
+// ctx and, when it records, the recorder of the phases the execution
+// reports, counting from the span's start.
+func (s *Service) startExecuteSpan(ctx context.Context) (trace.Span, *engine.Phases) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	start := time.Now()
+	_, span := s.tracer.Start(ctx, spanRunExecute, trace.WithSpanKind(trace.SpanKindInternal), trace.WithTimestamp(start))
+	if !span.IsRecording() {
+		return span, nil
+	}
+	return span, engine.NewPhases(start)
+}
+
+// endExecuteSpan ends span with a child per phase the execution reported,
+// placed by its offset. A worker's phases count from its receipt of the
+// request, so each is clamped into the span; unknown names, phases beyond
+// maxPhases and negative times are dropped.
+func (s *Service) endExecuteSpan(span trace.Span, phases *engine.Phases, err error) {
+	end := time.Now()
+	start := end.Add(-phases.Since(end))
+	ctx := trace.ContextWithSpan(context.Background(), span)
+	kept := 0
+	for _, p := range phases.List() {
+		if kept == maxPhases || !engine.KnownPhase(p.Name) || p.Offset < 0 || p.Duration < 0 {
+			continue
+		}
+		kept++
+		from := earlier(start.Add(p.Offset), end)
+		to := earlier(from.Add(p.Duration), end)
+		_, child := s.tracer.Start(ctx, spanPhase+p.Name, trace.WithSpanKind(trace.SpanKindInternal), trace.WithTimestamp(from))
+		if p.Failed {
+			child.SetStatus(codes.Error, "")
+		}
+		child.End(trace.WithTimestamp(to))
+	}
+	span.SetAttributes(attribute.Int(attrPhases, kept))
+	if err != nil {
+		span.SetStatus(codes.Error, string(runErrorCode(err)))
+	}
+	span.End(trace.WithTimestamp(end))
+}
+
+func earlier(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
 }

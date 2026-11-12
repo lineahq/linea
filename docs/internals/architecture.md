@@ -365,6 +365,15 @@ The root Go module is declared in `go.mod`.
   `linea.run` span per attempt (linked to the submitting request's span
   context, kept on `pendingRun` in memory only) and ends it with the run's
   state, or `released`; `publishEnd` wraps the write in `linea.run.publish`.
+  `Service.run` wraps the execution in `linea.run.execute` and, when it
+  records, hands an `engine.Phases` recorder (`engine/phases.go`) down as
+  `engine.Request.Phases` / `worker.Job.Phases`. `engine.Execute` times
+  `config.resolve`, `collector.run`, `analysis` and `collector.reference`. The
+  worker adds `bundle.fetch`, `bundle.decode`, `result.encode` and
+  `result.upload`, counted from its receipt of the request, and sends them as
+  the result's `phases`. A pool relay prepends `runtime.acquire` and shifts its
+  child's phases. `endExecuteSpan` keeps known names only, at most
+  `maxPhases`, and clamps each into the execute span.
   The server's `traced` middleware (`server/tracing.go`) gives each request
   one server span named by `api.Server.Route` or the outer mux pattern, and
   skips upgraded worker and builder connections. Pool workers (`worker_pool.go`): a worker whose hello

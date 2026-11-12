@@ -606,7 +606,26 @@ A request with a W3C `traceparent` header continues that trace.
 | --- | --- | --- | --- |
 | `{method} {route}`, such as `GET /api/v1/runs/{id}`; the method alone for a request no route serves | Server | `http.request.method`, `http.route`, `http.response.status_code` | One API, MCP, sign-in or web request. Error status on 5xx. Worker and builder connections get no span. |
 | `linea.run` | Internal, a root span | `linea.run.id`, `linea.run.mode` (`quick`, `scenario`), `linea.run.attempt`, `linea.runtime.id` (a built runtime's ID; absent for the built-in one), `linea.run.state` (`done`, `error`, `cancelled`, `lost`, or `released` when the instance handed the attempt back to the queue), `linea.error.code` (`run_failed`, `storage_error` or another platform error code) | One run attempt on this instance, from its claim to its published outcome. Linked to the request span that submitted it when the same instance took the request. Error status when the run ended in an error. |
+| `linea.run.execute` | Internal, child of `linea.run` | `linea.worker.phases` (how many phases the execution reported; 0 from a worker of an earlier release) | Executing the run: from sending it to its worker to holding the decoded report. Error status when the execution failed. |
+| `linea.worker.<phase>` | Internal, child of `linea.run.execute` | none | One timed phase of the execution (below). Error status when the phase failed. |
 | `linea.run.publish` | Internal, child of `linea.run` | `linea.run.evidence` (whether the evidence was written) | Writing the outcome to the database and object store. Error status when no write succeeded. |
+
+The worker exports nothing. It times its phases and sends them with the
+run's result. The server places them under `linea.run.execute`, counting
+from when it sent the run, so worker and server clocks need not agree. It
+keeps at most 16 phases, under the names below only:
+
+| Phase | Covers |
+| --- | --- |
+| `runtime.acquire` | A pool worker finding or starting the runtime's process |
+| `bundle.fetch` | Downloading the run bundle from object storage, for a large bundle |
+| `bundle.decode` | Decoding and checking the bundle |
+| `config.resolve` | Reading the input and resolving the configuration |
+| `collector.run` | The Collector run: start, input, drain and shutdown |
+| `analysis` | Explaining the run: stages, lineage, recommendations and assertions |
+| `collector.reference` | The reference run of a comparison |
+| `result.encode` | Encoding the report |
+| `result.upload` | Uploading a large report to object storage |
 
 Spans never record a path value, query, header, user agent, client address,
 caller, error message, configuration or telemetry. Span and attribute names

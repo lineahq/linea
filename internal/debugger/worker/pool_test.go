@@ -533,10 +533,15 @@ func TestAPoolRelaysAnExecuteWithItsEventsAndResult(t *testing.T) {
 	}
 	r.waitWarm(warmIs(a.Identity, b.Identity))
 
-	// The public client path, with a result the client decodes as a report.
-	rep, err := r.client.ExecuteJob(bg(), Job{Bundle: []byte("report"), Binary: a})
+	// The public client path, with a result the client decodes as a report;
+	// the pool reports its wait for the runtime first.
+	phases := engine.NewPhases(time.Now())
+	rep, err := r.client.ExecuteJob(bg(), Job{Bundle: []byte("report"), Binary: a, Phases: phases})
 	if err != nil || rep == nil {
 		t.Fatalf("ExecuteJob = %v, %v", rep, err)
+	}
+	if got := phases.List(); len(got) == 0 || got[0].Name != engine.PhaseRuntimeAcquire {
+		t.Fatalf("relayed phases = %v, want %s first", got, engine.PhaseRuntimeAcquire)
 	}
 	// A result error comes back with its kind.
 	if res := r.call(bg(), typeExecute, a, "fail"); !errors.Is(res.err, engine.ErrBundle) {
@@ -1157,5 +1162,24 @@ func TestAPoolThatCannotRunItselfSaysSo(t *testing.T) {
 	}
 	if res := r.call(bg(), typeExecute, nil, "echo"); !errors.Is(res.err, engine.ErrRuntimeUnavailable) {
 		t.Fatalf("result = %v, want runtime unavailable", res.err)
+	}
+}
+
+// TestRelayedPhasesCountFromThePoolsReceipt: the pool's wait for its child
+// comes first and the child's phases shift by it; other requests carry none.
+func TestRelayedPhasesCountFromThePoolsReceipt(t *testing.T) {
+	received := time.Now()
+	forwarded := received.Add(300 * time.Millisecond)
+	child := []engine.Phase{{Name: engine.PhaseBundleDecode, Offset: time.Millisecond, Duration: 2 * time.Millisecond},
+		{Name: engine.PhaseCollectorRun, Offset: 3 * time.Millisecond, Duration: time.Second, Failed: true}}
+	got := relayedPhases(typeExecute, received, forwarded, child)
+	want := []engine.Phase{{Name: engine.PhaseRuntimeAcquire, Duration: 300 * time.Millisecond},
+		{Name: engine.PhaseBundleDecode, Offset: 301 * time.Millisecond, Duration: 2 * time.Millisecond},
+		{Name: engine.PhaseCollectorRun, Offset: 303 * time.Millisecond, Duration: time.Second, Failed: true}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("relayed %v, want %v", got, want)
+	}
+	if got := relayedPhases(typeInspect, received, forwarded, child); got != nil {
+		t.Fatalf("an inspection carries phases %v", got)
 	}
 }

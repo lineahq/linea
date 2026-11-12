@@ -160,6 +160,9 @@ type message struct {
 	// LogTruncated says it dropped earlier lines; older workers send none.
 	Log          string `json:"log,omitempty"`
 	LogTruncated bool   `json:"log_truncated,omitempty"`
+	// Phases time an execute result's parts, offset from the moment the
+	// worker received the request; older workers send none.
+	Phases []engine.Phase `json:"phases,omitempty"`
 
 	// Builder link (builder.go): a builder's hello, a build it is given,
 	// its log lines and its result.

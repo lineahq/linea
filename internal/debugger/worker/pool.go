@@ -832,12 +832,14 @@ func (s *poolSession) cancel(m *message) {
 // a fresh child-side ID, relays the child's events and its result under the
 // server's ID, and, when ctx ends, has the child cancel the request.
 func (s *poolSession) relay(ctx context.Context, m *message) {
+	received := time.Now()
 	if m.Deadline != nil {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithDeadline(ctx, *m.Deadline)
 		defer cancel()
 	}
 	ch, err := s.acquire(ctx, m.Binary)
+	acquired := time.Now()
 	if err != nil {
 		s.fail(m.ID, err)
 		return
@@ -854,7 +856,7 @@ func (s *poolSession) relay(ctx context.Context, m *message) {
 		return
 	}
 	_ = s.send(&message{ID: m.ID, Type: typeResult, Result: r.Result, ResultDigest: r.ResultDigest, ResultSize: r.ResultSize,
-		Error: r.Error, Log: r.Log, LogTruncated: r.LogTruncated})
+		Error: r.Error, Log: r.Log, LogTruncated: r.LogTruncated, Phases: relayedPhases(m.Type, received, acquired, r.Phases)})
 }
 
 // acquire returns the ready child of a binary for a request, starting it
@@ -1113,4 +1115,21 @@ func (s *poolSession) shutdown() {
 	}
 	wg.Wait()
 	s.wg.Wait()
+}
+
+// relayedPhases are an execution's phases as the pool reports them: its
+// own wait for the runtime's child, then the child's phases, which count
+// from the child's receipt, shifted to count from the pool's.
+func relayedPhases(typ string, received, forwarded time.Time, child []engine.Phase) []engine.Phase {
+	if typ != typeExecute {
+		return nil
+	}
+	shift := forwarded.Sub(received)
+	out := make([]engine.Phase, 0, len(child)+1)
+	out = append(out, engine.Phase{Name: engine.PhaseRuntimeAcquire, Duration: shift})
+	for _, p := range child {
+		p.Offset += shift
+		out = append(out, p)
+	}
+	return out
 }

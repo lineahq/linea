@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/lineahq/linea/internal/debugger/engine"
 	"github.com/lineahq/linea/internal/debugger/instrument"
@@ -127,6 +128,10 @@ func serve(ctx context.Context, in io.Reader, out io.Writer, name string, capaci
 		case typeCancel:
 			s.cancel(m)
 		case typeExecute, typeInspect, typeOTTL:
+			var phases *engine.Phases
+			if m.Type == typeExecute {
+				phases = engine.NewPhases(time.Now())
+			}
 			reqCtx, cancel := s.start(ctx, m)
 			if reqCtx == nil {
 				continue
@@ -139,8 +144,8 @@ func serve(ctx context.Context, in io.Reader, out io.Writer, name string, capaci
 				if m.Type == typeExecute {
 					log = &engine.LogTail{}
 				}
-				result, err := s.handle(reqCtx, m, log)
-				s.reply(m.ID, result, err, log, m.ResultURL)
+				result, err := s.handle(reqCtx, m, log, phases)
+				s.replyTimed(m.ID, result, err, log, m.ResultURL, phases)
 			}()
 		default:
 			s.reply(m.ID, nil, fmt.Errorf("%w: unknown worker request %q", engine.ErrInvalidRequest, m.Type), nil, "")
@@ -167,25 +172,39 @@ func (s *server) send(m *message) error {
 // with its result or error. A result above InlineLimit goes to resultURL,
 // when the request gave one, and the reply names its digest and size.
 func (s *server) reply(id uint64, result any, err error, log *engine.LogTail, resultURL string) {
+	s.replyTimed(id, result, err, log, resultURL, nil)
+}
+
+// replyTimed is reply for an execution timed on phases, which also times
+// encoding and uploading its result and sends them all with it.
+func (s *server) replyTimed(id uint64, result any, err error, log *engine.LogTail, resultURL string, phases *engine.Phases) {
 	m := &message{ID: id, Type: typeResult, Error: encodeError(err)}
 	if log != nil {
 		m.Log, m.LogTruncated = log.Tail()
 	}
 	if result != nil {
+		t := phases.Track()
+		t.Next(engine.PhaseResultEncode)
 		raw, merr := json.Marshal(result)
 		switch {
 		case merr != nil:
+			t.Done(merr)
 			m.Error = encodeError(errors.Join(err, merr))
 		case resultURL != "" && len(raw) > inlineLimit:
-			if uerr := uploadResult(context.Background(), resultURL, raw); uerr != nil {
+			t.Next(engine.PhaseResultUpload)
+			uerr := uploadResult(context.Background(), resultURL, raw)
+			t.Done(uerr)
+			if uerr != nil {
 				m.Error = encodeError(errors.Join(err, uerr))
 			} else {
 				m.ResultDigest, m.ResultSize = Digest(raw), int64(len(raw))
 			}
 		default:
+			t.Done(nil)
 			m.Result = raw
 		}
 	}
+	m.Phases = phases.List()
 	if werr := s.send(m); werr != nil && m.Result != nil {
 		// A result too large for a frame is still answered.
 		_ = s.send(&message{ID: id, Type: typeResult, Error: encodeError(werr), Log: m.Log, LogTruncated: m.LogTruncated})
@@ -230,10 +249,14 @@ func (s *server) cancel(m *message) {
 	cancel(cause)
 }
 
-func (s *server) handle(ctx context.Context, m *message, log *engine.LogTail) (any, error) {
+func (s *server) handle(ctx context.Context, m *message, log *engine.LogTail, phases *engine.Phases) (any, error) {
 	switch m.Type {
 	case typeExecute:
-		return s.execute(ctx, m, log)
+		rep, err := s.execute(ctx, m, log, phases)
+		if rep == nil {
+			return nil, err // not a typed nil, which would be encoded
+		}
+		return rep, err
 	case typeInspect:
 		var in engine.InspectionInput
 		if err := json.Unmarshal(m.Input, &in); err != nil {
@@ -249,23 +272,29 @@ func (s *server) handle(ctx context.Context, m *message, log *engine.LogTail) (a
 	}
 }
 
-func (s *server) execute(ctx context.Context, m *message, log *engine.LogTail) (*engine.Report, error) {
+func (s *server) execute(ctx context.Context, m *message, log *engine.LogTail, phases *engine.Phases) (*engine.Report, error) {
 	if m.Deadline != nil {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithDeadline(ctx, *m.Deadline)
 		defer cancel()
 	}
+	t := phases.Track()
 	bundle := m.Bundle
 	if m.BundleURL != "" {
+		t.Next(engine.PhaseBundleFetch)
 		var err error
 		if bundle, err = fetchBundle(ctx, m.BundleURL, m.BundleDigest, m.BundleSize); err != nil {
+			t.Done(err)
 			return nil, err
 		}
 	}
+	t.Next(engine.PhaseBundleDecode)
 	req, err := engine.DecodeBundleForRuntime(ctx, bundle, s.hello.Runtime)
+	t.Done(err)
 	if err != nil {
 		return nil, err
 	}
+	req.Phases = phases
 	if strings.TrimSpace(m.RunID) != "" {
 		req.RunID = m.RunID
 	}

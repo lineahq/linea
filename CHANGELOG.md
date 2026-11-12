@@ -140,7 +140,10 @@ the first item below.
   (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or
   `OTEL_TRACES_EXPORTER=otlp`): one span per HTTP request named by its
   route, and one `linea.run` span per run attempt with a `linea.run.publish`
-  child. An incoming W3C `traceparent` continues its trace. Spans carry IDs,
+  child and a `linea.run.execute` child. Under it, one `linea.worker.<phase>`
+  span per phase the worker timed and sent back with the result: the
+  bundle, the configuration, the Collector run, the analysis and the result.
+  The worker exports nothing itself. An incoming W3C `traceparent` continues its trace. Spans carry IDs,
   routes, states and error codes, never queries, headers, error messages or
   telemetry (`docs/debugger/team-server.md` lists them). With only the shared
   endpoint set, set `OTEL_TRACES_EXPORTER=none` to export metrics alone.
