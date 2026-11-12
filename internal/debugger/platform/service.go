@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
@@ -689,6 +690,9 @@ func (s *Service) prepareRun(prepare context.Context, project string, req engine
 		target := b.target
 		req.Runtime, out.runtime = &target, b
 	}
+	// The span includes the wait for a preparation slot (prepareGate).
+	prepareCtx, span := s.startSpan(prepareCtx, spanRunPrepare, attribute.Bool(attrRemote, out.runtime != nil && out.runtime.pooled))
+	defer span.End()
 	select {
 	case s.prepareGate <- struct{}{}:
 		if err = prepareCtx.Err(); err == nil {
@@ -795,7 +799,7 @@ func (s *Service) execute(ctx context.Context, caller Caller, mode InputMode, re
 	if err != nil {
 		return nil, err
 	}
-	if err := r.Wait(ctx); err != nil {
+	if err := s.waitRun(ctx, r); err != nil {
 		r.cancelWithCause(context.Cause(ctx))
 		_ = r.Wait(context.Background())
 	}

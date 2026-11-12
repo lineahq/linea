@@ -280,6 +280,19 @@ func checkProtocol(info *RuntimeInfo) error {
 // first use: the catalog's runtime first, served by connected workers, then the
 // store's. A runtime neither has is unavailable, naming it.
 func (s *Service) bind(ctx context.Context, name string) (*boundRuntime, error) {
+	sc := scopeOf(ctx)
+	if b := sc.boundRuntime(name); b != nil {
+		return b, nil
+	}
+	b, err := s.bindRuntime(ctx, name)
+	if err == nil {
+		sc.keep(name, b)
+	}
+	return b, err
+}
+
+// bindRuntime is bind without the request's scope.
+func (s *Service) bindRuntime(ctx context.Context, name string) (*boundRuntime, error) {
 	if name == BuiltInRuntime && s.builtInOnWorkers {
 		return s.bindBuiltIn(ctx)
 	}
@@ -552,6 +565,12 @@ type unbindOnFailure struct {
 }
 
 func (u *unbindOnFailure) Target() engine.RuntimeTarget { return u.b.target }
+
+// isPooled reports whether rt runs on a pooled worker.
+func isPooled(rt Runtime) bool {
+	u, ok := rt.(*unbindOnFailure)
+	return ok && u.b.pooled
+}
 
 // policyFor is the capture policy for a runtime: a connected worker receives
 // only the environment values its policy lets leave the machine.

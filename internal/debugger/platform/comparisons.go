@@ -73,6 +73,8 @@ type CompareRequest struct {
 // the self-contained scenario its inputs derive to (inputIdentity).
 func (s *Service) CompareRuns(ctx context.Context, caller Caller, req CompareRequest) (_ *Comparison, err error) {
 	defer s.audit(&caller, "CompareRuns", &err)()
+	// Both lookups share one catch-up.
+	ctx = withRequestScope(ctx)
 	var sides [2]comparison.Side
 	var parts [2]*engine.BundleParts
 	for i, id := range []string{req.Before, req.After} {
@@ -165,6 +167,8 @@ type ComparisonRuns struct {
 // two once they are terminal.
 func (s *Service) SubmitComparison(ctx context.Context, caller Caller, req ComparisonRequest) (_ *ComparisonRuns, err error) {
 	defer s.audit(&caller, "SubmitComparison", &err)()
+	// Both sides share one binding of a runtime they both name.
+	ctx = withRequestScope(ctx)
 	if err := s.begin(ctx, caller, authz.RunSubmit); err != nil {
 		return nil, err
 	}

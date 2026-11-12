@@ -451,15 +451,16 @@ func (s *Service) GetSuiteReport(ctx context.Context, caller Caller, id string, 
 		handles[i] = r
 	}
 	s.mu.Unlock()
+	if wait {
+		if err := s.waitSuite(ctx, suite.ID, handles); err != nil {
+			return nil, classify(err, CodeCancelled)
+		}
+	}
 	for _, h := range handles {
-		if h == nil {
+		if h == nil || wait {
 			continue
 		}
-		if wait {
-			if err := h.Wait(ctx); err != nil {
-				return nil, classify(err, CodeCancelled)
-			}
-		} else if state := h.View(false).State; !state.Terminal() {
+		if state := h.View(false).State; !state.Terminal() {
 			return nil, &Error{Code: CodeConflict, Message: "suite is not finished"}
 		}
 	}

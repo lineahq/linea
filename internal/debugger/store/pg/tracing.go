@@ -3,7 +3,9 @@ package pg
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -206,16 +208,44 @@ func (o tracedObjects) Get(ctx context.Context, key string, limit int64) ([]byte
 	return raw, err
 }
 
-// Open's span covers opening only, not reading the body.
+// Open's span covers the read too: it ends when the body is closed, so the
+// time spent streaming the object (and whatever the caller does with each
+// chunk, such as hashing it) is part of the call.
 func (o tracedObjects) Open(ctx context.Context, key string) (ObjectReader, error) {
 	ctx, span := o.begin(ctx, "Open")
 	r, err := o.next.Open(ctx, key)
-	size := int64(-1)
-	if err == nil {
-		size = r.Size
+	if err != nil {
+		finishObjectSpan(span, err, -1)
+		return r, err
 	}
-	finishObjectSpan(span, err, size)
-	return r, err
+	if span != nil {
+		r.Body = &tracedBody{ReadCloser: r.Body, span: span, size: r.Size}
+	}
+	return r, nil
+}
+
+// tracedBody ends the span of an Open when the body is closed, with error
+// status when a read failed.
+type tracedBody struct {
+	io.ReadCloser
+	span   trace.Span
+	size   int64
+	failed error
+	once   sync.Once
+}
+
+func (b *tracedBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) && b.failed == nil {
+		b.failed = err
+	}
+	return n, err
+}
+
+func (b *tracedBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.once.Do(func() { finishObjectSpan(b.span, b.failed, b.size) })
+	return err
 }
 
 func (o tracedObjects) Stat(ctx context.Context, key string) (ObjectInfo, error) {

@@ -270,7 +270,10 @@ The root Go module is declared in `go.mod`.
   (`instances.go`, `interactive_jobs.go`): on a repository-backed service the
   repository is the truth and each instance's in-memory view is a cache. It
   catches up from the change feed (`Repository.Changes`, table `changes`) before
-  every operation and follows it in the background, so suites, runs and catalog
+  every operation and follows it in the background (an operation composed of
+  others, `CheckUpgrade`, `SubmitComparison` and `CompareRuns`, puts a
+  `requestScope` in its context so they share one catch-up and each runtime's
+  binding, `request_traces.go`), so suites, runs and catalog
   changes show on every instance. The run cache (`run_cache.go`) holds
   unfinished runs, suite members and the terminal runs used most recently:
   at most `Options.RunCache` (default 1,000) of them, holding at most

@@ -247,6 +247,13 @@ the first item below.
 - A team server reads a build's manifest from object storage once and keeps
   it, instead of on every status request, and checks a stored runtime binary
   with a metadata request instead of opening it.
+- Team server traces show where a request spends its time between storage
+  calls: `linea.run.prepare` (preparing a run before admission),
+  `linea.inspect` (inspecting a configuration on a runtime), and
+  `linea.run.wait` and `linea.suite.wait` (a request waiting for runs to
+  end). `s3 Open` now lasts until the object is read and closed. An upgrade
+  check, a comparison and a comparison of two runs read the change feed once
+  and bind each runtime once, instead of once per step.
 
 ## [0.2.0]
 

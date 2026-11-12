@@ -53,7 +53,9 @@ func TestRunSpansRecordTheAttemptAndItsPublish(t *testing.T) {
 	if v := waitRun(t, failed); v.State != StateError {
 		t.Fatalf("failing run = %s", v.State)
 	}
-	waitFor(t, "eight ended spans", func() bool { return len(recorder.Ended()) == 8 })
+	// Two runs of four spans each, and the preparation of the run submitted
+	// under a request span; the other was submitted under none.
+	waitFor(t, "nine ended spans", func() bool { return len(recorder.Ended()) == 9 })
 
 	runs := map[string]sdktrace.ReadOnlySpan{}
 	publishes := map[trace.SpanID]sdktrace.ReadOnlySpan{}
@@ -69,6 +71,10 @@ func TestRunSpansRecordTheAttemptAndItsPublish(t *testing.T) {
 			executes[sp.Parent().SpanID()] = sp
 		case spanPhase + engine.PhaseCollectorRun:
 			phases[sp.Parent().SpanID()] = sp
+		case spanRunPrepare:
+			if sp.Parent().SpanID() != submitter.SpanID() || attrOf(sp, attrRemote) != "false" {
+				t.Errorf("prepare span: parent %v, attributes %v; want the submitter's child, not remote", sp.Parent().SpanID(), sp.Attributes())
+			}
 		default:
 			t.Fatalf("unexpected span %q", sp.Name())
 		}

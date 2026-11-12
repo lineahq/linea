@@ -609,12 +609,16 @@ A request with a W3C `traceparent` header continues that trace.
 | `linea.run.execute` | Internal, child of `linea.run` | `linea.worker.phases` (how many phases the execution reported; 0 from a worker of an earlier release) | Executing the run: from sending it to its worker to holding the decoded report. Error status when the execution failed. |
 | `linea.worker.<phase>` | Internal, child of `linea.run.execute` | none | One timed phase of the execution (below). Error status when the phase failed. |
 | `linea.run.publish` | Internal, child of `linea.run` | `linea.run.evidence` (whether the evidence was written) | Writing the outcome to the database and object store. Error status when no write succeeded. |
+| `linea.run.prepare` | Internal, child of the request | `linea.runtime.remote` (whether a pooled worker prepares it) | Preparing a run before its admission: waiting for a preparation slot, resolving the input and the configuration, and encoding the bundle. |
+| `linea.inspect` | Internal, child of the request | `linea.runtime.remote` | Inspecting a configuration on a runtime. |
+| `linea.run.wait` | Internal, child of the request | `linea.run.id` | A request waiting for a run to end (`wait=true`, a comparison, an upgrade check). The run itself has its own trace, linked to the request that submitted it. A run that already ended has no wait span. |
+| `linea.suite.wait` | Internal, child of the request | `linea.suite.id`, `linea.suite.runs` (how many runs it waited for) | A suite report waiting for its runs to end. |
 | `linea.build` | Internal, a root span | `linea.build.id`, `linea.build.attempt`, `linea.build.verified`, `linea.build.state` (`done`, `failed`, `cancelled`, or `released` when the attempt was left to expire: the builder or its lease was lost, or the server stopped), `linea.build.failure` on a failed build (`builder`: the builder reported an error; `timeout`; `rejected`: the server refused the result; `inputs`: preparing the inputs failed) | One runtime build attempt on the instance its builder is connected to, from its claim to its outcome. Linked to the span of the `BuildRuntime` request. A build reused from an identical one has no attempt and no span. Error status when the build failed. |
 | `linea.build.execute` | Internal, child of `linea.build` | `linea.builder.phases` (how many phases the builder reported) | Sending the job to the builder until its result. Error status when the builder failed, timed out or was lost. |
 | `linea.builder.<phase>` | Internal, child of `linea.build.execute` | none | One timed phase of the build (below). Error status when the phase failed. |
 | `linea.build.publish` | Internal, child of `linea.build` | none | Checking and storing the binary, registering the runtime and writing the outcome. Error status (`storage`) when a write failed. |
 | `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `WITH`, …, `BATCH`, `COPY` | Client, child of the span whose work made it | `db.system.name` (`postgresql`), `db.operation.name`, `db.query.text` (the statement with its `$n` placeholders), `db.operation.batch.size` for a batch, `db.response.status_code` (the SQLSTATE) on an error | One PostgreSQL statement, batch or copy. Error status carries the SQLSTATE. |
-| `s3 Put`, `s3 Get`, `s3 Open`, `s3 Stat`, `s3 Copy`, `s3 Delete`, `s3 List` | Client, child of the span whose work made it | `rpc.system` (`aws-api`), `rpc.method`, `linea.object.bytes` where known | One object storage call. A missing object is not an error. Presigning makes no call and has no span. |
+| `s3 Put`, `s3 Get`, `s3 Open`, `s3 Stat`, `s3 Copy`, `s3 Delete`, `s3 List` | Client, child of the span whose work made it | `rpc.system` (`aws-api`), `rpc.method`, `linea.object.bytes` where known | One object storage call. `s3 Open` lasts until its caller closes the object, so it includes reading it. A missing object is not an error. Presigning makes no call and has no span. |
 
 The worker exports nothing. It times its phases and sends them with the
 run's result. The server places them under `linea.run.execute`, counting
@@ -647,7 +651,8 @@ Database and object storage spans are recorded only under another span, a
 request, a run attempt or a build attempt: the change feed's polling, lease
 renewals, presence and upkeep run every few seconds and record nothing. A
 request that reads or changes runs or suites first applies the changes other
-instances committed, so its trace starts with that change feed read. They never
+instances committed, so its trace starts with that change feed read; an
+operation that composes others, such as an upgrade check, reads it once. They never
 carry statement arguments, the connection string, the database user or
 host, the bucket, an object key or the endpoint.
 

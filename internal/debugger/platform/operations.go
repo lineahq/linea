@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/lineahq/linea/internal/debugger/runresult"
 
 	"github.com/lineahq/linea/internal/debugger/authz"
@@ -33,13 +35,19 @@ func (s *Service) begin(ctx context.Context, caller Caller, perm authz.Permissio
 	switch perm {
 	case authz.RunRead, authz.RunSubmit, authz.RunDelete:
 		// Reads and changes of runs and suites see every instance's writes
-		// committed before them.
+		// committed before them; the operations one request composes share
+		// the request's first catch-up (requestScope).
+		sc := scopeOf(ctx)
+		if sc.caughtUpOnce() {
+			return nil
+		}
 		if err := s.catchUp(ctx); err != nil {
 			if ctx.Err() != nil {
 				return classify(ctx.Err(), CodeCancelled)
 			}
 			return artifactError(err)
 		}
+		sc.markCaughtUp()
 	}
 	return nil
 }
@@ -76,6 +84,8 @@ func (s *Service) InspectConfiguration(ctx context.Context, caller Caller, req I
 // inspect performs the host reads here and completes the inspection on the
 // runtime, which reads nothing from the host.
 func (s *Service) inspect(ctx context.Context, rt Runtime, req engine.InspectRequest) (*engine.Inspection, error) {
+	ctx, span := s.startSpan(ctx, spanInspect, attribute.Bool(attrRemote, isPooled(rt)))
+	defer span.End()
 	if rt == nil {
 		return engine.InspectWithPolicy(ctx, req, s.policy)
 	}
@@ -280,7 +290,7 @@ func (s *Service) GetRunReport(ctx context.Context, caller Caller, id string, wa
 		return nil, err
 	}
 	if wait {
-		if err := r.Wait(ctx); err != nil {
+		if err := s.waitRun(ctx, r); err != nil {
 			return nil, classify(err, CodeCancelled)
 		}
 	}
