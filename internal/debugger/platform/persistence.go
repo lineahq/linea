@@ -77,6 +77,8 @@ type runPublication struct {
 	log          string
 	logTruncated bool
 	generation   uint64
+	// weight is the decoded size of the evidence savePublication wrote.
+	weight int64
 	// Admission only.
 	bundle     []byte
 	runtimeKey string
@@ -90,10 +92,15 @@ func (r *Handle) publicationLocked() runPublication {
 		generation: r.generation, bundle: r.bundle, runtimeKey: r.runtimeKey, binary: r.binary}
 }
 
-// storedLocked records that the repository holds record.
+// storedLocked records that the repository holds record. Once it holds the
+// terminal state, the raw bundle leaves the handle: only a repository's runs
+// are stored, and RunBundle reads theirs from it.
 func (r *Handle) storedLocked(record *artifact.RunRecord) {
 	r.generation, r.ordinal = record.Generation, record.Ordinal
 	r.stored = r.terminalLocked()
+	if r.stored {
+		r.bundle = nil
+	}
 }
 
 func (s *Service) persistRun(r *Handle, includeEvidence bool) error {
@@ -103,6 +110,9 @@ func (s *Service) persistRun(r *Handle, includeEvidence bool) error {
 		return err
 	}
 	r.report = p.report
+	if includeEvidence {
+		r.weight = p.weight
+	}
 	r.storedLocked(record)
 	return nil
 }
@@ -144,12 +154,14 @@ func (s *Service) savePublication(ctx context.Context, p *runPublication, includ
 		}
 	}
 	var evidence []byte
+	p.weight = 0
 	if includeEvidence && (p.report != nil || len(p.events) != 0 || p.log != "") {
 		limit := s.repository.Limits().RunBytes
 		var decoded int64
 		if evidence, decoded, err = encodeEvidence(p.events, p.report, p.log, p.logTruncated); err != nil {
 			return nil, err
 		}
+		p.weight = decoded
 		// The evidence budget leaves headroom for the report's analysis; when
 		// the analysis outgrows it, keep the run without its derived sections
 		// rather than losing it. The handle keeps the same reduced report, so
@@ -157,7 +169,7 @@ func (s *Service) savePublication(ctx context.Context, p *runPublication, includ
 		if !archiveFits(int64(len(evidence)), decoded, limit) && p.report != nil && p.report.Result != nil {
 			reduced := withoutAnalysis(p.report)
 			if smaller, size, err := encodeEvidence(p.events, reduced, p.log, p.logTruncated); err == nil && archiveFits(int64(len(smaller)), size, limit) {
-				p.report, evidence = reduced, smaller
+				p.report, evidence, p.weight = reduced, smaller, size
 			}
 		}
 	}
@@ -237,41 +249,41 @@ func encodeEvidence(events []instrument.Event, report *engine.Report, log string
 // decodeEvidence reads a stored archive of either schema. A compressed
 // archive must decode to exactly its declared length, in one gzip member, so
 // it can never expand without bound.
-func decodeEvidence(stored []byte) (*evidenceArchive, error) {
+func decodeEvidence(stored []byte) (*evidenceArchive, int64, error) {
 	raw, schema := stored, 1
 	if len(stored) >= 2 && stored[0] == 0x1f && stored[1] == 0x8b {
 		in := bytes.NewReader(stored)
 		z, err := gzip.NewReader(in)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		z.Multistream(false)
 		size, ok := declaredArchiveSize(z.Header.Extra)
 		if !ok {
-			return nil, errors.New("missing decoded length")
+			return nil, 0, errors.New("missing decoded length")
 		}
 		if size > int64(len(stored))*maxDeflateRatio {
-			return nil, errors.New("declared length exceeds what the archive can hold")
+			return nil, 0, errors.New("declared length exceeds what the archive can hold")
 		}
 		if raw, err = io.ReadAll(io.LimitReader(z, size+1)); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if int64(len(raw)) != size {
-			return nil, errors.New("decoded length differs from the declared length")
+			return nil, 0, errors.New("decoded length differs from the declared length")
 		}
 		if in.Len() != 0 {
-			return nil, errors.New("trailing data after the archive")
+			return nil, 0, errors.New("trailing data after the archive")
 		}
 		schema = archiveSchema
 	}
 	var a evidenceArchive
 	if err := decodeStored(raw, &a); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if a.Schema != schema {
-		return nil, artifact.ErrUnsupportedSchema
+		return nil, 0, artifact.ErrUnsupportedSchema
 	}
-	return &a, nil
+	return &a, int64(len(raw)), nil
 }
 
 // declaredArchiveSize finds the decoded length among gzip extra subfields.
@@ -416,14 +428,14 @@ func (s *Service) handleFromRecord(ctx context.Context, record artifact.RunRecor
 		if err != nil {
 			return nil, err
 		}
-		a, err := decodeEvidence(raw)
+		a, decoded, err := decodeEvidence(raw)
 		if errors.Is(err, artifact.ErrUnsupportedSchema) {
 			return nil, err
 		}
 		if err != nil {
 			return nil, fmt.Errorf("%w: evidence archive: %w", artifact.ErrCorrupt, err)
 		}
-		r.events, r.recording = a.Events, r.attempt
+		r.events, r.recording, r.weight = a.Events, r.attempt, decoded
 		r.log, r.logTruncated = a.Log, a.LogTruncated
 		if len(a.Report) != 0 {
 			if err := decodeStored(a.Report, &r.report); err != nil {

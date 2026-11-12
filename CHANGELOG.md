@@ -147,6 +147,13 @@ the first item below.
   routes, states and error codes, never queries, headers, error messages or
   telemetry (`docs/debugger/team-server.md` lists them). With only the shared
   endpoint set, set `OTEL_TRACES_EXPORTER=none` to export metrics alone.
+- A server with a database holds less memory per finished run. The runs
+  it keeps in memory after running or reading them are bounded by size as
+  well as count: 256 MiB of decoded evidence, but always the 8 used last. A
+  run that just finished counts as used, so it stays for whoever opens it
+  next. A finished run no longer keeps its raw bundle in memory; downloads
+  read it from storage. Other runs are read from storage when asked for, as
+  before.
 - `GET /healthz` and `GET /readyz` answer without a credential: the second
   answers 503 until the storage is open and once the server drains.
   `linea-server probe` checks `/readyz` (`--url` picks another) and is the

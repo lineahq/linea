@@ -114,9 +114,12 @@ type Handle struct {
 	// publishing is set while the service writes the run's outcome without
 	// holding mu (Service.finish); the run stays running until it is written.
 	publishing bool
-	// used is when the service last read the run (Service.uses), under the
-	// service's mu.
+	// used is when the service last admitted, ended or read the run
+	// (Service.uses), under the service's mu.
 	used uint64
+	// weight is the decoded size of the stored evidence the handle holds,
+	// which bounds the run cache (RunCacheBytes).
+	weight int64
 	// requestCancel marks the run in the queue; held reports that a worker
 	// holds it, so the worker, not the caller, ends it. Called with mu held.
 	requestCancel func() (held bool, err error)
@@ -126,8 +129,10 @@ type Handle struct {
 	runtimeKey string
 	// binary pins the run of a runtime built on the server to its binary,
 	// recorded at admission.
-	binary      *artifact.RunBinary
-	persist     func(bool) error // called with mu held; true includes terminal evidence
+	binary  *artifact.RunBinary
+	persist func(bool) error // called with mu held; true includes terminal evidence
+	// bundle is the raw run bundle, until the repository holds the run's
+	// terminal state (storedLocked); RunBundle then reads it from there.
 	bundle      []byte
 	bundleInfo  *engine.BundleInfo
 	evaluations []retainedEvaluation // private source and result bytes; evicted with this run

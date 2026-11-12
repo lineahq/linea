@@ -272,8 +272,15 @@ The root Go module is declared in `go.mod`.
   catches up from the change feed (`Repository.Changes`, table `changes`) before
   every operation and follows it in the background, so suites, runs and catalog
   changes show on every instance. The run cache (`run_cache.go`) holds
-  unfinished runs, suite members and the `Options.RunCache` (default 1,000)
-  terminal runs read most recently; `GetRun`, `WatchRun` and every run reader
+  unfinished runs, suite members and the terminal runs used most recently:
+  at most `Options.RunCache` (default 1,000) of them, holding at most
+  `Options.RunCacheBytes` (default 256 MiB) of evidence, each weighed by its
+  decoded evidence archive (`Handle.weight`), but never fewer than the 8 used
+  last (`runCacheFloor`), so a run read just now stays however large it is.
+  Admitting, ending and reading a run all mark it used (`touchLocked`). Once
+  the repository holds a run's terminal state (`storedLocked`), the handle
+  drops its raw bundle, which `GetRunBundle` reads from the repository;
+  `GetRun`, `WatchRun` and every run reader
   load a cold run from the repository (`load`), listing reads pages without
   caching handles, and the feed updates cached runs and adopts unfinished ones but skips
   other terminal runs. Listing reads a run it does not hold, its evidence and

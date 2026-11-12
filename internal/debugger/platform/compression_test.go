@@ -63,7 +63,7 @@ func TestRunEvidenceIsStoredCompressed(t *testing.T) {
 	if len(stored) < 2 || stored[0] != 0x1f || stored[1] != 0x8b {
 		t.Fatalf("archive is not gzip: %q", stored[:min(len(stored), 16)])
 	}
-	a, err := decodeEvidence(stored)
+	a, _, err := decodeEvidence(stored)
 	if err != nil || a.Schema != archiveSchema {
 		t.Fatalf("decode = %+v, %v", a, err)
 	}
@@ -105,7 +105,7 @@ func TestSchemaOneArchivesStayReadable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err := decodeEvidence(stored)
+	a, _, err := decodeEvidence(stored)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,10 +205,10 @@ func TestCorruptCompressedArchivesAreRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := decodeEvidence(good); err != nil {
+	if _, _, err := decodeEvidence(good); err != nil {
 		t.Fatalf("good archive = %v", err)
 	}
-	if _, err := decodeEvidence(gzipArchive(t, []byte(`{"schema":2}`), 12, true)); err != nil {
+	if _, _, err := decodeEvidence(gzipArchive(t, []byte(`{"schema":2}`), 12, true)); err != nil {
 		t.Fatalf("hand-built archive = %v", err)
 	}
 	v2 := []byte(`{"schema":2}`)
@@ -227,7 +227,7 @@ func TestCorruptCompressedArchivesAreRefused(t *testing.T) {
 		{"uncompressed schema 2", v2, true},
 		{"compressed schema 1", gzipArchive(t, v1, 12, true), true},
 	} {
-		_, err := decodeEvidence(tc.raw)
+		_, _, err := decodeEvidence(tc.raw)
 		if err == nil {
 			t.Errorf("%s: accepted", tc.name)
 		} else if errors.Is(err, artifact.ErrUnsupportedSchema) != tc.unsupported {

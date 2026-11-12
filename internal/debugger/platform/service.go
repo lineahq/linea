@@ -69,9 +69,11 @@ type Options struct {
 	QueueCapacity  int
 	// HistoryLimit is how many terminal runs a service without a
 	// repository keeps; RunCache how many a service with one keeps in
-	// memory after reading them (DefaultRunCache).
-	HistoryLimit int
-	RunCache     int
+	// memory after reading them (DefaultRunCache), and RunCacheBytes how
+	// much decoded evidence they may hold (DefaultRunCacheBytes).
+	HistoryLimit  int
+	RunCache      int
+	RunCacheBytes int64
 	// Retention, when set, evicts the runs a repository no longer keeps; zero
 	// keeps every run.
 	Retention RetentionPolicy
@@ -258,6 +260,7 @@ type Service struct {
 	queueCapacity    int
 	historyLimit     int
 	runCache         int
+	runCacheBytes    int64
 	ctx              context.Context
 	stop             context.CancelFunc
 	wake             chan struct{}
@@ -430,6 +433,9 @@ func newService(opts Options, repository artifact.Repository) *Service {
 	if opts.RunCache <= 0 {
 		opts.RunCache = DefaultRunCache
 	}
+	if opts.RunCacheBytes <= 0 {
+		opts.RunCacheBytes = DefaultRunCacheBytes
+	}
 	if opts.Execute == nil {
 		opts.Execute = engine.Execute
 	}
@@ -471,7 +477,7 @@ func newService(opts Options, repository artifact.Repository) *Service {
 	s := &Service{
 		logger: opts.Logger, executor: opts.Execute, prepare: opts.Prepare,
 		prepareGate:   make(chan struct{}, 1),
-		queueCapacity: opts.QueueCapacity, historyLimit: opts.HistoryLimit, runCache: opts.RunCache, listings: listingCache{max: listingCacheSize},
+		queueCapacity: opts.QueueCapacity, historyLimit: opts.HistoryLimit, runCache: opts.RunCache, runCacheBytes: opts.RunCacheBytes, listings: listingCache{max: listingCacheSize},
 		ctx: ctx, stop: stop, wake: make(chan struct{}, 1), done: make(chan struct{}),
 		runs:             make(map[string]*Handle),
 		jobs:             make(map[string]*pendingRun),
@@ -741,6 +747,7 @@ func (s *Service) admitLocked(caller Caller, mode InputMode, p preparedRun, dead
 	}
 	s.observeLocked(r, &req)
 	s.runs[r.id] = r
+	s.touchLocked(r)
 	if reservation != nil {
 		reservation.handles = append(reservation.handles, r)
 		s.suiteRuns[r.id] = true

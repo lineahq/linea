@@ -502,11 +502,14 @@ func (s *Service) finish(job *pendingRun, report *engine.Report, err error) {
 			// what the repository holds.
 		case record != nil:
 			r.endLocked(p)
+			r.weight = p.weight
 			r.storedLocked(record)
 		case r.state == StateRunning && r.attempt == p.attempt:
 			r.endLocked(p)
 		}
 		r.mu.Unlock()
+		// A run that just ended is the one someone opens next.
+		s.touchLocked(r)
 	}
 	s.releaseLocked(job)
 	s.dropJobLocked(job)
