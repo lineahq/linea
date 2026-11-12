@@ -191,13 +191,19 @@ func (t target) providerInput(i int) provider.Input {
 // observations are final; a deadline or cancellation of ctx stops the run
 // and shuts the Collector down before Run returns.
 func Run(ctx context.Context, opts Options) (*runresult.Result, error) {
+	return run(ctx, opts, factoriesOf)
+}
+
+// run is Run over the factories that load returns; the self-check adds
+// its own.
+func run(ctx context.Context, opts Options, load func() (otelcol.Factories, error)) (*runresult.Result, error) {
 	logger := opts.Logger
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	// Lets decorated processors learn their pipeline ID.
 	logger = logger.WithOptions(zap.WrapCore(instrument.WrapCore))
-	base, err := factoriesOf()
+	base, err := load()
 	if err != nil {
 		return nil, err
 	}

@@ -68,8 +68,8 @@ func TestRuntimeTableMarksTheDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-	if len(lines) != 3 || strings.Join(strings.Fields(lines[1]), " ") != "built-in 0.162.0 true -" ||
-		strings.Join(strings.Fields(lines[2]), " ") != "edge (default) 0.162.0 true -" {
+	if len(lines) != 3 || strings.Join(strings.Fields(lines[1]), " ") != "built-in 0.162.0 true not checked -" ||
+		strings.Join(strings.Fields(lines[2]), " ") != "edge (default) 0.162.0 true not checked -" {
 		t.Fatalf("table:\n%s", out.String())
 	}
 }

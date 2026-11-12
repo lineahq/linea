@@ -2,12 +2,14 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/lineahq/linea/internal/debugger/analysis"
 	"github.com/lineahq/linea/internal/debugger/platform"
 	"github.com/lineahq/linea/internal/debugger/recommend"
+	"github.com/lineahq/linea/internal/debugger/runresult"
 	"github.com/lineahq/linea/internal/debugger/topology"
 )
 
@@ -139,5 +141,32 @@ func TestNotShownLinesGroupComponentsByBehavior(t *testing.T) {
 	}
 	if notShownLines(nil) != nil {
 		t.Fatal("a report without a topology has lines")
+	}
+}
+
+// TestRunWarningsAndSelfCheckInText: run warnings join the run's warnings,
+// and a runtime's self-check reads as passed, the failed codes, or not
+// checked.
+func TestRunWarningsAndSelfCheckInText(t *testing.T) {
+	rep := &platform.Report{Result: &runresult.Result{}, Warnings: []platform.RunWarning{
+		{Code: platform.WarningSelfCheckFailed, Detail: "connector_routes: routes do not name their pipelines"},
+		{Code: platform.WarningUnattributedStage, Component: "batch", Detail: "one stage for every pipeline"},
+	}}
+	got := runWarnings(rep)
+	want := []string{"runtime self-check failed, connector_routes: routes do not name their pipelines", "batch: one stage for every pipeline"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("warnings = %q", got)
+	}
+	for _, tc := range []struct {
+		checks []platform.SelfCheck
+		want   string
+	}{
+		{nil, "not checked"},
+		{[]platform.SelfCheck{{Code: runresult.SelfCheckLifecycle, OK: true}}, "passed"},
+		{[]platform.SelfCheck{{Code: runresult.SelfCheckLifecycle, OK: true}, {Code: runresult.SelfCheckFanoutClone}}, "failed: fanout_clone"},
+	} {
+		if got := selfCheckSummary(tc.checks); got != tc.want {
+			t.Errorf("selfCheckSummary(%+v) = %q, want %q", tc.checks, got, tc.want)
+		}
 	}
 }

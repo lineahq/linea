@@ -1,6 +1,6 @@
-import type { Runtime, RuntimeBuild, RuntimeDefault } from '../../api/types';
+import type { Runtime, RuntimeBuild, RuntimeDefault, SelfCheck } from '../../api/types';
 import type { IconName } from '../../ui/Icon';
-import { BUILT_IN_NAME, formatSize, olderImage, providerLines } from '../runtimes';
+import { BUILT_IN_NAME, formatSize, olderImage, providerLines, selfCheckFact } from '../runtimes';
 
 /**
  * The view model of the Runtimes page: the list rows (built-in, catalog
@@ -32,6 +32,8 @@ export interface RuntimeRow {
   runtime?: Runtime;
   /** On a team server, the workers that serve the built-in runtime. */
   workers?: NonNullable<Runtime['catalog']>;
+  /** On a team server, the self-check the built-in runtime's workers reported. */
+  selfCheck?: SelfCheck[];
 }
 
 export const BUILT_IN_KEY = 'built-in';
@@ -76,7 +78,7 @@ export function runtimeRows(runtimes: Runtime[] | undefined, builtInVersion: str
   const rows: RuntimeRow[] = [{
     key: BUILT_IN_KEY, name: BUILT_IN_NAME, kind: 'built-in', type: 'Built-in', version: builtInVersion || served?.collector_version || '',
     state: served?.catalog ? catalogChip(served.catalog) : VERIFIED,
-    isDefault: defaultName === BUILT_IN_NAME || served?.default === true, workers: served?.catalog,
+    isDefault: defaultName === BUILT_IN_NAME || served?.default === true, workers: served?.catalog, selfCheck: served?.self_check,
   }];
   const current = all.filter((r) => !olderImage(r, all)).sort((a, b) => a.name.localeCompare(b.name));
   for (const r of current) {
@@ -137,7 +139,7 @@ function baseDetail(row: RuntimeRow, builtInVersion: string | undefined): Runtim
       title: `built-in${builtInVersion ? ` ${builtInVersion}` : ''}`,
       subtitle: 'ships with the debugger',
       facts: [
-        ['Type', 'Built-in'], ['Verification', 'Verified: the release this debugger is built against'],
+        ['Type', 'Built-in'], ['Verification', 'Verified: the release this debugger is built against'], ['Self-check', selfCheckFact(row.selfCheck)],
         ...(row.workers ? [['Workers', workersFact(row.workers)] as [string, string]] : []),
       ],
       providers: [], custom: [],
@@ -147,6 +149,7 @@ function baseDetail(row: RuntimeRow, builtInVersion: string | undefined): Runtim
   if (row.kind === 'catalog') return catalogDetail(row, r);
   const facts: [string, string][] = [['Type', row.type]];
   facts.push(['Verification', r.verified ? 'Verified release' : 'Unverified release: newer than the releases this debugger was verified with']);
+  facts.push(['Self-check', selfCheckFact(r.self_check)]);
   facts.push(['Image', `${formatSize(r.size)} · ${r.image_id.replace(/^sha256:/, '').slice(0, 12)}`]);
   if (r.tags?.length) facts.push(['Tags', r.tags.join(', ')]);
   return {
@@ -166,6 +169,7 @@ function catalogDetail(row: RuntimeRow, r: Runtime): RuntimeDetail {
   const c = r.catalog!;
   const facts: [string, string][] = [['Type', row.type]];
   facts.push(['Verification', r.verified ? 'Verified release' : 'Unverified release: newer than the releases this debugger was verified with']);
+  facts.push(['Self-check', selfCheckFact(r.self_check)]);
   if (c.binary) {
     facts.push(['Binary', `${formatSize(c.binary.bytes)} · ${c.binary.digest.replace(/^sha256:/, '').slice(0, 12)} · ${c.binary.os}/${c.binary.arch}`]);
   } else {

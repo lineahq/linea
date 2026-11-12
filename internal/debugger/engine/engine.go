@@ -256,6 +256,10 @@ type Report struct {
 	Comparison *runresult.Comparison `json:"comparison,omitempty"`
 	// Assertions is present when the request declares assertions.
 	Assertions *assertion.Report `json:"assertions,omitempty"`
+	// Warnings say where this run's evidence may be wrong: a failed
+	// self-check of its runtime, a stage or connector route the Collector
+	// did not attribute to a pipeline (report schema 0.16).
+	Warnings []RunWarning `json:"warnings,omitempty"`
 }
 
 // ErrInvalidRequest marks errors caused by the request itself rather than by
@@ -359,6 +363,7 @@ func Execute(ctx context.Context, req Request) (*Report, error) {
 	if err != nil {
 		return nil, err
 	}
+	rep.Warnings = runWarnings(rep.Runtime, rep.Topology, rep.Stages, rep.Result)
 	rep.Recommendations = recommend.Recommend(recommend.Input{Topology: rep.Topology, Stages: rep.Stages, Filtering: rep.Filtering,
 		OTTL: rep.OTTL, Batching: rep.Batching, Grouping: rep.Grouping, Sampling: rep.Sampling, Placements: placements, DeadWrites: dead,
 		ContextLosses: contextLosses(resolved, rep.Topology), ExporterBatches: exporterBatches(resolved)})

@@ -10,6 +10,7 @@ import (
 	"github.com/lineahq/linea/internal/debugger/analysis"
 	"github.com/lineahq/linea/internal/debugger/assertion"
 	"github.com/lineahq/linea/internal/debugger/config"
+	"github.com/lineahq/linea/internal/debugger/engine"
 	"github.com/lineahq/linea/internal/debugger/instrument"
 	"github.com/lineahq/linea/internal/debugger/topology"
 )
@@ -50,8 +51,11 @@ type Summary struct {
 	StandIns          int               `json:"stand_ins,omitempty"`
 	StandInReferences int               `json:"stand_in_references,omitempty"`
 	Assertions        *AssertionSummary `json:"assertions,omitempty"`
-	Stages            []StageSummary    `json:"stages"`
-	Outputs           []OutputSummary   `json:"outputs"`
+	// Warnings are the report's run warnings: where its evidence may be
+	// wrong (a failed runtime self-check, an unattributed stage or route).
+	Warnings []engine.RunWarning `json:"warnings,omitempty"`
+	Stages   []StageSummary      `json:"stages"`
+	Outputs  []OutputSummary     `json:"outputs"`
 	// EndpointOutputs are what simulated endpoints of custom components
 	// received.
 	EndpointOutputs []EndpointOutputSummary `json:"endpoint_outputs,omitempty"`
@@ -238,6 +242,7 @@ func Summarize(run Run) *Summary {
 			}
 		}
 		out.Assertions = SummarizeAssertions(report.Assertions)
+		out.Warnings = report.Warnings
 		for _, stage := range report.Stages {
 			out.Stages = append(out.Stages, summarizeStage(stage))
 			for _, input := range stage.Inputs {

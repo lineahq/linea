@@ -15,6 +15,7 @@ import (
 	"github.com/lineahq/linea/internal/debugger/engine"
 	"github.com/lineahq/linea/internal/debugger/features"
 	"github.com/lineahq/linea/internal/debugger/manifest"
+	"github.com/lineahq/linea/internal/debugger/runresult"
 	"github.com/lineahq/linea/samples"
 )
 
@@ -86,11 +87,19 @@ func TestEveryReleaseRunsTheSamples(t *testing.T) {
 			if h := w.Hello(); h.CollectorVersion != version || len(h.MissingFeatures) != 0 {
 				t.Fatalf("hello %+v", h)
 			}
+			// Every supported release keeps the Collector internals the
+			// instrumentation relies on.
+			if checks := w.Hello().SelfCheck; len(checks) == 0 || len(runresult.FailedSelfChecks(checks)) != 0 {
+				t.Fatalf("self-check %+v", checks)
+			}
 			for _, s := range list {
 				t.Run("sample/"+s.ID, func(t *testing.T) {
 					rep := executeOn(ctx, t, w, engine.Request{ConfigYAML: s.ConfigYAML, ScenarioYAML: s.ScenarioYAML})
 					if got := rep.Assertions.Outcome; got != assertion.Outcome(s.Expect) {
 						t.Fatalf("assertions = %s, want %s: %+v", got, s.Expect, rep.Assertions.Results)
+					}
+					if rep.Warnings != nil {
+						t.Fatalf("warnings %+v", rep.Warnings)
 					}
 				})
 			}

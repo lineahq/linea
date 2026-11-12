@@ -32,6 +32,7 @@ type (
 	BundleInfo      = engine.BundleInfo
 	Versions        = engine.Versions
 	ReportRuntime   = engine.ReportRuntime
+	RunWarning      = engine.RunWarning
 	Event           = instrument.Event
 	RunStatus       = runresult.Status
 	Diagnostic      = config.Diagnostic
@@ -85,9 +86,29 @@ const TimestampsRebased = engine.TimestampsRebased
 // distribution.
 const ModeStandIn = topology.ModeStandIn
 
+// Run warning codes (engine.RunWarning).
+const (
+	WarningSelfCheckFailed   = engine.WarningSelfCheckFailed
+	WarningUnattributedStage = engine.WarningUnattributedStage
+	WarningUnattributedRoute = engine.WarningUnattributedRoute
+)
+
 // ProductVersion is the version of this build of linea, as a release stamps
 // it, for adapters that describe the process (the server's metrics resource).
 func ProductVersion() string { return release.ProductVersion }
+
+// InProcessSelfCheck is the self-check of this process's in-process
+// Collector, or nil in a process that runs none.
+func InProcessSelfCheck() []SelfCheck {
+	c, err := engine.InProcess()
+	if err != nil {
+		return nil
+	}
+	return c.SelfCheck()
+}
+
+// FailedSelfChecks are the checks of a self-check that failed.
+func FailedSelfChecks(checks []SelfCheck) []SelfCheck { return runresult.FailedSelfChecks(checks) }
 
 // ReferenceStandIn is the source of a reference that resolved to a stand-in
 // string.

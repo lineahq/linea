@@ -49,7 +49,10 @@ modules `v1.68.0`).
   checking a probe entry through `Core().Check` (nothing is written). See
   `internal/debugger/instrument/pipeline.go`, verified by
   `TestPipelineOfReadsComponentLoggerAttributes` and, against the real
-  Collector, `TestSharedProcessorIsAttributedPerPipeline`.
+  Collector, `TestSharedProcessorIsAttributedPerPipeline`. Every runtime
+  re-checks this at start (`runtime.SelfCheck`, check
+  `pipeline_attribution`), and a run whose processor stage still has no
+  pipeline carries an `unattributed_stage` warning.
 - The wrappers override `Start` and `Shutdown` to record
   `component.started` / `component.stopped`; `Shutdown` is recorded after the
   inner processor returns, so flush output (batch) precedes it.

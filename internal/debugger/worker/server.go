@@ -81,6 +81,7 @@ func Identity() (Hello, error) {
 	sum := sha256.Sum256(identity)
 	h.Runtime = "sha256:" + hex.EncodeToString(sum[:])
 	h.BuiltIn = custom != "true"
+	h.SelfCheck = c.SelfCheck()
 	return h, nil
 }
 

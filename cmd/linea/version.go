@@ -33,6 +33,8 @@ type stampModule struct {
 type versionOutput struct {
 	platform.Versions
 	Build *buildStamp `json:"build,omitempty"`
+	// SelfCheck is the in-process Collector's self-check.
+	SelfCheck []platform.SelfCheck `json:"self_check,omitempty"`
 }
 
 // versionCmd prints the debugger, Collector and schema versions.
@@ -43,8 +45,9 @@ func versionCmd(_ context.Context, args []string, stdout, stderr io.Writer) int 
 		return code
 	}
 	v := platform.CurrentVersions()
+	checks := platform.InProcessSelfCheck()
 	if *format == "json" {
-		if err := platform.Encode(stdout, versionOutput{Versions: v, Build: customBuild}); err != nil {
+		if err := platform.Encode(stdout, versionOutput{Versions: v, Build: customBuild, SelfCheck: checks}); err != nil {
 			return fail(stderr, err)
 		}
 		return exitOK
@@ -56,6 +59,10 @@ func versionCmd(_ context.Context, args []string, stdout, stderr io.Writer) int 
 	t.field(1, "report schema", v.ReportSchema)
 	t.field(1, "inspection schema", v.InspectionSchema)
 	t.field(1, "event schema", v.EventSchema)
+	t.field(1, "self-check", selfCheckSummary(checks))
+	for _, c := range platform.FailedSelfChecks(checks) {
+		t.field(2, c.Code, c.Detail)
+	}
 	if b := customBuild; b != nil {
 		t.field(1, "build", "custom, made with linea build")
 		if !b.Verified {

@@ -21,6 +21,16 @@ func summaryFacts(s *platform.RunSummary) string {
 	if s.StandInReferences > 0 {
 		text += "; " + plural(s.StandInReferences, "stand-in reference")
 	}
+	if n := len(s.Warnings); n > 0 {
+		text += "; " + plural(n, "run warning")
+		for _, w := range s.Warnings {
+			if w.Component != "" {
+				text += fmt.Sprintf(" (%s: %s)", w.Code, w.Component)
+			} else {
+				text += fmt.Sprintf(" (%s)", w.Code)
+			}
+		}
+	}
 	if s.Assertions != nil {
 		text += fmt.Sprintf("; assertions %s", s.Assertions.Outcome)
 	}

@@ -6449,6 +6449,12 @@
           },
           "topology": {
             "$ref": "#/components/schemas/Graph"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/RunWarning"
+            },
+            "type": "array"
           }
         },
         "required": [
@@ -6559,6 +6565,12 @@
           "providers": {
             "items": {
               "$ref": "#/components/schemas/ReportProvider"
+            },
+            "type": "array"
+          },
+          "self_check": {
+            "items": {
+              "$ref": "#/components/schemas/SelfCheck"
             },
             "type": "array"
           },
@@ -7441,10 +7453,34 @@
           },
           "uri": {
             "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/RunWarning"
+            },
+            "type": "array"
           }
         },
         "required": [
           "complete"
+        ],
+        "type": "object"
+      },
+      "RunWarning": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "component": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "detail"
         ],
         "type": "object"
       },
@@ -7495,6 +7531,12 @@
           "providers": {
             "items": {
               "$ref": "#/components/schemas/ReportProvider"
+            },
+            "type": "array"
+          },
+          "self_check": {
+            "items": {
+              "$ref": "#/components/schemas/SelfCheck"
             },
             "type": "array"
           },
@@ -8205,6 +8247,24 @@
         ],
         "type": "object"
       },
+      "SelfCheck": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "code",
+          "ok"
+        ],
+        "type": "object"
+      },
       "Sent": {
         "properties": {
           "component": {
@@ -8756,6 +8816,12 @@
           "providers": {
             "items": {
               "$ref": "#/components/schemas/ReportProvider"
+            },
+            "type": "array"
+          },
+          "self_check": {
+            "items": {
+              "$ref": "#/components/schemas/SelfCheck"
             },
             "type": "array"
           },

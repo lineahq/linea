@@ -1,6 +1,6 @@
 import { ApiError } from '../api/client';
 import type {
-  CatalogComponent, CollectorCatalog, OperationError, PrunedItem, ReportProvider, ReportRuntime, Runtime, RuntimeBuild, RuntimePruneResult,
+  CatalogComponent, CollectorCatalog, OperationError, PrunedItem, ReportProvider, ReportRuntime, Runtime, RuntimeBuild, RuntimePruneResult, SelfCheck,
 } from '../api/types';
 
 /**
@@ -118,6 +118,18 @@ export function reportRuntime(rt: ReportRuntime | undefined): RuntimeFacts | und
     providers: providerLines(rt.providers),
     missing: (rt.missing_features ?? []).map((f) => FEATURES[f] ?? f),
   };
+}
+
+/**
+ * selfCheckFact words a runtime's self-check: whether the Collector internals
+ * the instrumentation relies on behave as verified. A failed check never
+ * blocks a run; it warns on every run's evidence.
+ */
+export function selfCheckFact(checks: SelfCheck[] | undefined): string {
+  if (!checks?.length) return 'Not checked: no worker of this runtime has reported one';
+  const failed = checks.filter((c) => !c.ok);
+  if (!failed.length) return 'Passed: the Collector internals the debugger relies on behave as verified';
+  return `Failed, runs warn that their evidence may be wrong: ${failed.map((c) => `${c.code} (${c.detail ?? 'no detail'})`).join('; ')}`;
 }
 
 /** providerLines words a runtime's module providers: "stamp from example.com/stamp/debug (processor/stamp)". */

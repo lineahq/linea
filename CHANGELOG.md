@@ -203,6 +203,18 @@ the first item below.
   intake, and the processing or routing of stand-ins. `linea run` and
   `linea inspect` print it; the web client shows it in the component's mode
   tooltip and How it runs view. Reports of schema 0.8 to 0.15 stay readable.
+- Runtime self-check: every runtime checks, when it starts, that the
+  Collector internals the instrumentation relies on behave as verified
+  (pipeline attribution, connector routes, emission context, object identity,
+  fan-out copies, extension status, lifecycle). `linea runtime list`,
+  `linea version`, the web client's runtime detail and the API's runtime
+  (`self_check`) show the result, and reports record it
+  (`runtime.self_check`). A failed check refuses nothing.
+- Run warnings (report `warnings`, also in the run summary): a failed
+  self-check of the run's runtime, a processor the Collector gave no pipeline
+  ID (`unattributed_stage`) and connector deliveries without a pipeline
+  (`unattributed_route`). `linea run`, the web run overview and MCP's run
+  summary show them.
 
 ## [0.2.0]
 

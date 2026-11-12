@@ -267,7 +267,14 @@ values. The report also contains:
   instead of network intake; and stand-in processors and connectors do not do
   the real component's processing or routing. `linea run` and `linea inspect`
   print it under "not shown", and the web client in each component's mode and
-  How it runs view.
+  How it runs view;
+- run warnings, where the evidence itself may be wrong: the runtime failed
+  its [self-check](runtime-builds.md#self-check) (`self_check_failed`), the
+  Collector gave a processor no pipeline ID so its pipelines show as one stage
+  (`unattributed_stage`), or a connector delivered without naming a pipeline
+  (`unattributed_route`). They never change the run's outcome. `linea run`
+  prints them with its other warnings, the web client in the run overview's
+  evidence limits, and MCP's run summary names them.
 
 A scenario declares inputs, environment values, mocks and assertions separately
 from the Collector configuration:

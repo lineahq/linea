@@ -16,6 +16,7 @@ import (
 	"github.com/lineahq/linea/internal/debugger/container"
 	"github.com/lineahq/linea/internal/debugger/engine"
 	"github.com/lineahq/linea/internal/debugger/release"
+	"github.com/lineahq/linea/internal/debugger/runresult"
 	"github.com/lineahq/linea/internal/debugger/worker"
 )
 
@@ -50,6 +51,9 @@ type RuntimeInfo struct {
 	CustomModules []CustomModule
 	// Providers are the debugger providers the custom modules export.
 	Providers []RuntimeProvider
+	// SelfCheck is the runtime's self-check from its worker's hello; nil
+	// when no worker reported one.
+	SelfCheck []SelfCheck
 	// Size is the image's size in bytes, when the store knows it.
 	Size int64
 	// Catalog is set for a runtime of the catalog.
@@ -69,6 +73,9 @@ type RuntimeInfo struct {
 // CustomModule is a module a runtime was built from a supplied source,
 // with the git commit when the source was a repository.
 type CustomModule = engine.ReportCustomModule
+
+// SelfCheck is one check of a runtime's self-check.
+type SelfCheck = runresult.SelfCheck
 
 // RuntimeProvider is a component module's debugger provider in a runtime.
 type RuntimeProvider = engine.ReportProvider
@@ -176,6 +183,7 @@ func (b *boundRuntime) stamp(rep *engine.Report) {
 		rt.FeatureGates = rep.Runtime.FeatureGates
 		rt.MissingFeatures = rep.Runtime.MissingFeatures
 		rt.Providers = rep.Runtime.Providers
+		rt.SelfCheck = rep.Runtime.SelfCheck
 	}
 	if rt.FeatureGates == nil {
 		rt.FeatureGates = []release.FeatureGate{}

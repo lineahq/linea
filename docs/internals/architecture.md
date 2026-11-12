@@ -105,8 +105,12 @@ The root Go module is declared in `go.mod`.
   reference by digest and its `image_id` that digest); 0.16 added topology
   components' `not_shown` (`engine.markNotShown`: codes `export_outcome`,
   `host_memory`, `receiver_intake`, `stand_in_processing`,
-  `stand_in_routing`, each with a sentence); `ReadableReportSchema` reads 0.8
-  to 0.16). Bundle schema 5 records source labels and
+  `stand_in_routing`, each with a sentence), `runtime.self_check` (the
+  runtime's self-check, below) and `warnings` (`engine.RunWarning{Code,
+  Component, Detail}`, `engine.runWarnings`: `self_check_failed` per failed
+  check of `runtime.self_check`, `unattributed_stage` per processor whose
+  stage has pipeline "", `unattributed_route` per connector with deliveries
+  to pipeline ""); `ReadableReportSchema` reads 0.8 to 0.16). Bundle schema 5 records source labels and
   `Request.Sources` (saved revision IDs, never resolved by the engine;
   `BundleInfo.Sources`). Bundle schema 6 records the target runtime
   (`Request.Runtime`); built-in bundles stay schema 5, `DecodeBundle` refuses a
@@ -184,7 +188,17 @@ The root Go module is declared in `go.mod`.
   `built-in@<product version>`
   (`builtin_runtime.go`), a name no request or registration can take, listed and
   bound as `built-in`; it removes the entries of other releases no connected
-  worker serves. The default runtime, the runtime of every request that names
+  worker serves. Runtime self-check: `runtime.SelfCheck` (`selfcheck.go`,
+  once per process) runs one log record through a probe configuration on the
+  run path (stand-ins for its receiver, processor, connector and exporter, a
+  local `MutatesData` processor and a watched extension marked custom) and
+  judges the events per assumption (`runresult.SelfCheck{Code, OK, Detail}`;
+  codes in `runresult/selfcheck.go`). `engine.Collector.SelfCheck` exposes it;
+  `engine.BuiltInRuntime` stamps it on reports, `worker.Identity` adds it to
+  the hello after the identity hash (`Hello.SelfCheck`, so it never changes a
+  runtime identity), `boundRuntime.stamp` keeps the worker's, and catalog
+  runtimes carry it as `RuntimeInfo.SelfCheck` (`api.Runtime.self_check`). A
+  failed check refuses nothing. The default runtime, the runtime of every request that names
   none, is the team's choice (`default_runtime.go`): `GetDefaultRuntime` and
   `SetDefaultRuntime` (`runtime.read`, `runtime.manage`; type
   `DefaultRuntimeInfo{Name, SetBy, Set}`), `built-in` until one is set. The name

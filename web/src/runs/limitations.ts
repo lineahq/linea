@@ -1,4 +1,4 @@
-import type { Report, Run } from '../api/types';
+import type { Report, Run, RunWarning } from '../api/types';
 
 export interface Limitation {
   level: 'error' | 'warning' | 'info';
@@ -67,6 +67,9 @@ export function limitations(run: Run): Limitation[] {
       text: `${c.component} reads the wall clock (${c.expression})${age}: the outcome depends on when the run happened. Declare execution.timestamps: rebase to shift the inputs to the run's time.`,
     });
   }
+  // Where the instrumentation itself may be wrong: a failed self-check of
+  // the runtime, a stage or connector route without its pipeline.
+  for (const w of rep.warnings ?? []) out.push({ level: 'warning', text: runWarningText(w) });
   out.push(...outcomeLimitations(rep));
   for (const o of rep.ottl ?? []) {
     if (o.verification === 'disagrees') {
@@ -100,4 +103,10 @@ function outcomeLimitations(rep: Report): Limitation[] {
     out.push({ level: 'warning', text: `${unresolved} stage input(s) have no attributable output; their outcome is unknown.` });
   }
   return out;
+}
+
+/** runWarningText words a report's run warning (report schema 0.16). */
+export function runWarningText(w: RunWarning): string {
+  if (w.code === 'self_check_failed') return `The runtime failed its self-check, so this evidence may be wrong: ${w.detail}.`;
+  return `${w.component ? `${w.component}: ` : ''}${w.detail}.`;
 }

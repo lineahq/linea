@@ -411,7 +411,35 @@ func runWarnings(rep *platform.Report) []string {
 			out = append(out, fmt.Sprintf("mock %s: %s", d.Ref, w))
 		}
 	}
+	for _, w := range rep.Warnings {
+		out = append(out, runWarningLine(w))
+	}
 	return out
+}
+
+// runWarningLine says where a run's evidence may be wrong.
+func runWarningLine(w platform.RunWarning) string {
+	if w.Code == platform.WarningSelfCheckFailed {
+		return "runtime self-check failed, " + w.Detail
+	}
+	return w.Component + ": " + w.Detail
+}
+
+// selfCheckSummary is a runtime's self-check in a word or the codes that
+// failed.
+func selfCheckSummary(checks []platform.SelfCheck) string {
+	if len(checks) == 0 {
+		return "not checked"
+	}
+	failed := platform.FailedSelfChecks(checks)
+	if len(failed) == 0 {
+		return "passed"
+	}
+	codes := make([]string, len(failed))
+	for i, c := range failed {
+		codes[i] = c.Code
+	}
+	return "failed: " + strings.Join(codes, ", ")
 }
 
 // matchingLine names the non-zero record matches of a stage diff.

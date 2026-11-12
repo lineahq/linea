@@ -226,9 +226,9 @@ func writeRuntimes(w io.Writer, list []api.Runtime) error {
 		if r.Default {
 			name += " (default)"
 		}
-		rows = append(rows, []string{name, r.CollectorVersion, strconv.FormatBool(r.Verified), image})
+		rows = append(rows, []string{name, r.CollectorVersion, strconv.FormatBool(r.Verified), selfCheckSummary(r.SelfCheck), image})
 	}
-	t.table(0, []string{"name", "collector", "verified", "image"}, rows)
+	t.table(0, []string{"name", "collector", "verified", "self-check", "image"}, rows)
 	return t.err()
 }
 
@@ -683,7 +683,7 @@ func apiRuntime(v *platform.RuntimeInfo) *api.Runtime {
 	}
 	return &api.Runtime{Name: v.Name, ImageID: v.ImageID, Tags: tags, CollectorVersion: v.CollectorVersion, ProductVersion: v.ProductVersion,
 		Protocol: v.Protocol, Verified: v.Verified, Default: v.Default, Manifest: v.Manifest, ModuleSet: v.ModuleSet, GoImage: v.GoImage,
-		CustomModules: orEmpty(v.CustomModules), Size: v.Size, Providers: v.Providers}
+		CustomModules: orEmpty(v.CustomModules), Size: v.Size, Providers: v.Providers, SelfCheck: v.SelfCheck}
 }
 
 func orEmpty[T any](list []T) []T {

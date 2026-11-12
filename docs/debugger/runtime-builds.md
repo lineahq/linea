@@ -30,6 +30,34 @@ the [runtime build notes](../internals/runtime-builds.md).
 | A verified release | Builds with the release's dependency set: every module is pinned to the versions the debugger was verified with. |
 | Newer than every verified release | Builds **unverified**: modules resolve through your module source at the manifest's versions. The build, the runtime and every report say so. |
 
+### Self-check
+
+"Verified" means the release's dependency set is pinned and the samples pass.
+On top of that, every runtime checks itself when it starts: it runs one log
+record through a small built-in configuration and confirms that the Collector
+internals the debugger's instrumentation relies on still behave as they did
+in the release it was verified against. Those internals can change without
+any error, and the run would still finish with wrong evidence.
+
+| Check | What it confirms | When it fails |
+| --- | --- | --- |
+| `pipeline_attribution` | A processor used in several pipelines can tell them apart | Its pipelines are reported as one stage |
+| `connector_routes` | A connector's deliveries name the pipeline they go to | Routes do not show their pipelines |
+| `emission_context` | Outputs link to the input that caused them | Stages read as deferred; lineage matches by content |
+| `object_identity` | Records keep their identity between stages | "The same record" claims are not made |
+| `fanout_clone` | A fan-out copies data only for consumers that change it | Evidence can differ from your Collector |
+| `extension_status` | Extensions' start and stop are recorded | Extension lifecycles are missing |
+| `lifecycle` | The Collector starts, shuts down in order and flushes | Buffered output can be lost |
+| `probe` | The check itself could run | Nothing was checked |
+
+A failed check never refuses a runtime or a run, and it does not change the
+verified flag. `linea runtime list` shows a self-check column
+(`passed`, `failed: <codes>` or `not checked` when no worker reported one),
+`linea version` shows the CLI's own, the web client's runtime detail shows a
+Self-check fact, and the API's runtime has `self_check`. Every report records
+its runtime's checks (`runtime.self_check`). A run on a runtime with a failed
+check carries a `self_check_failed` warning for each failed check.
+
 | Command | HTTP | MCP |
 | --- | --- | --- |
 | `linea runtime versions`: the oldest release, the verified releases and the built-in runtime's release | `GET /api/v1/collector-versions` | `linea_get_collector_support` |

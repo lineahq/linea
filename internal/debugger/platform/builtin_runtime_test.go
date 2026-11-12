@@ -9,6 +9,7 @@ import (
 
 	"github.com/lineahq/linea/internal/debugger/artifact"
 	"github.com/lineahq/linea/internal/debugger/engine"
+	"github.com/lineahq/linea/internal/debugger/runresult"
 	"github.com/lineahq/linea/internal/debugger/store/memory"
 	"github.com/lineahq/linea/internal/debugger/worker"
 )
@@ -46,6 +47,10 @@ func TestAWorkerOfThisReleaseRegistersTheBuiltInRuntime(t *testing.T) {
 	if c := info.Catalog; info.Name != BuiltInRuntime || c == nil || c.Identity != own.Runtime || c.Workers != 1 || c.Confirmed.IsZero() {
 		t.Fatalf("built-in runtime = %+v, %+v", info, info.Catalog)
 	}
+	// The worker's self-check reaches the runtime.
+	if len(info.SelfCheck) == 0 || len(runresult.FailedSelfChecks(info.SelfCheck)) != 0 {
+		t.Fatalf("built-in runtime self-check = %+v", info.SelfCheck)
+	}
 	if _, err := s.catalog.Runtime(ctx, stale.Name); !errors.Is(err, artifact.ErrNotFound) {
 		t.Fatalf("another release's entry = %v", err)
 	}
@@ -70,6 +75,9 @@ func TestAWorkerOfThisReleaseRegistersTheBuiltInRuntime(t *testing.T) {
 		}
 		if rep.Runtime == nil || rep.Runtime.Name != BuiltInRuntime || rep.Runtime.Kind != engine.RuntimeBuiltIn {
 			t.Fatalf("runtime %q: report runtime = %+v", name, rep.Runtime)
+		}
+		if len(rep.Runtime.SelfCheck) == 0 {
+			t.Fatalf("runtime %q: report runtime without a self-check", name)
 		}
 		ins, err := s.InspectConfiguration(ctx, testCaller, InspectRequest{Config: inspect.Config, Runtime: name})
 		if err != nil {
