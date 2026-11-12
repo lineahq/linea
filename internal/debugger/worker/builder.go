@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/lineahq/linea/internal/debugger/engine"
 	"github.com/lineahq/linea/internal/debugger/release"
 )
 
@@ -109,6 +110,26 @@ type BuildResult struct {
 	// done, with its binary.
 	Image       string `json:"image,omitempty"`
 	ExportError string `json:"export_error,omitempty"`
+	// Phases are the build's timed phases, counted from the builder's
+	// receipt of the job (BuildPhase*).
+	Phases []engine.Phase `json:"phases,omitempty"`
+}
+
+// The phases a builder times. The server keeps these names only.
+const (
+	BuildPhaseInputsDownload = "inputs.download"
+	BuildPhaseRuntimeBuild   = "runtime.build"
+	BuildPhaseBinaryUpload   = "binary.upload"
+	BuildPhaseImageExport    = "image.export"
+)
+
+// KnownBuildPhase reports whether name is one of the BuildPhase names.
+func KnownBuildPhase(name string) bool {
+	switch name {
+	case BuildPhaseInputsDownload, BuildPhaseRuntimeBuild, BuildPhaseBinaryUpload, BuildPhaseImageExport:
+		return true
+	}
+	return false
 }
 
 // BuilderConn is a connected builder, as the server holds it. It is safe

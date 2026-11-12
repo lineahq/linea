@@ -231,10 +231,8 @@ type pendingRun struct {
 	// unreleased is set while the run's start could not be recorded and
 	// handing it back failed too: its executor's renewal tries again.
 	unreleased bool
-	// submitted is the span of the request that submitted the run on this
-	// instance, if any; span is the context of the running attempt's span.
-	submitted trace.SpanContext
-	span      context.Context
+	// span is the context of the running attempt's span.
+	span context.Context
 }
 
 // Service owns scheduling and run history for all attached adapters.
@@ -567,11 +565,6 @@ func (s *Service) submitReserved(prepare context.Context, caller Caller, mode In
 		return nil, err
 	}
 	r, err := s.admitLocked(caller, mode, p, deadline, reservation)
-	if err == nil {
-		if job := s.jobs[r.id]; job != nil {
-			job.submitted = trace.SpanContextFromContext(prepare)
-		}
-	}
 	return r, err
 }
 
@@ -652,6 +645,8 @@ type preparedRun struct {
 	bundle  []byte
 	info    *engine.BundleInfo
 	runtime *boundRuntime
+	// submitted is the span of the request that submitted the run.
+	submitted trace.SpanContext
 }
 
 // prepareRun captures and validates the request's sources, one preparation at
@@ -662,7 +657,7 @@ func (s *Service) prepareRun(prepare context.Context, project string, req engine
 	defer stop()
 	defer releasePreparation()
 	var err error
-	out := preparedRun{}
+	out := preparedRun{submitted: trace.SpanContextFromContext(prepare)}
 	// The policy is the run's limits whatever the request says; the bundle
 	// records them at admission.
 	req.Limits = s.budgets.limits()
@@ -728,7 +723,7 @@ func (s *Service) admitLocked(caller Caller, mode InputMode, p preparedRun, dead
 	r := &Handle{
 		id: instrument.NewRunID(), project: caller.Project, mode: mode, caller: caller.Actor(), state: StateQueued,
 		created: time.Now().UTC(), changed: make(chan struct{}), done: make(chan struct{}), cancel: cancel,
-		bundle: p.bundle, bundleInfo: p.info, runtimeKey: runtimeKey(req),
+		bundle: p.bundle, bundleInfo: p.info, runtimeKey: runtimeKey(req), submitted: p.submitted,
 	}
 	if p.runtime != nil {
 		r.binary = p.runtime.binary

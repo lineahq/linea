@@ -46,6 +46,40 @@ const (
 	runReleased = "released"
 )
 
+// storedSpan is a span context as run metadata stores it: two IDs and the
+// sampled flag, nothing from the request it names.
+type storedSpan struct {
+	TraceID string `json:"trace_id"`
+	SpanID  string `json:"span_id"`
+	Sampled bool   `json:"sampled,omitempty"`
+}
+
+// storeSpan returns sc as stored, or nil when it is not valid.
+func storeSpan(sc trace.SpanContext) *storedSpan {
+	if !sc.IsValid() {
+		return nil
+	}
+	return &storedSpan{TraceID: sc.TraceID().String(), SpanID: sc.SpanID().String(), Sampled: sc.IsSampled()}
+}
+
+// spanContext returns the stored span as a remote span context, invalid
+// when it is absent or malformed: it only drives a link.
+func (s *storedSpan) spanContext() trace.SpanContext {
+	if s == nil {
+		return trace.SpanContext{}
+	}
+	tid, err1 := trace.TraceIDFromHex(s.TraceID)
+	sid, err2 := trace.SpanIDFromHex(s.SpanID)
+	if err1 != nil || err2 != nil {
+		return trace.SpanContext{}
+	}
+	var flags trace.TraceFlags
+	if s.Sampled {
+		flags = trace.FlagsSampled
+	}
+	return trace.NewSpanContext(trace.SpanContextConfig{TraceID: tid, SpanID: sid, TraceFlags: flags, Remote: true})
+}
+
 // newServerTraces sets the tracer from provider, a no-op one when nil.
 func (s *Service) newServerTraces(provider trace.TracerProvider) {
 	if provider == nil {
@@ -54,8 +88,8 @@ func (s *Service) newServerTraces(provider trace.TracerProvider) {
 	s.tracer = provider.Tracer(meterName)
 }
 
-// startRunSpan starts the span of the attempt job holds. A run submitted on
-// this instance links to the submitting request's span.
+// startRunSpan starts the span of the attempt job holds, linked to the
+// span of the request that submitted the run, on whichever instance.
 func (s *Service) startRunSpan(job *pendingRun) (context.Context, trace.Span) {
 	opts := []trace.SpanStartOption{
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -68,8 +102,8 @@ func (s *Service) startRunSpan(job *pendingRun) (context.Context, trace.Span) {
 	if job.assignment.Runtime != "" {
 		opts = append(opts, trace.WithAttributes(attribute.String(attrRuntimeID, job.assignment.Runtime)))
 	}
-	if job.submitted.IsValid() {
-		opts = append(opts, trace.WithLinks(trace.Link{SpanContext: job.submitted}))
+	if submitted := job.handle.submitted; submitted.IsValid() {
+		opts = append(opts, trace.WithLinks(trace.Link{SpanContext: submitted}))
 	}
 	// A root span: the run outlives the request that submitted it.
 	return s.tracer.Start(context.Background(), spanRun, opts...)
@@ -141,31 +175,49 @@ func (s *Service) startExecuteSpan(ctx context.Context) (trace.Span, *engine.Pha
 	return span, engine.NewPhases(start)
 }
 
-// endExecuteSpan ends span with a child per phase the execution reported,
-// placed by its offset. A worker's phases count from its receipt of the
-// request, so each is clamped into the span; unknown names, phases beyond
-// maxPhases and negative times are dropped.
+// endExecuteSpan ends span with a child per phase the execution reported.
 func (s *Service) endExecuteSpan(span trace.Span, phases *engine.Phases, err error) {
 	end := time.Now()
-	start := end.Add(-phases.Since(end))
+	status := ""
+	if err != nil {
+		status = string(runErrorCode(err))
+	}
+	s.endPhasedSpan(span, runPhaseSpans, end.Add(-phases.Since(end)), end, phases.List(), err != nil, status)
+}
+
+// phaseSpans names the children of an execute span and the attribute
+// counting them, and the phase names kept.
+type phaseSpans struct {
+	prefix, count string
+	known         func(string) bool
+}
+
+var runPhaseSpans = phaseSpans{prefix: spanPhase, count: attrPhases, known: engine.KnownPhase}
+
+// endPhasedSpan ends span, which started at start, at end with a child per
+// phase, placed by its offset from start. A worker's or builder's phases
+// count from its receipt of the request, so each is clamped into the span;
+// unknown names, phases beyond maxPhases and negative times are dropped.
+// failed sets the span's error status, described by status.
+func (s *Service) endPhasedSpan(span trace.Span, ps phaseSpans, start, end time.Time, phases []engine.Phase, failed bool, status string) {
 	ctx := trace.ContextWithSpan(context.Background(), span)
 	kept := 0
-	for _, p := range phases.List() {
-		if kept == maxPhases || !engine.KnownPhase(p.Name) || p.Offset < 0 || p.Duration < 0 {
+	for _, p := range phases {
+		if kept == maxPhases || !ps.known(p.Name) || p.Offset < 0 || p.Duration < 0 {
 			continue
 		}
 		kept++
 		from := earlier(start.Add(p.Offset), end)
 		to := earlier(from.Add(p.Duration), end)
-		_, child := s.tracer.Start(ctx, spanPhase+p.Name, trace.WithSpanKind(trace.SpanKindInternal), trace.WithTimestamp(from))
+		_, child := s.tracer.Start(ctx, ps.prefix+p.Name, trace.WithSpanKind(trace.SpanKindInternal), trace.WithTimestamp(from))
 		if p.Failed {
 			child.SetStatus(codes.Error, "")
 		}
 		child.End(trace.WithTimestamp(to))
 	}
-	span.SetAttributes(attribute.Int(attrPhases, kept))
-	if err != nil {
-		span.SetStatus(codes.Error, string(runErrorCode(err)))
+	span.SetAttributes(attribute.Int(ps.count, kept))
+	if failed {
+		span.SetStatus(codes.Error, status)
 	}
 	span.End(trace.WithTimestamp(end))
 }

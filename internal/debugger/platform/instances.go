@@ -387,7 +387,7 @@ func (s *Service) updateLocked(r *Handle, fresh *Handle) *Handle {
 	r.state, r.err, r.started, r.finished = fresh.state, fresh.err, fresh.started, fresh.finished
 	r.interrupted, r.attempt, r.generation, r.ordinal, r.stored = fresh.interrupted, fresh.attempt, fresh.generation, fresh.ordinal, fresh.stored
 	r.report, r.log, r.logTruncated, r.bundleInfo = fresh.report, fresh.log, fresh.logTruncated, fresh.bundleInfo
-	r.weight = fresh.weight
+	r.weight, r.submitted = fresh.weight, fresh.submitted
 	if r.stored {
 		r.bundle = nil
 	}

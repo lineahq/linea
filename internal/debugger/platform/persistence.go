@@ -13,6 +13,8 @@ import (
 	"slices"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/lineahq/linea/internal/debugger/runresult"
 
 	"github.com/lineahq/linea/internal/debugger/analysis"
@@ -44,6 +46,8 @@ type runMetadata struct {
 	Interrupted bool               `json:"interrupted,omitempty"`
 	Attempt     int                `json:"attempt,omitempty"`
 	Bundle      *engine.BundleInfo `json:"bundle,omitempty"`
+	// Submitted is the span of the request that submitted the run.
+	Submitted *storedSpan `json:"submitted,omitempty"`
 }
 
 type evidenceArchive struct {
@@ -77,6 +81,7 @@ type runPublication struct {
 	log          string
 	logTruncated bool
 	generation   uint64
+	submitted    trace.SpanContext
 	// weight is the decoded size of the evidence savePublication wrote.
 	weight int64
 	// Admission only.
@@ -89,7 +94,7 @@ func (r *Handle) publicationLocked() runPublication {
 	return runPublication{id: r.id, project: r.project, mode: r.mode, caller: r.caller, state: r.state, err: r.err,
 		created: r.created, started: r.started, finished: r.finished, interrupted: r.interrupted, attempt: r.attempt,
 		bundleInfo: r.bundleInfo, events: r.events, report: r.report, log: r.log, logTruncated: r.logTruncated,
-		generation: r.generation, bundle: r.bundle, runtimeKey: r.runtimeKey, binary: r.binary}
+		generation: r.generation, submitted: r.submitted, bundle: r.bundle, runtimeKey: r.runtimeKey, binary: r.binary}
 }
 
 // storedLocked records that the repository holds record. Once it holds the
@@ -128,6 +133,7 @@ func (s *Service) savePublication(ctx context.Context, p *runPublication, includ
 		m.Caller = &caller
 	}
 	m.Bundle = p.bundleInfo
+	m.Submitted = storeSpan(p.submitted)
 	if p.err != nil {
 		m.Error = p.err.Error()
 		if errors.Is(p.err, ErrPersistence) {
@@ -384,7 +390,7 @@ func (s *Service) handleFromRecord(ctx context.Context, record artifact.RunRecor
 		}
 		caller = *m.Caller
 	}
-	r := &Handle{id: m.ID, project: record.Project, mode: m.Mode, caller: caller, state: m.State, created: m.Created, started: m.Started, finished: m.Finished, interrupted: m.Interrupted, attempt: m.Attempt, kept: record.Kept, generation: record.Generation, ordinal: record.Ordinal, stored: record.Terminal, changed: make(chan struct{}), done: make(chan struct{}), cancel: func(error) {}}
+	r := &Handle{id: m.ID, project: record.Project, mode: m.Mode, caller: caller, state: m.State, created: m.Created, started: m.Started, finished: m.Finished, interrupted: m.Interrupted, attempt: m.Attempt, kept: record.Kept, generation: record.Generation, ordinal: record.Ordinal, stored: record.Terminal, submitted: m.Submitted.spanContext(), changed: make(chan struct{}), done: make(chan struct{}), cancel: func(error) {}}
 	if (m.Bundle == nil) != (record.BundleDigest == "") {
 		return nil, fmt.Errorf("%w: bundle binding", artifact.ErrCorrupt)
 	}

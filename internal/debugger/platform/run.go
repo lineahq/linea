@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/lineahq/linea/internal/debugger/runresult"
 
 	"github.com/lineahq/linea/internal/debugger/artifact"
@@ -117,6 +119,9 @@ type Handle struct {
 	// used is when the service last admitted, ended or read the run
 	// (Service.uses), under the service's mu.
 	used uint64
+	// submitted is the span of the request that submitted the run, stored
+	// with it so every instance that runs an attempt links to it.
+	submitted trace.SpanContext
 	// weight is the decoded size of the stored evidence the handle holds,
 	// which bounds the run cache (RunCacheBytes).
 	weight int64

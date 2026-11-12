@@ -9,7 +9,7 @@ below changes, upgrade both sides together. The release notes in
 
 | Interface | Between | Current | Rule | Checked in |
 | --- | --- | --- | --- | --- |
-| Product version | `linea-server` and `linea-builder` | release tag | Equal. A builder from another release is refused at connect. | `internal/debugger/platform/builders.go` |
+| Product version | `linea-server` and `linea-builder` | release tag | Equal. A builder from another release is refused at connect, so optional fields of the builder protocol, such as a result's `phases`, need no version. | `internal/debugger/platform/builders.go` |
 | Worker protocol | `linea-server` and `linea-worker`, pool workers and runtime images | 2 | Equal. A runtime image or worker on another protocol is refused and listed as stale; build it again with the new server. Optional fields, such as a result's `phases`, are added within a version: an older worker sends none and an older server ignores them. | `internal/debugger/worker/protocol.go` (`ProtocolVersion`) |
 | Collector release line | Debugger built-in runtime and the release table | 0.162.0 built in; runtimes 0.160.0 to 0.165.0 verified | A runtime builds for any release from 0.160.0; one outside the support table builds as unverified. Every runtime runs a [self-check](debugger/runtime-builds.md#self-check) at start; a failed check warns on each run and refuses nothing. | `build/linea-runtime.yaml`, `build/versions/` |
 | Collector components | `collector/livecapture` and your Collector | Collector 0.162.0 / `v1.68.0`, OTTL 0.162.0 | Minimums. Later releases verified up to 0.165.0. | [Newer releases](internals/collector-components-compatibility.md) |

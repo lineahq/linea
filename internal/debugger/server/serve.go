@@ -192,7 +192,11 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 		scheme = "https"
 	}
 	fmt.Fprintf(stderr, "listening on %s://%s, opening storage\n", scheme, ln.Addr())
-	repo, err := openStoreRetrying(ctx, tm.store, stderr)
+	// The store records its statements and object storage calls under the
+	// spans of the work that made them.
+	storeConfig := tm.store
+	storeConfig.TracerProvider = telemetry.tracerProvider()
+	repo, err := openStoreRetrying(ctx, storeConfig, stderr)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil

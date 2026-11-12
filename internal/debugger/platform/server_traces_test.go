@@ -2,6 +2,7 @@ package platform
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -230,4 +231,79 @@ func TestUntracedExecutionsRecordNoPhases(t *testing.T) {
 		t.Fatal("an execution without trace export records phases")
 	}
 	s.endExecuteSpan(span, phases, errors.New("failed"))
+}
+
+// TestAnotherInstanceLinksTheRunToItsSubmitter: the submitting request's span
+// is stored with the run, so the instance that claims it links its
+// linea.run span to that request; a run submitted without a span stores none.
+func TestAnotherInstanceLinksTheRunToItsSubmitter(t *testing.T) {
+	data := memory.NewData()
+	held := make(chan engine.Request, 1)
+	a := openPlatform(t, data, Options{Shared: true, Execute: blockingExecute(held)})
+	submit(t, a, engine.Request{ConfigYAML: bundleConfig, FixtureJSON: `{"resourceSpans":[]}`})
+	receive(t, held)
+	submitter := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: trace.TraceID{7}, SpanID: trace.SpanID{8}, TraceFlags: trace.FlagsSampled, Remote: true})
+	linked, err := a.submit(trace.ContextWithSpanContext(a.ctx, submitter), testCaller, ModeQuick,
+		engine.Request{ConfigYAML: bundleConfig, FixtureJSON: `{"resourceSpans":[]}`}, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlinked := submit(t, a, engine.Request{ConfigYAML: bundleConfig, FixtureJSON: `{"resourceSpans":[]}`})
+
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	b := openPlatform(t, data, Options{Shared: true, TracerProvider: provider,
+		Execute: func(_ context.Context, req engine.Request) (*engine.Report, error) {
+			return report(req, "completed"), nil
+		}})
+	for _, r := range []*Handle{linked, unlinked} {
+		if v := waitRun(t, r); v.State != StateDone {
+			t.Fatalf("run = %s, %v", v.State, r.Err())
+		}
+	}
+	waitFor(t, "two run spans", func() bool {
+		n := 0
+		for _, sp := range recorder.Ended() {
+			if sp.Name() == spanRun {
+				n++
+			}
+		}
+		return n == 2
+	})
+	for _, sp := range recorder.Ended() {
+		if sp.Name() != spanRun {
+			continue
+		}
+		links := sp.Links()
+		switch attrOf(sp, attrRunID) {
+		case linked.ID():
+			if len(links) != 1 || links[0].SpanContext.TraceID() != submitter.TraceID() || links[0].SpanContext.SpanID() != submitter.SpanID() || !links[0].SpanContext.IsSampled() {
+				t.Fatalf("linked run's links = %+v", links)
+			}
+		case unlinked.ID():
+			if len(links) != 0 {
+				t.Fatalf("unlinked run's links = %+v", links)
+			}
+		default:
+			t.Fatalf("unexpected run span %s", attrOf(sp, attrRunID))
+		}
+	}
+	records, err := b.repository.Runs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range records {
+		var m runMetadata
+		if err := json.Unmarshal(record.Metadata, &m); err != nil {
+			t.Fatal(err)
+		}
+		if (m.Submitted != nil) != (record.ID == linked.ID()) {
+			t.Fatalf("run %s stores submitted %+v", record.ID, m.Submitted)
+		}
+	}
+	if (&storedSpan{TraceID: "zz", SpanID: "01"}).spanContext().IsValid() {
+		t.Fatal("a malformed stored span links")
+	}
 }

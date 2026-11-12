@@ -605,10 +605,16 @@ A request with a W3C `traceparent` header continues that trace.
 | Span | Kind | Attributes | Covers |
 | --- | --- | --- | --- |
 | `{method} {route}`, such as `GET /api/v1/runs/{id}`; the method alone for a request no route serves | Server | `http.request.method`, `http.route`, `http.response.status_code` | One API, MCP, sign-in or web request. Error status on 5xx. Worker and builder connections get no span. |
-| `linea.run` | Internal, a root span | `linea.run.id`, `linea.run.mode` (`quick`, `scenario`), `linea.run.attempt`, `linea.runtime.id` (a built runtime's ID; absent for the built-in one), `linea.run.state` (`done`, `error`, `cancelled`, `lost`, or `released` when the instance handed the attempt back to the queue), `linea.error.code` (`run_failed`, `storage_error` or another platform error code) | One run attempt on this instance, from its claim to its published outcome. Linked to the request span that submitted it when the same instance took the request. Error status when the run ended in an error. |
+| `linea.run` | Internal, a root span | `linea.run.id`, `linea.run.mode` (`quick`, `scenario`), `linea.run.attempt`, `linea.runtime.id` (a built runtime's ID; absent for the built-in one), `linea.run.state` (`done`, `error`, `cancelled`, `lost`, or `released` when the instance handed the attempt back to the queue), `linea.error.code` (`run_failed`, `storage_error` or another platform error code) | One run attempt on this instance, from its claim to its published outcome. Linked to the span of the request that submitted the run, whichever instance took it: the run stores that span's trace and span IDs. Error status when the run ended in an error. |
 | `linea.run.execute` | Internal, child of `linea.run` | `linea.worker.phases` (how many phases the execution reported; 0 from a worker of an earlier release) | Executing the run: from sending it to its worker to holding the decoded report. Error status when the execution failed. |
 | `linea.worker.<phase>` | Internal, child of `linea.run.execute` | none | One timed phase of the execution (below). Error status when the phase failed. |
 | `linea.run.publish` | Internal, child of `linea.run` | `linea.run.evidence` (whether the evidence was written) | Writing the outcome to the database and object store. Error status when no write succeeded. |
+| `linea.build` | Internal, a root span | `linea.build.id`, `linea.build.attempt`, `linea.build.verified`, `linea.build.state` (`done`, `failed`, `cancelled`, or `released` when the attempt was left to expire: the builder or its lease was lost, or the server stopped), `linea.build.failure` on a failed build (`builder`: the builder reported an error; `timeout`; `rejected`: the server refused the result; `inputs`: preparing the inputs failed) | One runtime build attempt on the instance its builder is connected to, from its claim to its outcome. Linked to the span of the `BuildRuntime` request. A build reused from an identical one has no attempt and no span. Error status when the build failed. |
+| `linea.build.execute` | Internal, child of `linea.build` | `linea.builder.phases` (how many phases the builder reported) | Sending the job to the builder until its result. Error status when the builder failed, timed out or was lost. |
+| `linea.builder.<phase>` | Internal, child of `linea.build.execute` | none | One timed phase of the build (below). Error status when the phase failed. |
+| `linea.build.publish` | Internal, child of `linea.build` | none | Checking and storing the binary, registering the runtime and writing the outcome. Error status (`storage`) when a write failed. |
+| `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `WITH`, …, `BATCH`, `COPY` | Client, child of the span whose work made it | `db.system.name` (`postgresql`), `db.operation.name`, `db.query.text` (the statement with its `$n` placeholders), `db.operation.batch.size` for a batch, `db.response.status_code` (the SQLSTATE) on an error | One PostgreSQL statement, batch or copy. Error status carries the SQLSTATE. |
+| `s3 Put`, `s3 Get`, `s3 Open`, `s3 Stat`, `s3 Copy`, `s3 Delete`, `s3 List` | Client, child of the span whose work made it | `rpc.system` (`aws-api`), `rpc.method`, `linea.object.bytes` where known | One object storage call. A missing object is not an error. Presigning makes no call and has no span. |
 
 The worker exports nothing. It times its phases and sends them with the
 run's result. The server places them under `linea.run.execute`, counting
@@ -627,8 +633,25 @@ keeps at most 16 phases, under the names below only:
 | `result.encode` | Encoding the report |
 | `result.upload` | Uploading a large report to object storage |
 
+A builder times its phases the same way and sends them with its result;
+the server places them under `linea.build.execute`:
+
+| Phase | Covers |
+| --- | --- |
+| `inputs.download` | Downloading the manifest and every source archive |
+| `runtime.build` | Generating the module, `go build`, and starting the worker for its hello |
+| `binary.upload` | Uploading the binary |
+| `image.export` | Pushing the runtime image, when the server asks for one |
+
+Database and object storage spans are recorded only under another span, a
+request, a run attempt or a build attempt: the change feed, lease renewals,
+presence and upkeep poll every few seconds and record nothing. They never
+carry statement arguments, the connection string, the database user or
+host, the bucket, an object key or the endpoint.
+
 Spans never record a path value, query, header, user agent, client address,
-caller, error message, configuration or telemetry. Span and attribute names
+caller, error message, runtime or builder name, module path, URL, digest,
+build log, configuration or telemetry. Span and attribute names
 are a contract like the metric names.
 
 ## Limits

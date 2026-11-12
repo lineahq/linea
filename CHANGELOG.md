@@ -143,7 +143,15 @@ the first item below.
   child and a `linea.run.execute` child. Under it, one `linea.worker.<phase>`
   span per phase the worker timed and sent back with the result: the
   bundle, the configuration, the Collector run, the analysis and the result.
-  The worker exports nothing itself. An incoming W3C `traceparent` continues its trace. Spans carry IDs,
+  The worker exports nothing itself. A run attempt links to the request that
+  submitted the run on whichever instance claims it. Each runtime build
+  attempt is a `linea.build` span linked to the request that asked for it,
+  with `linea.build.execute` (one `linea.builder.<phase>` span per phase the
+  builder timed: downloading the inputs, the build, uploading the binary,
+  exporting the image) and `linea.build.publish`. Database statements and
+  object storage calls made for a request, a run or a build are client spans
+  with the statement's placeholders, never its values, keys or bucket. An
+  incoming W3C `traceparent` continues its trace. Spans carry IDs,
   routes, states and error codes, never queries, headers, error messages or
   telemetry (`docs/debugger/team-server.md` lists them). With only the shared
   endpoint set, set `OTEL_TRACES_EXPORTER=none` to export metrics alone.

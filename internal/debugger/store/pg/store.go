@@ -34,6 +34,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/lineahq/linea/internal/debugger/artifact"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // S3Config selects an S3-compatible bucket. Every object key starts with
@@ -66,6 +67,11 @@ type Config struct {
 	Limits  artifact.Limits
 	// MaxConns bounds the connection pool; nonpositive means 8.
 	MaxConns int32
+	// TracerProvider records a client span for each PostgreSQL statement and
+	// object storage call made under a span in the caller's context, with no
+	// arguments, keys or error messages. Calls without a parent span record
+	// nothing. Nil records nothing.
+	TracerProvider trace.TracerProvider
 }
 
 const (
@@ -120,6 +126,12 @@ func Open(ctx context.Context, cfg Config) (_ *Store, err error) {
 	pc.MaxConns = 8
 	if cfg.MaxConns > 0 {
 		pc.MaxConns = cfg.MaxConns
+	}
+	if cfg.TracerProvider != nil {
+		// One value implements the query, batch and copy tracer interfaces;
+		// pgx asserts each of them on ConnConfig.Tracer.
+		pc.ConnConfig.Tracer = newPGTracer(cfg.TracerProvider)
+		objects = newTracedObjects(objects, cfg.TracerProvider)
 	}
 	pc.ConnConfig.RuntimeParams["application_name"] = "linea-debugger"
 	// A hung statement or a transaction left open, which may hold the

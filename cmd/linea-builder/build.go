@@ -18,6 +18,7 @@ import (
 
 	"github.com/lineahq/linea/build/versions"
 	"github.com/lineahq/linea/internal/debugger/container"
+	"github.com/lineahq/linea/internal/debugger/engine"
 	"github.com/lineahq/linea/internal/debugger/worker"
 )
 
@@ -60,6 +61,20 @@ func newTransferClient() *http.Client {
 // run is the worker.BuildFunc: it downloads and checks the job's inputs,
 // builds, and uploads the binary. Everything it logs or returns is redacted.
 func (b *builder) run(ctx context.Context, job worker.BuildJob, log func(string)) worker.BuildResult {
+	phases := engine.NewPhases(time.Now())
+	t := phases.Track()
+	result := b.runPhases(ctx, job, log, t)
+	if result.Error != "" {
+		t.Done(errors.New(result.Error))
+	} else {
+		t.Done(nil)
+	}
+	result.Phases = phases.List()
+	return result
+}
+
+// runPhases runs the build, starting each of its phases on t.
+func (b *builder) runPhases(ctx context.Context, job worker.BuildJob, log func(string), t *engine.PhaseTracker) worker.BuildResult {
 	redact := redactor(job)
 	say := func(line string) { log(redact(line)) }
 	fail := func(err error) worker.BuildResult {
@@ -70,6 +85,7 @@ func (b *builder) run(ctx context.Context, job worker.BuildJob, log func(string)
 		return worker.BuildResult{Error: msg}
 	}
 
+	t.Next(worker.BuildPhaseInputsDownload)
 	say("downloading the manifest")
 	manifest, err := b.download(ctx, job.Manifest, maxManifestBytes)
 	if err != nil {
@@ -98,6 +114,7 @@ func (b *builder) run(ctx context.Context, job worker.BuildJob, log func(string)
 		set = &container.DependencySet{GoMod: release.GoMod, GoSum: release.GoSum}
 	}
 
+	t.Next(worker.BuildPhaseRuntimeBuild)
 	rt, err := b.build(ctx, container.BuildRequest{Name: job.Name, Manifest: manifest, Source: b.source, Set: set, Sources: sources, Log: say})
 	if rt != nil {
 		defer rt.Close()
@@ -108,6 +125,7 @@ func (b *builder) run(ctx context.Context, job worker.BuildJob, log func(string)
 	if rt.Size > job.BinaryLimit {
 		return fail(fmt.Errorf("the built binary is %d bytes, the limit is %d", rt.Size, job.BinaryLimit))
 	}
+	t.Next(worker.BuildPhaseBinaryUpload)
 	say(fmt.Sprintf("uploading the binary (%d bytes)", rt.Size))
 	if err := b.upload(ctx, job.BinaryURL, rt.Path, rt.Size); err != nil {
 		return fail(fmt.Errorf("uploading the binary: %w", err))
@@ -115,8 +133,10 @@ func (b *builder) run(ctx context.Context, job worker.BuildJob, log func(string)
 	hello := rt.Hello
 	result := worker.BuildResult{BinaryDigest: rt.Digest, BinarySize: rt.Size, Hello: &hello, OS: "linux", Arch: runtime.GOARCH}
 	if job.Export != nil {
+		t.Next(worker.BuildPhaseImageExport)
 		say("exporting the image " + job.Export.Repository + ":" + job.Export.Tag)
 		image, err := b.exportImage(ctx, job.Export, rt)
+		t.Done(err)
 		if err != nil {
 			// The runtime is built and stored: a failed export leaves the
 			// build done and says why.

@@ -369,9 +369,25 @@ The root Go module is declared in `go.mod`.
   exporter from the standard `OTEL_*` variables (`server/telemetry.go`) and
   shuts it down after the service closes. Spans (`server_traces.go`) use the
   trace API on `Options.TracerProvider`: `runJob` starts one root
-  `linea.run` span per attempt (linked to the submitting request's span
-  context, kept on `pendingRun` in memory only) and ends it with the run's
-  state, or `released`; `publishEnd` wraps the write in `linea.run.publish`.
+  `linea.run` span per attempt, linked to the submitting request's span
+  context, and ends it with the run's state, or `released`;
+  `publishEnd` wraps the write in `linea.run.publish` and passes that span
+  down to the store. `prepareRun` takes the span context from the request,
+  `admitLocked` keeps it on `Handle.submitted`, and the run metadata stores
+  it as the optional `submitted` (`storedSpan`: trace ID, span ID, sampled),
+  which `handleFromRecord` reads back, so every instance's attempt links to
+  it; a malformed value is ignored. Builds (`build_traces.go`): `runBuild`
+  starts a root `linea.build` span per attempt, linked to the span context
+  `queueServerBuild` stores in `serverBuildSpec.Submitted` (not part of
+  `buildKey`), with `linea.build.execute` (the builder's phases, from
+  `BuildResult.Phases`, kept by `worker.KnownBuildPhase`) and
+  `linea.build.publish` around `StoreBuildBinary` and `finishBuild`, which
+  returns the state it ended the build in. Its state is `released` unless the
+  attempt ended the build; a failed one carries a fixed `linea.build.failure`
+  reason. `endPhasedSpan` places the phases of both kinds of execute span.
+  The pg store (`store/pg/tracing.go`) records client spans for statements
+  (a pgx tracer) and object storage calls (an `ObjectStore` decorator) under
+  `pg.Config.TracerProvider`, only when the context carries a span.
   `Service.run` wraps the execution in `linea.run.execute` and, when it
   records, hands an `engine.Phases` recorder (`engine/phases.go`) down as
   `engine.Request.Phases` / `worker.Job.Phases`. `engine.Execute` times

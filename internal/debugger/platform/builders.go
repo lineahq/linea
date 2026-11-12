@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
 	"github.com/lineahq/linea/internal/debugger/artifact"
@@ -234,16 +236,48 @@ func (s *Service) serveBuilder(ctx context.Context, l *builderLink) {
 // builder's result. When the builder is lost or the lease is, it leaves
 // the build to expire, so another attempt runs it.
 func (s *Service) runBuild(ctx context.Context, l *builderLink, r artifact.BuildRecord) {
-	fail := func(msg string) { s.finishBuild(l, r, artifact.BuildFailed, serverBuildResult{Error: msg}, nil) }
 	var spec serverBuildSpec
-	if err := json.Unmarshal(r.Spec, &spec); err != nil {
-		fail("the build's stored description is unreadable")
+	specErr := json.Unmarshal(r.Spec, &spec)
+	span := s.startBuildSpan(r, spec)
+	traced := trace.ContextWithSpan(ctx, span)
+	// out is the attempt's outcome for its span: released unless this
+	// attempt ended the build.
+	out := buildSpanOutcome{state: buildReleased}
+	defer func() { endBuildSpan(span, out) }()
+	var publish trace.Span
+	startPublish := func() {
+		if publish == nil {
+			publish = s.startBuildPublishSpan(traced)
+		}
+	}
+	defer func() {
+		if publish != nil {
+			publish.End()
+		}
+	}()
+	finish := func(state artifact.BuildState, failure string, result serverBuildResult, binary *artifact.RuntimeBinary) {
+		startPublish()
+		final, ended := s.finishBuild(trace.ContextWithSpan(ctx, publish), l, r, state, result, binary)
+		switch {
+		case !ended:
+			// The lease ended meanwhile, or writing the outcome failed.
+		case final == artifact.BuildFailed && state == artifact.BuildDone:
+			out = buildSpanOutcome{state: string(final), failure: buildFailureRejected}
+		default:
+			out = buildSpanOutcome{state: string(final), failure: failure}
+		}
+	}
+	fail := func(failure, msg string) {
+		finish(artifact.BuildFailed, failure, serverBuildResult{Error: msg}, nil)
+	}
+	if specErr != nil {
+		fail(buildFailureInputs, "the build's stored description is unreadable")
 		return
 	}
-	job, stage, err := s.buildJob(ctx, l, r, spec)
+	job, stage, err := s.buildJob(traced, l, r, spec)
 	if err != nil {
 		if ctx.Err() == nil {
-			fail(fmt.Sprintf("preparing the build's inputs failed: %v", err))
+			fail(buildFailureInputs, fmt.Sprintf("preparing the build's inputs failed: %v", err))
 		}
 		return
 	}
@@ -266,17 +300,29 @@ func (s *Service) runBuild(ctx context.Context, l *builderLink, r artifact.Build
 			}
 		}
 	}()
+	execute, executeStart := s.startBuildExecuteSpan(traced)
 	result, err := l.conn.Build(bctx, job, log.add)
 	cause := context.Cause(bctx)
+	end := buildEndOf(err, cause)
+	executeFailure := ""
+	switch {
+	case end == buildEndTimedOut:
+		executeFailure = buildFailureTimeout
+	case end != buildEndAnswered:
+		executeFailure = buildReleased
+	case result.Error != "":
+		executeFailure = buildFailureBuilder
+	}
+	s.endPhasedSpan(execute, buildPhaseSpans, executeStart, time.Now(), result.Phases, executeFailure != "" && end != buildEndCancelled, executeFailure)
 	stopDeadline()
 	<-flushed
 	s.flushBuildLog(context.WithoutCancel(ctx), l, r, log, func() {})
-	switch buildEndOf(err, cause) {
+	switch end {
 	case buildEndCancelled:
-		s.finishBuild(l, r, artifact.BuildCancelled, serverBuildResult{Error: errBuildCancelRequested.Error()}, nil)
+		finish(artifact.BuildCancelled, "", serverBuildResult{Error: errBuildCancelRequested.Error()}, nil)
 		return
 	case buildEndTimedOut:
-		fail(errBuildTimeout.Error())
+		fail(buildFailureTimeout, errBuildTimeout.Error())
 		return
 	case buildEndBuilderLost:
 		s.logWorker("build lost its builder", l.conn.Endpoint(), l.conn.Hello().Name, err, zap.String("build", r.ID))
@@ -284,37 +330,39 @@ func (s *Service) runBuild(ctx context.Context, l *builderLink, r artifact.Build
 	case buildEndAbandoned:
 		return // the lease was lost, the builder went or the server stops
 	}
-	switch {
-	case result.Error != "":
-		fail(artifact.ClipBuildLine(result.Error))
+	if result.Error != "" {
+		fail(buildFailureBuilder, artifact.ClipBuildLine(result.Error))
 		return
 	}
 	if problem := checkBuiltRuntime(result, spec); problem != "" {
-		fail(problem)
+		fail(buildFailureRejected, problem)
 		return
 	}
-	err = l.bt.StoreBuildBinary(context.WithoutCancel(ctx), r.ID, l.holder, r.Attempt, stage, result.BinaryDigest, result.BinarySize, artifact.MaxRuntimeBinary)
+	startPublish()
+	err = l.bt.StoreBuildBinary(context.WithoutCancel(trace.ContextWithSpan(ctx, publish)), r.ID, l.holder, r.Attempt, stage,
+		result.BinaryDigest, result.BinarySize, artifact.MaxRuntimeBinary)
 	switch {
 	case errors.Is(err, artifact.ErrConflict):
 		return // the lease ended meanwhile
 	case errors.Is(err, artifact.ErrCorrupt), errors.Is(err, artifact.ErrNotFound):
-		fail("the uploaded binary is missing or differs from the one the builder reported")
+		fail(buildFailureRejected, "the uploaded binary is missing or differs from the one the builder reported")
 		return
 	case errors.Is(err, artifact.ErrLimit):
-		fail(fmt.Sprintf("the binary exceeds %d bytes or the server's storage limit", artifact.MaxRuntimeBinary))
+		fail(buildFailureRejected, fmt.Sprintf("the binary exceeds %d bytes or the server's storage limit", artifact.MaxRuntimeBinary))
 		return
 	case err != nil:
+		publish.SetStatus(codes.Error, buildFailureStorage)
 		s.logWorker("storing a built binary failed", l.conn.Endpoint(), l.conn.Hello().Name, err, zap.String("build", r.ID))
 		return // the lease expires and another attempt runs
 	}
 	hello, err := json.Marshal(result.Hello)
 	if err != nil {
-		fail("the built worker's hello is unreadable")
+		fail(buildFailureRejected, "the built worker's hello is unreadable")
 		return
 	}
 	done := serverBuildResult{Runtime: result.Hello.Runtime, Hello: hello, OS: result.OS, Arch: result.Arch}
 	done.Image, done.ExportError = checkExport(result, s.buildExport)
-	s.finishBuild(l, r, artifact.BuildDone, done,
+	finish(artifact.BuildDone, "", done,
 		&artifact.RuntimeBinary{Digest: result.BinaryDigest, Bytes: result.BinarySize, OS: result.OS, Arch: result.Arch})
 }
 
@@ -423,10 +471,12 @@ func checkBuiltRuntime(r worker.BuildResult, spec serverBuildSpec) string {
 }
 
 // finishBuild ends a build the builder holds and, for a done one,
-// registers its runtime. A lease the builder no longer holds leaves the
-// build as it is.
-func (s *Service) finishBuild(l *builderLink, r artifact.BuildRecord, state artifact.BuildState, result serverBuildResult, binary *artifact.RuntimeBinary) {
-	ctx := context.WithoutCancel(s.ctx)
+// registers its runtime; it returns the state the build ended in, which is
+// failed for a done build whose name was taken meanwhile, and whether it
+// ended it. A lease the builder no longer holds leaves the build as it is.
+// Its writes are traced under traced's span, never cancelled by it.
+func (s *Service) finishBuild(traced context.Context, l *builderLink, r artifact.BuildRecord, state artifact.BuildState, result serverBuildResult, binary *artifact.RuntimeBinary) (artifact.BuildState, bool) {
+	ctx := trace.ContextWithSpan(context.WithoutCancel(s.ctx), trace.SpanFromContext(traced))
 	if state == artifact.BuildDone {
 		// The name was checked when the build was requested; another
 		// principal may have registered it since.
@@ -440,7 +490,7 @@ func (s *Service) finishBuild(l *builderLink, r artifact.BuildRecord, state arti
 	}
 	raw, err := json.Marshal(result)
 	if err != nil {
-		return
+		return state, false
 	}
 	o := artifact.BuildOutcome{State: state, Result: raw}
 	if binary != nil {
@@ -457,11 +507,13 @@ func (s *Service) finishBuild(l *builderLink, r artifact.BuildRecord, state arti
 	}
 	if _, err := l.builds.FinishBuild(ctx, r.ID, l.holder, r.Attempt, o, s.now().UTC()); err != nil {
 		if !errors.Is(err, artifact.ErrConflict) {
+			trace.SpanFromContext(traced).SetStatus(codes.Error, buildFailureStorage)
 			s.logWorker("ending a build failed", l.conn.Endpoint(), l.conn.Hello().Name, err, zap.String("build", r.ID))
 		}
-		return
+		return state, false
 	}
 	s.buildChanged(r.ID)
+	return state, true
 }
 
 // registerBuilt records a done build's runtime in the catalog under the

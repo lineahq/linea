@@ -522,12 +522,14 @@ func (s *Service) finish(job *pendingRun, report *engine.Report, err error) {
 // this write too. It returns the record written, if any, and whether
 // another instance published the run first, which leaves p unwritten.
 func (s *Service) publishEnd(span context.Context, p *runPublication, shared bool) (*artifact.RunRecord, bool) {
+	publish := s.startPublishSpan(span)
+	// The writes carry the publish span, so the store's spans nest under it.
+	traced := trace.ContextWithSpan(context.Background(), publish)
 	save := func(evidence bool) (*artifact.RunRecord, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), publishTimeout)
+		ctx, cancel := context.WithTimeout(traced, publishTimeout)
 		defer cancel()
 		return s.savePublication(ctx, p, evidence)
 	}
-	publish := s.startPublishSpan(span)
 	record, err := save(true)
 	if shared && errors.Is(err, artifact.ErrConflict) {
 		endPublishSpan(publish, false, false)

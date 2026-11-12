@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/lineahq/linea/build/versions"
 	"github.com/lineahq/linea/internal/debugger/artifact"
 	"github.com/lineahq/linea/internal/debugger/authz"
@@ -51,6 +53,9 @@ type serverBuildSpec struct {
 	Warnings         []string `json:"warnings,omitempty"`
 	GoImage          string   `json:"go_image"`
 	Builder          string   `json:"builder"`
+	// Submitted is the span of the request that asked for the build. It
+	// is not part of the build key.
+	Submitted *storedSpan `json:"submitted,omitempty"`
 }
 
 // serverBuildResult is a server build's stored outcome: an error, or the
@@ -115,7 +120,8 @@ func (s *Service) queueServerBuild(ctx context.Context, caller Caller, builds ar
 		return nil, classify(err, CodeValidationFailed)
 	}
 	spec := serverBuildSpec{Name: req.Name, CollectorVersion: m.CollectorVersion(), Verified: support == versions.Verified,
-		Warnings: manifest.Warnings(raw), GoImage: container.GoImage, Builder: builderVersion}
+		Warnings: manifest.Warnings(raw), GoImage: container.GoImage, Builder: builderVersion,
+		Submitted: storeSpan(trace.SpanContextFromContext(ctx))}
 	var modules []string
 	for _, e := range m.Entries() {
 		modules = append(modules, e.ModulePath())
