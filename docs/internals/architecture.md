@@ -360,7 +360,14 @@ The root Go module is declared in `go.mod`.
   `StorageReady` is false once none answered for a whole lease; the server's
   `/readyz` reads it. `linea-server` builds the SDK provider with an OTLP
   exporter from the standard `OTEL_*` variables (`server/telemetry.go`) and
-  shuts it down after the service closes. Pool workers (`worker_pool.go`): a worker whose hello
+  shuts it down after the service closes. Spans (`server_traces.go`) use the
+  trace API on `Options.TracerProvider`: `runJob` starts one root
+  `linea.run` span per attempt (linked to the submitting request's span
+  context, kept on `pendingRun` in memory only) and ends it with the run's
+  state, or `released`; `publishEnd` wraps the write in `linea.run.publish`.
+  The server's `traced` middleware (`server/tracing.go`) gives each request
+  one server span named by `api.Server.Route` or the outer mux pattern, and
+  skips upgraded worker and builder connections. Pool workers (`worker_pool.go`): a worker whose hello
   carries `Pool` is an executor for every catalog entry with a `binary` of its
   platform (refused without `artifact.BuildTransfers`). A run on such an entry
   is pinned at admission to its binary (`artifact.RunBinary`,

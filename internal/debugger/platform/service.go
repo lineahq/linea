@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
 	"github.com/lineahq/linea/build/versions"
@@ -62,7 +63,10 @@ type Options struct {
 	// MeterProvider records the server's own metrics (server_metrics.go);
 	// nil records none.
 	MeterProvider metric.MeterProvider
-	QueueCapacity int
+	// TracerProvider records the server's own spans (server_traces.go);
+	// nil records none.
+	TracerProvider trace.TracerProvider
+	QueueCapacity  int
 	// HistoryLimit is how many terminal runs a service without a
 	// repository keeps; RunCache how many a service with one keeps in
 	// memory after reading them (DefaultRunCache).
@@ -225,6 +229,10 @@ type pendingRun struct {
 	// unreleased is set while the run's start could not be recorded and
 	// handing it back failed too: its executor's renewal tries again.
 	unreleased bool
+	// submitted is the span of the request that submitted the run on this
+	// instance, if any; span is the context of the running attempt's span.
+	submitted trace.SpanContext
+	span      context.Context
 }
 
 // Service owns scheduling and run history for all attached adapters.
@@ -275,8 +283,10 @@ type Service struct {
 	buildCounts buildCountCache
 	// metrics are the server's own instruments (server_metrics.go).
 	metrics serverMetrics
-	lease   time.Duration
-	now     func() time.Time
+	// tracer starts the server's own spans (server_traces.go).
+	tracer trace.Tracer
+	lease  time.Duration
+	now    func() time.Time
 	// beating is closed when the heartbeat loops stop.
 	beating chan struct{}
 	// leased is a copy of executors that lease renewal reads without mu.
@@ -518,6 +528,7 @@ func newService(opts Options, repository artifact.Repository) *Service {
 	s.builds = newBuildQueue(s)
 	s.metrics.storageAnswered(s.now())
 	s.newServerMetrics(opts.MeterProvider)
+	s.newServerTraces(opts.TracerProvider)
 	return s
 }
 
@@ -549,7 +560,13 @@ func (s *Service) submitReserved(prepare context.Context, caller Caller, mode In
 	if err := prepare.Err(); err != nil {
 		return nil, err
 	}
-	return s.admitLocked(caller, mode, p, deadline, reservation)
+	r, err := s.admitLocked(caller, mode, p, deadline, reservation)
+	if err == nil {
+		if job := s.jobs[r.id]; job != nil {
+			job.submitted = trace.SpanContextFromContext(prepare)
+		}
+	}
+	return r, err
 }
 
 // enterPreparation validates a request and takes a preparation slot: one of

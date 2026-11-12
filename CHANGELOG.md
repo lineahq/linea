@@ -136,6 +136,14 @@ the first item below.
   (`docs/debugger/team-server.md` lists them). `GET /readyz` answers 503
   `storage unavailable` after the database has not answered for a whole run
   lease, while `/healthz` stays 200.
+- `linea-server` exports spans about itself over OTLP under the same rules
+  (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or
+  `OTEL_TRACES_EXPORTER=otlp`): one span per HTTP request named by its
+  route, and one `linea.run` span per run attempt with a `linea.run.publish`
+  child. An incoming W3C `traceparent` continues its trace. Spans carry IDs,
+  routes, states and error codes, never queries, headers, error messages or
+  telemetry (`docs/debugger/team-server.md` lists them). With only the shared
+  endpoint set, set `OTEL_TRACES_EXPORTER=none` to export metrics alone.
 - `GET /healthz` and `GET /readyz` answer without a credential: the second
   answers 503 until the storage is open and once the server drains.
   `linea-server probe` checks `/readyz` (`--url` picks another) and is the

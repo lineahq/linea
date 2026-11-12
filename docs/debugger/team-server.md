@@ -559,7 +559,7 @@ is off until the standard OpenTelemetry environment variables ask for it:
 
 | Variable | Effect |
 | --- | --- |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | Either one turns export on. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | Either one turns export on. The shared endpoint also turns on [traces](#server-traces). |
 | `OTEL_METRICS_EXPORTER` | `otlp` turns export on (to `localhost` without an endpoint); `none` turns it off. Any other exporter refuses startup. |
 | `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL` | `http/protobuf` (the default) or `grpc`. `http/json` refuses startup. |
 | `OTEL_SDK_DISABLED` | `true` turns export off. |
@@ -589,6 +589,28 @@ never logs the headers. The chart passes these variables with
 
 The names, units and attributes are a contract: a release changes them only
 with a changelog entry. The server serves no metrics endpoint of its own.
+
+### Server traces
+
+`linea-server` also exports spans about itself over OTLP, with the same
+resource. Export follows the same rules with the trace variables:
+`OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` turns
+it on, `OTEL_TRACES_EXPORTER` takes `otlp` or `none`, and
+`OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` picks the protocol. Setting only the
+shared endpoint exports metrics and traces; set `OTEL_TRACES_EXPORTER=none`
+for metrics alone. The SDK reads the sampler from `OTEL_TRACES_SAMPLER`
+(default `parentbased_always_on`) and the batch settings from `OTEL_BSP_*`.
+A request with a W3C `traceparent` header continues that trace.
+
+| Span | Kind | Attributes | Covers |
+| --- | --- | --- | --- |
+| `{method} {route}`, such as `GET /api/v1/runs/{id}`; the method alone for a request no route serves | Server | `http.request.method`, `http.route`, `http.response.status_code` | One API, MCP, sign-in or web request. Error status on 5xx. Worker and builder connections get no span. |
+| `linea.run` | Internal, a root span | `linea.run.id`, `linea.run.mode` (`quick`, `scenario`), `linea.run.attempt`, `linea.runtime.id` (a built runtime's ID; absent for the built-in one), `linea.run.state` (`done`, `error`, `cancelled`, `lost`, or `released` when the instance handed the attempt back to the queue), `linea.error.code` (`run_failed`, `storage_error` or another platform error code) | One run attempt on this instance, from its claim to its published outcome. Linked to the request span that submitted it when the same instance took the request. Error status when the run ended in an error. |
+| `linea.run.publish` | Internal, child of `linea.run` | `linea.run.evidence` (whether the evidence was written) | Writing the outcome to the database and object store. Error status when no write succeeded. |
+
+Spans never record a path value, query, header, user agent, client address,
+caller, error message, configuration or telemetry. Span and attribute names
+are a contract like the metric names.
 
 ## Limits
 

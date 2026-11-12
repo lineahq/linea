@@ -145,19 +145,13 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 	if err != nil {
 		return err
 	}
-	meters, protocol, err := serverMeterProvider(ctx, processEnvironment().lookup, logger)
+	telemetry, err := newServerTelemetry(ctx, processEnvironment().lookup, logger)
 	if err != nil {
 		return err
 	}
-	if meters != nil {
-		// Deferred before the service's Close, it runs after it: the last
-		// collection is sent once the service has stopped.
-		defer func() {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = meters.Shutdown(shutdownCtx)
-		}()
-	}
+	// Deferred before the service's Close, it runs after it: the last
+	// collection and spans are sent once the service has stopped.
+	defer telemetry.shutdown()
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return err
@@ -212,7 +206,7 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 		Logger: logger,
 		Access: tm.access, BuiltInOnWorkers: true, WorkerToken: tm.workerToken, BuilderToken: tm.buildToken, BuildExport: tm.buildExport,
 		QueueCapacity: tm.queue, Limits: tm.principals, Retention: tm.retention, Shared: true, Capture: captureOptions,
-		GitCloneBytes: tm.gitClone, AdminPassword: tm.adminPassword, MeterProvider: meterProvider(meters),
+		GitCloneBytes: tm.gitClone, AdminPassword: tm.adminPassword, MeterProvider: telemetry.meterProvider(), TracerProvider: telemetry.tracerProvider(),
 	})
 	if err != nil {
 		return err
@@ -247,8 +241,15 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 	var auth platform.Authenticator = chain
 	h := api.New(api.Options{Platform: service, Fallback: webui.Handler(), Logger: logger, Authenticator: auth, RemoteAccess: true})
 	var handler http.Handler = h
+	route := h.Route
 	if signIn != nil || enableMCP {
 		mux := http.NewServeMux()
+		route = func(r *http.Request) string {
+			if _, pattern := mux.Handler(r); pattern != "/" {
+				return pattern
+			}
+			return h.Route(r)
+		}
 		mux.Handle("/", h)
 		handler = mux
 		if signIn != nil {
@@ -286,7 +287,7 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 	state.watchStorage(service.StorageReady)
-	state.serve(handler)
+	state.serve(traced(handler, telemetry.tracerProvider(), route))
 	fmt.Fprintf(stderr, "serving API on %s://%s/api/v1 (contract: /api/v1/openapi.json)\n", scheme, ln.Addr())
 	if enableMCP {
 		fmt.Fprintf(stderr, "serving MCP on %s://%s/mcp\n", scheme, ln.Addr())
@@ -303,8 +304,11 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 	}
 	fmt.Fprintf(stderr, "team mode: requests are authenticated by %s, authorized by the server config's bindings, and run on the team's default runtime unless they name one\n",
 		strings.Join(methods, ", "))
-	if meters != nil {
-		fmt.Fprintf(stderr, "exporting server metrics over OTLP (%s)\n", protocol)
+	if telemetry.meters != nil {
+		fmt.Fprintf(stderr, "exporting server metrics over OTLP (%s)\n", telemetry.metricsProtocol)
+	}
+	if telemetry.tracers != nil {
+		fmt.Fprintf(stderr, "exporting server traces over OTLP (%s)\n", telemetry.tracesProtocol)
 	}
 	if captureOptions.Fleet.Endpoint != "" {
 		fmt.Fprintf(stderr, "live capture through fleet at %s\n", captureOptions.Fleet.Endpoint)

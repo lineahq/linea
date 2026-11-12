@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
 	"github.com/lineahq/linea/internal/debugger/artifact"
@@ -298,6 +299,9 @@ func poolRank(e *executor, key string) int {
 // runJob starts a taken job, executes it and publishes its outcome.
 func (s *Service) runJob(job *pendingRun) {
 	defer s.executing.Done()
+	var span trace.Span
+	job.span, span = s.startRunSpan(job)
+	defer endRunSpan(span, job)
 	if !s.startJob(job) {
 		return
 	}
@@ -487,7 +491,7 @@ func (s *Service) finish(job *pendingRun, report *engine.Report, err error) {
 		r.publishing = true
 		r.mu.Unlock()
 		s.mu.Unlock()
-		record, conflict := s.publishEnd(&p, shared)
+		record, conflict := s.publishEnd(job.span, &p, shared)
 		s.mu.Lock()
 		r.mu.Lock()
 		r.publishing = false
@@ -514,20 +518,24 @@ func (s *Service) finish(job *pendingRun, report *engine.Report, err error) {
 // is written without evidence, best effort: an uncertain repository refuses
 // this write too. It returns the record written, if any, and whether
 // another instance published the run first, which leaves p unwritten.
-func (s *Service) publishEnd(p *runPublication, shared bool) (*artifact.RunRecord, bool) {
+func (s *Service) publishEnd(span context.Context, p *runPublication, shared bool) (*artifact.RunRecord, bool) {
 	save := func(evidence bool) (*artifact.RunRecord, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), publishTimeout)
 		defer cancel()
 		return s.savePublication(ctx, p, evidence)
 	}
+	publish := s.startPublishSpan(span)
 	record, err := save(true)
 	if shared && errors.Is(err, artifact.ErrConflict) {
+		endPublishSpan(publish, false, false)
 		return nil, true
 	}
+	evidence := err == nil
 	if err != nil {
 		p.state, p.report, p.err = StateError, nil, persistenceError(err)
-		record, _ = save(false)
+		record, err = save(false)
 	}
+	endPublishSpan(publish, evidence, err != nil)
 	return record, false
 }
 

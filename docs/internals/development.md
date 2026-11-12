@@ -274,7 +274,8 @@ and embedded web client of a team server.
 - `--mcp` also mounts `/mcp` on the same listener and platform; clients
   present an API token.
 - `OTEL_EXPORTER_OTLP_ENDPOINT` (and the other standard `OTEL_*` variables)
-  exports the server's own metrics over OTLP; without it nothing is exported.
+  exports the server's own metrics and traces over OTLP; without it nothing
+  is exported.
 - This is the only server mode: `linea-server` with neither `--config` nor a `LINEA_*` config variable is refused, and there
   is no in-memory or loopback-only mode and no `linea up`.
 - The server config names the PostgreSQL and object storage, the storage limits
