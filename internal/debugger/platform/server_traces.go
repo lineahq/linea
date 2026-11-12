@@ -160,29 +160,35 @@ func endPublishSpan(span trace.Span, evidence, failed bool) {
 	span.End()
 }
 
+// executeSpan is an execute span and its start, from which its phases and
+// its end are placed.
+type executeSpan struct {
+	span  trace.Span
+	start time.Time
+}
+
 // startExecuteSpan starts the span of a run's execution under the run span
 // ctx and, when it records, the recorder of the phases the execution
 // reports, counting from the span's start.
-func (s *Service) startExecuteSpan(ctx context.Context) (trace.Span, *engine.Phases) {
+func (s *Service) startExecuteSpan(ctx context.Context) (executeSpan, *engine.Phases) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	start := time.Now()
 	_, span := s.tracer.Start(ctx, spanRunExecute, trace.WithSpanKind(trace.SpanKindInternal), trace.WithTimestamp(start))
 	if !span.IsRecording() {
-		return span, nil
+		return executeSpan{span, start}, nil
 	}
-	return span, engine.NewPhases(start)
+	return executeSpan{span, start}, engine.NewPhases(start)
 }
 
 // endExecuteSpan ends span with a child per phase the execution reported.
-func (s *Service) endExecuteSpan(span trace.Span, phases *engine.Phases, err error) {
-	end := time.Now()
+func (s *Service) endExecuteSpan(span executeSpan, phases *engine.Phases, err error) {
 	status := ""
 	if err != nil {
 		status = string(runErrorCode(err))
 	}
-	s.endPhasedSpan(span, runPhaseSpans, end.Add(-phases.Since(end)), end, phases.List(), err != nil, status)
+	s.endPhasedSpan(span, runPhaseSpans, phases.List(), err != nil, status)
 }
 
 // phaseSpans names the children of an execute span and the attribute
@@ -194,12 +200,19 @@ type phaseSpans struct {
 
 var runPhaseSpans = phaseSpans{prefix: spanPhase, count: attrPhases, known: engine.KnownPhase}
 
-// endPhasedSpan ends span, which started at start, at end with a child per
-// phase, placed by its offset from start. A worker's or builder's phases
-// count from its receipt of the request, so each is clamped into the span;
+// endPhasedSpan ends an execute span now with a child per phase, placed by
+// its offset from the span's start. A worker's or builder's phases count
+// from its receipt of the request, so each is clamped into the span;
 // unknown names, phases beyond maxPhases and negative times are dropped.
 // failed sets the span's error status, described by status.
-func (s *Service) endPhasedSpan(span trace.Span, ps phaseSpans, start, end time.Time, phases []engine.Phase, failed bool, status string) {
+//
+// The end is the start plus the elapsed time, as the SDK ends a span
+// without a timestamp, never the wall clock read now: the phases are placed
+// by elapsed time too, so a wall clock that is set back or drifts, as in a
+// virtual machine under load, cannot end the span before its phases.
+func (s *Service) endPhasedSpan(execute executeSpan, ps phaseSpans, phases []engine.Phase, failed bool, status string) {
+	span, start := execute.span, execute.start
+	end := start.Add(time.Since(start))
 	ctx := trace.ContextWithSpan(context.Background(), span)
 	kept := 0
 	for _, p := range phases {

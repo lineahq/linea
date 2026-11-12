@@ -94,11 +94,11 @@ func endBuildSpan(span trace.Span, out buildSpanOutcome) {
 }
 
 // startBuildExecuteSpan starts the span of a build's exchange with its
-// builder under the build span in ctx, and returns its start.
-func (s *Service) startBuildExecuteSpan(ctx context.Context) (trace.Span, time.Time) {
+// builder under the build span in ctx.
+func (s *Service) startBuildExecuteSpan(ctx context.Context) executeSpan {
 	start := time.Now()
 	_, span := s.tracer.Start(ctx, spanBuildExecute, trace.WithSpanKind(trace.SpanKindInternal), trace.WithTimestamp(start))
-	return span, start
+	return executeSpan{span, start}
 }
 
 // startBuildPublishSpan starts the span of storing a build's binary and

@@ -300,7 +300,7 @@ func (s *Service) runBuild(ctx context.Context, l *builderLink, r artifact.Build
 			}
 		}
 	}()
-	execute, executeStart := s.startBuildExecuteSpan(traced)
+	execute := s.startBuildExecuteSpan(traced)
 	result, err := l.conn.Build(bctx, job, log.add)
 	cause := context.Cause(bctx)
 	end := buildEndOf(err, cause)
@@ -313,7 +313,7 @@ func (s *Service) runBuild(ctx context.Context, l *builderLink, r artifact.Build
 	case result.Error != "":
 		executeFailure = buildFailureBuilder
 	}
-	s.endPhasedSpan(execute, buildPhaseSpans, executeStart, time.Now(), result.Phases, executeFailure != "" && end != buildEndCancelled, executeFailure)
+	s.endPhasedSpan(execute, buildPhaseSpans, result.Phases, executeFailure != "" && end != buildEndCancelled, executeFailure)
 	stopDeadline()
 	<-flushed
 	s.flushBuildLog(context.WithoutCancel(ctx), l, r, log, func() {})

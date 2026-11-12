@@ -396,7 +396,10 @@ The root Go module is declared in `go.mod`.
   `result.upload`, counted from its receipt of the request, and sends them as
   the result's `phases`. A pool relay prepends `runtime.acquire` and shifts its
   child's phases. `endExecuteSpan` keeps known names only, at most
-  `maxPhases`, and clamps each into the execute span.
+  `maxPhases`, and clamps each into the execute span, which `endPhasedSpan`
+  ends at its start plus the elapsed time (monotonic), never the wall clock
+  read at the end: a container's wall clock can drift under load, which put
+  phases past their execute span (seen in Docker Desktop, 2026-11-12).
   The server's `traced` middleware (`server/tracing.go`) gives each request
   one server span named by `api.Server.Route` or the outer mux pattern, and
   skips upgraded worker and builder connections. Pool workers (`worker_pool.go`): a worker whose hello
