@@ -244,6 +244,17 @@ func (s *Store) inTx(ctx context.Context, op string, fn func(pgx.Tx) error) erro
 	return storageErr(op, tx.Commit(ctx))
 }
 
+// inReadTx runs fn in a read-only transaction and rolls it back: for checks
+// that write nothing.
+func (s *Store) inReadTx(ctx context.Context, op string, fn func(pgx.Tx) error) error {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return storageErr(op, err)
+	}
+	defer tx.Rollback(context.WithoutCancel(ctx))
+	return storageErr(op, fn(tx))
+}
+
 // storageErr passes repository errors and cancellations through and wraps
 // anything else as ErrStorage. Constraint violations that mean "already
 // exists" or "still referenced" are conflicts.

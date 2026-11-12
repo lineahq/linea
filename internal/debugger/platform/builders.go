@@ -540,7 +540,7 @@ func (s *Service) registerBuilt(ctx context.Context, r artifact.BuildRecord) err
 	// retention. Without it the runtime still runs; it is listed without
 	// components once the build is trimmed.
 	if builds, ok := s.serverBuilds(); ok {
-		if m, err := builds.BuildManifest(ctx, r.ID); err == nil && len(m) <= artifact.MaxRuntimeManifest {
+		if m, err := s.manifests.get(ctx, builds, r.ID); err == nil && len(m) <= artifact.MaxRuntimeManifest {
 			e.Manifest = m
 		}
 	}

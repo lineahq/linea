@@ -62,9 +62,6 @@ func holdsBuild(ctx context.Context, q interface {
 	return nil
 }
 
-// errRollback ends a transaction that only checks, without committing.
-var errRollback = errors.New("rollback")
-
 // StoreBuildBinary verifies the staged object name and stores it as the
 // binary of build id, then records it on the running build, so the object is
 // referenced (object_refs) until the build ends, as the build's binary if
@@ -72,9 +69,10 @@ var errRollback = errors.New("rollback")
 //
 // No step that moves the binary holds the installation lock. The object is
 // hashed by a streaming read, so a binary of hundreds of megabytes never sits
-// in memory, and a short check of the lease and the storage limit, with the
-// build's own reservation (Limits.BuildBytes) released, refuses early
-// what the commit would refuse. The object is then copied inside object
+// in memory, and a read-only check of the lease and the storage limit, with
+// the build's own reservation (Limits.BuildBytes) released, refuses early
+// what the commit would refuse. It takes no lock, so it only saves the copy
+// of a binary the commit would refuse; the commit decides. The object is then copied inside object
 // storage to its content-addressed key, conditionally on the ETag that was
 // hashed, so a staged object rewritten after the check is never stored.
 // Under the lock the commit checks the lease and the limit again, confirms
@@ -113,18 +111,24 @@ func (s *Store) StoreBuildBinary(ctx context.Context, id, builder string, attemp
 		return err
 	}
 	// check runs the lease and limit checks; it reports whether no row
-	// references digest.
-	check := func(tx pgx.Tx) (bool, error) {
-		if _, err := lockInstallation(ctx, tx); err != nil {
+	// references digest. Under the lock it releases a binary the build
+	// staged before, which a second binary replaces; without it, it only
+	// reads, and a replaced binary still counts.
+	check := func(tx pgx.Tx, locked bool) (bool, error) {
+		forUpdate := ""
+		if locked {
+			if _, err := lockInstallation(ctx, tx); err != nil {
+				return false, err
+			}
+			forUpdate = " FOR UPDATE"
+		}
+		if err := holdsBuild(ctx, tx, id, builder, attempt, forUpdate); err != nil {
 			return false, err
 		}
-		if err := holdsBuild(ctx, tx, id, builder, attempt, " FOR UPDATE"); err != nil {
-			return false, err
-		}
-		// A second binary of the same build replaces the first, which stops
-		// counting here.
-		if _, err := tx.Exec(ctx, "UPDATE builds SET staged_binary_digest = '', staged_binary_bytes = 0 WHERE id = $1", id); err != nil {
-			return false, err
+		if locked {
+			if _, err := tx.Exec(ctx, "UPDATE builds SET staged_binary_digest = '', staged_binary_bytes = 0 WHERE id = $1", id); err != nil {
+				return false, err
+			}
 		}
 		additional, err := newBytes(ctx, tx, blob{digest, size})
 		if err != nil {
@@ -132,13 +136,11 @@ func (s *Store) StoreBuildBinary(ctx context.Context, id, builder string, attemp
 		}
 		return additional > 0, s.checkSpace(ctx, tx, additional, reserve{excludeBuild: id})
 	}
-	// The early check commits nothing: it rolls back once it has answered.
-	if err := s.inTx(ctx, "check build binary", func(tx pgx.Tx) error {
-		if _, err := check(tx); err != nil {
-			return err
-		}
-		return errRollback
-	}); err != nil && !errors.Is(err, errRollback) {
+	// The early check reads only, and rolls back once it has answered.
+	if err := s.inReadTx(ctx, "check build binary", func(tx pgx.Tx) error {
+		_, err := check(tx, false)
+		return err
+	}); err != nil {
 		return err
 	}
 	if err := s.objects.Copy(ctx, stagedKey, blobKey, etag); err != nil {
@@ -153,7 +155,7 @@ func (s *Store) StoreBuildBinary(ctx context.Context, id, builder string, attemp
 		return fmt.Errorf("%w: store object: %w", artifact.ErrStorage, err)
 	}
 	return s.inTx(ctx, "store build binary", func(tx pgx.Tx) error {
-		unreferenced, err := check(tx)
+		unreferenced, err := check(tx, true)
 		if err != nil {
 			return err
 		}
@@ -172,7 +174,7 @@ func (s *Store) StoreBuildBinary(ctx context.Context, id, builder string, attemp
 // blobPresent confirms that key holds an object of size bytes without
 // reading it. A missing object is ErrNotFound, another size ErrCorrupt.
 func (s *Store) blobPresent(ctx context.Context, key string, size int64) error {
-	r, err := s.objects.Open(ctx, key)
+	info, err := s.objects.Stat(ctx, key)
 	switch {
 	case errors.Is(err, ErrObjectNotFound):
 		return fmt.Errorf("%w: stored binary is gone", artifact.ErrNotFound)
@@ -181,9 +183,8 @@ func (s *Store) blobPresent(ctx context.Context, key string, size int64) error {
 	case err != nil:
 		return fmt.Errorf("%w: check stored object: %w", artifact.ErrStorage, err)
 	}
-	r.Body.Close()
-	if r.Size != size {
-		return fmt.Errorf("%w: stored object has %d bytes, not %d", artifact.ErrCorrupt, r.Size, size)
+	if info.Size != size {
+		return fmt.Errorf("%w: stored object has %d bytes, not %d", artifact.ErrCorrupt, info.Size, size)
 	}
 	return nil
 }

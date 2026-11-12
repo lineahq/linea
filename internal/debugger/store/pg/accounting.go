@@ -75,8 +75,9 @@ type reserve struct {
 // unfinished runs (RunBytes each), open captures (CaptureAllowance less what
 // they hold) and queued or running builds without a stored binary
 // (BuildBytes each) have reserved, would exceed
-// Limits.StorageBytes. Evictable runs count as free (retainedBytes). It must
-// run under the installation lock.
+// Limits.StorageBytes. Evictable runs count as free (retainedBytes). A write
+// must run it under the installation lock; a check without the lock only
+// refuses early what that write would refuse.
 func (s *Store) checkSpace(ctx context.Context, tx pgx.Tx, additional int64, r reserve) error {
 	used, err := retainedBytes(ctx, tx)
 	if err != nil {

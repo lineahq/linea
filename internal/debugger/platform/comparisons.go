@@ -240,7 +240,7 @@ func (s *Service) submitPair(ctx context.Context, caller Caller, mode InputMode,
 		entered++
 		preparing++
 	}
-	p1, err := s.prepareRun(ctx, caller.Project, first)
+	p1, err := s.prepareRun(ctx, caller.Project, first, nil)
 	if err != nil {
 		return handles, err
 	}
@@ -249,7 +249,7 @@ func (s *Service) submitPair(ctx context.Context, caller Caller, mode InputMode,
 			return handles, err
 		}
 	}
-	p2, err := s.prepareRun(ctx, caller.Project, second)
+	p2, err := s.prepareRun(ctx, caller.Project, second, nil)
 	if err != nil {
 		return handles, err
 	}
@@ -264,10 +264,10 @@ func (s *Service) submitPair(ctx context.Context, caller Caller, mode InputMode,
 		err = ctx.Err()
 	}
 	if err == nil {
-		handles[0], err = s.admitLocked(caller, mode, p1, time.Time{}, nil)
+		handles[0], err = s.admitLocked(ctx, caller, mode, p1, time.Time{}, nil)
 	}
 	if err == nil {
-		handles[1], err = s.admitLocked(caller, mode, p2, time.Time{}, nil)
+		handles[1], err = s.admitLocked(ctx, caller, mode, p2, time.Time{}, nil)
 	}
 	s.mu.Unlock()
 	if err != nil {

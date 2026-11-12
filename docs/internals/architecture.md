@@ -341,7 +341,10 @@ The root Go module is declared in `go.mod`.
   done build of identical inputs, at most 2 unfinished builds per principal and
   20 in total, callers read and cancel their own builds and `runtime.manage`
   all, `ListRuntimeBuilds` pages, and upkeep expires lost builders' leases (2
-  attempts) and keeps the last 100 finished builds. `ChangeBuild` on the change
+  attempts) and keeps the last 100 finished builds. Build IDs are `build-` and
+  16 hex digits (`newBuildID`; builds admitted earlier keep `run-` IDs). A
+  build's manifest never changes, so `manifestCache` (4 MiB) keeps those read
+  for status polls, the catalog and registration. `ChangeBuild` on the change
   feed wakes watchers on every instance. Builders (`builders.go`) dial
   `ConnectBuilder` with `Options.BuilderToken` (404 without it, or without
   object storage that implements `artifact.BuildTransfers`); the instance
@@ -373,7 +376,10 @@ The root Go module is declared in `go.mod`.
   context, and ends it with the run's state, or `released`;
   `publishEnd` wraps the write in `linea.run.publish` and passes that span
   down to the store. `prepareRun` takes the span context from the request,
-  `admitLocked` keeps it on `Handle.submitted`, and the run metadata stores
+  `admitLocked` keeps it on `Handle.submitted` and writes the admission under
+  the request's context without its cancellation (`context.WithoutCancel`:
+  the store's spans join the request's, and a cancel cannot cut a commit the
+  caller would then see as failed), and the run metadata stores
   it as the optional `submitted` (`storedSpan`: trace ID, span ID, sampled),
   which `handleFromRecord` reads back, so every instance's attempt links to
   it; a malformed value is ignored. Builds (`build_traces.go`): `runBuild`
@@ -559,9 +565,10 @@ The root Go module is declared in `go.mod`.
   and every write records `ChangeBuild`. The build binaries
   (`008_runtime_binaries.sql`, `artifact.BuildTransfers`, pg only):
   `BuildInputURL` presigns an input for the builder, and `StoreBuildBinary`
-  hashes the staged upload, copies it to its blob key if it is unchanged,
-  without the installation lock, and then rechecks the lease, the storage limit
-  and the copy under the lock; the running build's staged binary and every
+  hashes the staged upload, checks the lease and the storage limit in a
+  read-only transaction without the installation lock, copies it to its blob
+  key if it is unchanged, and then rechecks the lease, the storage limit and
+  the copy (a `Stat`) under the lock; the running build's staged binary and every
   catalog entry's `binary` are referenced objects, counted in storage and kept
   by `Sweep`. Each unfinished build without a binary reserves
   `Limits.BuildBytes`, and `SaveRuntime` refuses an entry naming a binary its

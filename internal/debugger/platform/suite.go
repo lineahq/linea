@@ -22,6 +22,19 @@ func errUnknownSuite() error { return &Error{Code: CodeNotFound, Message: "unkno
 type suiteAdmission struct {
 	remaining int
 	handles   []*Handle
+	// runtime is the suite's runtime, bound once for every member, and
+	// runtimeName its name; nil for the built-in runtime in this process.
+	runtime     *boundRuntime
+	runtimeName string
+}
+
+// bound returns the suite's bound runtime when it is name's, else nil. a
+// may be nil.
+func (a *suiteAdmission) bound(name string) *boundRuntime {
+	if a == nil || a.runtime == nil || a.runtimeName != name {
+		return nil
+	}
+	return a.runtime
 }
 
 func cloneSuite(suite Suite) Suite {
@@ -66,9 +79,11 @@ func (s *Service) submitSuite(ctx context.Context, caller Caller, perm authz.Per
 	if err != nil {
 		return nil, nil, err
 	}
+	var bound *boundRuntime
 	if s.selects(name) {
-		// A missing runtime fails the suite, not each member.
-		if _, err := s.bind(ctx, name); err != nil {
+		// A missing runtime fails the suite, not each member, and every
+		// member runs on the binding found here.
+		if bound, err = s.bind(ctx, name); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -92,7 +107,7 @@ func (s *Service) submitSuite(ctx context.Context, caller Caller, perm authz.Per
 	s.suiteSubmitting++
 	s.preparations.Add(1) // Close waits through the final suite publication.
 	s.mu.Unlock()
-	admission := &suiteAdmission{remaining: n}
+	admission := &suiteAdmission{remaining: n, runtime: bound, runtimeName: name}
 	published := false
 	slotReserved := true
 	defer func() {

@@ -13,7 +13,6 @@ import (
 	"github.com/lineahq/linea/internal/debugger/authz"
 	"github.com/lineahq/linea/internal/debugger/config"
 	"github.com/lineahq/linea/internal/debugger/features"
-	"github.com/lineahq/linea/internal/debugger/instrument"
 	"github.com/lineahq/linea/internal/debugger/manifest"
 )
 
@@ -321,7 +320,7 @@ func (q *buildQueue) add(caller Caller, spec RuntimeBuildSpec, view RuntimeBuild
 		return nil, &Error{Code: CodeResourceExhausted, Message: fmt.Sprintf("%d runtime builds are already queued; wait for one to finish", buildQueueCapacity), Retryable: true}
 	}
 	ctx, cancel := context.WithCancel(q.s.ctx)
-	view.ID, view.Caller, view.Name, view.State, view.Created = instrument.NewRunID(), caller.Actor(), spec.Name, BuildQueued, time.Now().UTC()
+	view.ID, view.Caller, view.Name, view.State, view.Created = newBuildID(), caller.Actor(), spec.Name, BuildQueued, time.Now().UTC()
 	if view.Warnings == nil {
 		view.Warnings = []string{}
 	}
@@ -462,7 +461,7 @@ func (s *Service) GetRuntimeBuild(ctx context.Context, caller Caller, id string,
 	}
 	// WatchRuntimeBuild checked that the caller may see the build.
 	if builds, ok := s.serverBuilds(); ok {
-		raw, err := builds.BuildManifest(ctx, id)
+		raw, err := s.manifests.get(ctx, builds, id)
 		if err != nil {
 			return nil, artifactError(err)
 		}

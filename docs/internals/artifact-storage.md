@@ -78,9 +78,11 @@ headers within two minutes of the request body, which leaves long transfers
 unbounded.
 
 A build's binary is the one object written outside the installation lock:
-`StoreBuildBinary` copies the staged upload to its blob key without the lock,
-then, under it, checks the lease and the limit again, confirms the copy is
-still there when no row references its digest (a sweep that listed an older
+`StoreBuildBinary` checks the lease and the limit in a read-only transaction
+without the lock (it only refuses early), copies the staged upload to its blob
+key without the lock, then, under it, checks the lease and the limit again,
+confirms with a `Stat` that the copy is still there when no row references its
+digest (a sweep that listed an older
 object of that digest may have deleted it), and records it. A copy that check
 refuses is left to `Sweep`. `SaveRuntime` takes the lock too when an entry
 names a build, and refuses (`ErrConflict`) an entry naming a binary that the

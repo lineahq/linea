@@ -134,7 +134,7 @@ func (s *Service) queueServerBuild(ctx context.Context, caller Caller, builds ar
 		return nil, err
 	}
 	record, err := builds.AdmitBuild(ctx, artifact.BuildAdmission{
-		ID: instrument.NewRunID(), Principal: caller.Principal.ID, Name: req.Name, Key: buildKey(raw, sources, spec),
+		ID: newBuildID(), Principal: caller.Principal.ID, Name: req.Name, Key: buildKey(raw, sources, spec),
 		Spec: encoded, Manifest: raw, Sources: sources, Created: time.Now().UTC(),
 	}, artifact.BuildLimits{PerPrincipal: serverBuildsPerPrincipal, Total: serverBuildsTotal})
 	if errors.Is(err, artifact.ErrLimit) {
@@ -411,4 +411,10 @@ func (s *Service) buildChanged(id string) {
 		close(s.buildQueued)
 		s.buildQueued = nil
 	}
+}
+
+// newBuildID returns a new random build ID ("build-" and 16 hex digits).
+// Builds admitted before IDs had their own prefix keep their "run-" IDs.
+func newBuildID() string {
+	return "build-" + strings.TrimPrefix(instrument.NewRunID(), "run-")
 }

@@ -241,6 +241,12 @@ the first item below.
   ID (`unattributed_stage`) and connector deliveries without a pipeline
   (`unattributed_route`). `linea run`, the web run overview and MCP's run
   summary show them.
+- Runtime build IDs start with `build-` (`build-` and 16 hex digits) instead
+  of `run-`, so a build ID is no longer mistaken for a run ID. Builds admitted
+  before keep their `run-` IDs and stay readable.
+- A team server reads a build's manifest from object storage once and keeps
+  it, instead of on every status request, and checks a stored runtime binary
+  with a metadata request instead of opening it.
 
 ## [0.2.0]
 

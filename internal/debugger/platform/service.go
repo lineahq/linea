@@ -242,7 +242,9 @@ type Service struct {
 	logger *zap.Logger
 	// listings caches list entries of terminal runs read for a run list.
 	listings listingCache
-	executor ExecuteFunc
+	// manifests caches the manifests of server builds.
+	manifests manifestCache
+	executor  ExecuteFunc
 	// defaultRuntime is Options.DefaultRuntime.
 	defaultRuntime string
 	// chosenDefault is the default runtime the team chose, as the
@@ -550,7 +552,7 @@ func (s *Service) submitReserved(prepare context.Context, caller Caller, mode In
 		return nil, err
 	}
 	defer s.preparations.Done()
-	p, err := s.prepareRun(prepare, caller.Project, req)
+	p, err := s.prepareRun(prepare, caller.Project, req, reservation)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.preparing--
@@ -564,7 +566,7 @@ func (s *Service) submitReserved(prepare context.Context, caller Caller, mode In
 	if err := prepare.Err(); err != nil {
 		return nil, err
 	}
-	r, err := s.admitLocked(caller, mode, p, deadline, reservation)
+	r, err := s.admitLocked(prepare, caller, mode, p, deadline, reservation)
 	return r, err
 }
 
@@ -650,8 +652,9 @@ type preparedRun struct {
 }
 
 // prepareRun captures and validates the request's sources, one preparation at
-// a time, cancelled by prepare or by closing the service.
-func (s *Service) prepareRun(prepare context.Context, project string, req engine.Request) (preparedRun, error) {
+// a time, cancelled by prepare or by closing the service. A suite's runs use
+// the runtime it bound (reservation may be nil).
+func (s *Service) prepareRun(prepare context.Context, project string, req engine.Request, reservation *suiteAdmission) (preparedRun, error) {
 	prepareCtx, releasePreparation := context.WithCancel(prepare)
 	stop := context.AfterFunc(s.ctx, releasePreparation)
 	defer stop()
@@ -677,9 +680,11 @@ func (s *Service) prepareRun(prepare context.Context, project string, req engine
 	if req.Runtime != nil && req.Runtime.ID == "" {
 		// A selected built runtime (runtimeSelection): start its worker and
 		// record its identity in the bundle.
-		b, err := s.bind(prepareCtx, req.Runtime.Name)
-		if err != nil {
-			return out, err
+		b := reservation.bound(req.Runtime.Name)
+		if b == nil {
+			if b, err = s.bind(prepareCtx, req.Runtime.Name); err != nil {
+				return out, err
+			}
 		}
 		target := b.target
 		req.Runtime, out.runtime = &target, b
@@ -707,15 +712,18 @@ func (s *Service) prepareRun(prepare context.Context, project string, req engine
 	return out, err
 }
 
-// admitLocked journals a prepared run and queues it. s.mu is held.
-func (s *Service) admitLocked(caller Caller, mode InputMode, p preparedRun, deadline time.Time, reservation *suiteAdmission) (*Handle, error) {
+// admitLocked journals a prepared run and queues it. The journal write
+// joins the span of the request in ctx but not its cancellation: a write
+// cancelled while it commits could leave a stored run its caller was told
+// failed. s.mu is held.
+func (s *Service) admitLocked(ctx context.Context, caller Caller, mode InputMode, p preparedRun, deadline time.Time, reservation *suiteAdmission) (*Handle, error) {
 	req := p.req
 	base := s.ctx
 	releaseDeadline := func() {}
 	if !deadline.IsZero() {
 		base, releaseDeadline = context.WithDeadline(base, deadline)
 	}
-	ctx, cancelCause := context.WithCancelCause(base)
+	runCtx, cancelCause := context.WithCancelCause(base)
 	cancel := func(cause error) {
 		cancelCause(cause)
 		releaseDeadline()
@@ -731,8 +739,8 @@ func (s *Service) admitLocked(caller Caller, mode InputMode, p preparedRun, dead
 	caller.touch(r.id)
 	s.queueing(r)
 	if s.repository != nil {
-		r.persist = func(evidence bool) error { return s.persistRun(r, evidence) }
-		if err := r.persist(false); err != nil {
+		r.persist = func(evidence bool) error { return s.persistRun(context.Background(), r, evidence) }
+		if err := s.persistRun(context.WithoutCancel(ctx), r, false); err != nil {
 			cancel(nil)
 			return nil, persistenceError(err)
 		}
@@ -748,7 +756,7 @@ func (s *Service) admitLocked(caller Caller, mode InputMode, p preparedRun, dead
 		s.suiteRuns[r.id] = true
 	}
 	s.order = append(s.order, r.id)
-	s.jobs[r.id] = &pendingRun{handle: r, ctx: ctx, request: req, runtime: p.runtime, pooled: p.runtime != nil && p.runtime.pooled}
+	s.jobs[r.id] = &pendingRun{handle: r, ctx: runCtx, request: req, runtime: p.runtime, pooled: p.runtime != nil && p.runtime.pooled}
 	s.evictLocked()
 	s.wakeLocked()
 	return r, nil

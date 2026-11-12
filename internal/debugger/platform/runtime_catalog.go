@@ -202,7 +202,7 @@ func (s *Service) buildManifest(ctx context.Context, info *RuntimeInfo, e artifa
 	if !ok {
 		return
 	}
-	if m, err := builds.BuildManifest(ctx, e.Build); err == nil {
+	if m, err := s.manifests.get(ctx, builds, e.Build); err == nil {
 		info.Manifest = string(m)
 	}
 }

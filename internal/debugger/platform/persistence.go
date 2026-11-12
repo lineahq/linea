@@ -108,9 +108,10 @@ func (r *Handle) storedLocked(record *artifact.RunRecord) {
 	}
 }
 
-func (s *Service) persistRun(r *Handle, includeEvidence bool) error {
+// persistRun writes r under ctx, whose span the store's spans join.
+func (s *Service) persistRun(ctx context.Context, r *Handle, includeEvidence bool) error {
 	p := r.publicationLocked()
-	record, err := s.savePublication(context.Background(), &p, includeEvidence)
+	record, err := s.savePublication(ctx, &p, includeEvidence)
 	if err != nil {
 		return err
 	}
@@ -470,7 +471,7 @@ func (s *Service) handleFromRecord(ctx context.Context, record artifact.RunRecor
 			return nil, fmt.Errorf("%w: event identity", artifact.ErrCorrupt)
 		}
 	}
-	r.persist = func(evidence bool) error { return s.persistRun(r, evidence) }
+	r.persist = func(evidence bool) error { return s.persistRun(context.Background(), r, evidence) }
 	if record.Terminal {
 		close(r.done)
 	}

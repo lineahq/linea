@@ -644,8 +644,10 @@ the server places them under `linea.build.execute`:
 | `image.export` | Pushing the runtime image, when the server asks for one |
 
 Database and object storage spans are recorded only under another span, a
-request, a run attempt or a build attempt: the change feed, lease renewals,
-presence and upkeep poll every few seconds and record nothing. They never
+request, a run attempt or a build attempt: the change feed's polling, lease
+renewals, presence and upkeep run every few seconds and record nothing. A
+request that reads or changes runs or suites first applies the changes other
+instances committed, so its trace starts with that change feed read. They never
 carry statement arguments, the connection string, the database user or
 host, the bucket, an object key or the endpoint.
 
