@@ -259,6 +259,9 @@ the first item below.
   reports component status through
   `extensioncapabilities.ComponentStatusWatcher` instead of
   `componentstatus.Watcher`; the debugger's watcher now answers both.
+- **Fixed:** a team server refuses a runtime source that is not an
+  `https://` repository before it runs git. Some git versions looked a local
+  path up first and answered whether it existed on the server's host.
 
 ## [0.2.0]
 

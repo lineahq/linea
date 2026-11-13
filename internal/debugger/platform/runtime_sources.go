@@ -252,6 +252,15 @@ func fetchGitSources(ctx context.Context, sources []BuildSource, local bool, lim
 // bounds the clone's directory, its history and checkout together: git
 // is stopped once the directory grows past it.
 func fetchGit(ctx context.Context, o SourceOverride, local bool, limit int64) (map[string][]byte, string, error) {
+	// A server refuses every other location before git runs: some git
+	// versions look a local path up before they apply protocol.allow, which
+	// would answer whether the path exists on the host.
+	if !local && !strings.HasPrefix(strings.ToLower(o.Git), "https://") {
+		if !strings.Contains(o.Git, "://") && !strings.HasPrefix(o.Git, "ext::") && !strings.Contains(o.Git, "@") {
+			return nil, "", errors.New("a local repository is not allowed: the server reads no host file, so it clones remote repositories only")
+		}
+		return nil, "", errors.New("the server clones https:// repositories only")
+	}
 	dir, err := os.MkdirTemp("", "linea-git-")
 	if err != nil {
 		return nil, "", err
