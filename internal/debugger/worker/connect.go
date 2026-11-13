@@ -167,7 +167,7 @@ func dialOnce(ctx context.Context, t dialTarget, hold func(context.Context, *web
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
 	conn.SetPingHandler(func(data string) error {
-		_ = conn.SetReadDeadline(time.Now().Add(idleTimeout))
+		_ = conn.SetReadDeadline(time.Now().Add(idleTimeout()))
 		return conn.WriteControl(websocket.PongMessage, []byte(data), time.Now().Add(handshakeTimeout))
 	})
 	return hold(ctx, conn)
@@ -217,10 +217,10 @@ func Accept(w http.ResponseWriter, r *http.Request, authorize func(token string)
 // connection's read deadline.
 func keepAlive(done <-chan struct{}, conn *websocket.Conn) {
 	conn.SetPongHandler(func(string) error {
-		return conn.SetReadDeadline(time.Now().Add(idleTimeout))
+		return conn.SetReadDeadline(time.Now().Add(idleTimeout()))
 	})
 	go func() {
-		t := time.NewTicker(pingInterval)
+		t := time.NewTicker(pingInterval())
 		defer t.Stop()
 		for {
 			select {

@@ -298,11 +298,11 @@ func TestPayloadsTravelThroughPresignedURLs(t *testing.T) {
 // TestPingsKeepAnIdleConnection holds a connection idle for several idle
 // timeouts: the server's pings keep it, and a run on it still works.
 func TestPingsKeepAnIdleConnection(t *testing.T) {
-	ping, idle := pingInterval, idleTimeout
-	t.Cleanup(func() { pingInterval, idleTimeout = ping, idle })
-	pingInterval, idleTimeout = 50*time.Millisecond, 200*time.Millisecond
+	old := keepAliveConfig.Load()
+	t.Cleanup(func() { keepAliveConfig.Store(old) })
+	keepAliveConfig.Store(&keepAliveTimes{ping: 50 * time.Millisecond, idle: 200 * time.Millisecond})
 	c := connectedWorker(t, "team-runtime", 1)
-	time.Sleep(4 * idleTimeout)
+	time.Sleep(4 * idleTimeout())
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	prepared, err := engine.Prepare(ctx, engine.Request{

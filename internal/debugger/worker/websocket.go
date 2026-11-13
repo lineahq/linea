@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -27,14 +28,20 @@ const (
 	handshakeTimeout = 30 * time.Second
 )
 
-var (
-	// pingInterval is how often the server pings, so a gateway's idle
-	// timeout never closes a connection it holds; idleTimeout is how long
-	// either side waits without a message or ping before it gives up.
-	// Tests shorten them.
-	pingInterval = 30 * time.Second
-	idleTimeout  = 3 * pingInterval
-)
+// keepAliveTimes are how often the server pings, so a gateway's idle
+// timeout never closes a connection it holds, and how long either side
+// waits without a message or ping before it gives up. Tests shorten them
+// while other tests' connections still read them, hence atomic.
+type keepAliveTimes struct {
+	ping, idle time.Duration
+}
+
+var keepAliveConfig atomic.Pointer[keepAliveTimes]
+
+func init() { keepAliveConfig.Store(&keepAliveTimes{ping: 30 * time.Second, idle: 90 * time.Second}) }
+
+func pingInterval() time.Duration { return keepAliveConfig.Load().ping }
+func idleTimeout() time.Duration  { return keepAliveConfig.Load().idle }
 
 var upgrader = websocket.Upgrader{
 	HandshakeTimeout: handshakeTimeout,
@@ -79,7 +86,7 @@ func newAcceptedStream(conn *websocket.Conn) *stream {
 func (s *stream) Read(p []byte) (int, error) {
 	for {
 		if s.r == nil {
-			_ = s.conn.SetReadDeadline(time.Now().Add(idleTimeout))
+			_ = s.conn.SetReadDeadline(time.Now().Add(idleTimeout()))
 			typ, r, err := s.conn.NextReader()
 			if err != nil {
 				if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
