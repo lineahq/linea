@@ -98,8 +98,10 @@ inputs:
           }
         ]
       }
-  # No tenant header: a third batcher, for requests without the key.
+  # No tenant header: a third batcher, for requests without the key. It
+  # comes 100ms later, so its timer fires 100ms after globex's.
   - receiver: otlp
+    after: 100ms
     data: |
       {
         "resourceLogs": [
