@@ -59,13 +59,13 @@ services:
   # The workers dial the balancer, so a restarting instance does not strand
   # them: they reconnect to the other one.
   pool:
-    command: [--connect, "http://lb:7070", --pool, --name, pool, --capacity, "${LINEA_POOL_CAPACITY:-4}", --cache-dir, /cache, --token-file, /run/secrets/worker_token]
+    command: [--connect, "http://lb:7070", --pool, --name, pool, --capacity, "${LINEA_POOL_CAPACITY:-4}", --cache-dir, /cache, --child-user, "65534:65534", --token-file, /run/secrets/worker_token]
     depends_on:
       lb:
         condition: service_healthy
 
   builder:
-    command: [--connect, "http://lb:7070", --name, builder, --capacity, "1", --cpus, "${LINEA_BUILDER_CPUS:-4}", --token-file, /run/secrets/builder_token, --work-dir, /work]
+    command: [--connect, "http://lb:7070", --name, builder, --capacity, "1", --cpus, "${LINEA_BUILDER_CPUS:-4}", --token-file, /run/secrets/builder_token, --work-dir, /work, --check-user, "65534:65534"]
     depends_on:
       lb:
         condition: service_healthy
