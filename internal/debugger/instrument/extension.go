@@ -20,7 +20,8 @@ var StatusWatcherType = component.MustNewType("linea_status")
 // (host.GetExtensions()[id].(*T)), so the instance the Collector holds must
 // be the real one. The Collector reports every extension's status around
 // its Start and Shutdown calls, synchronously, to each extension that is a
-// componentstatus.Watcher, started or not.
+// status watcher (componentstatus.Watcher up to v0.164.0,
+// extensioncapabilities.ComponentStatusWatcher from v0.165.0), started or not.
 func StatusWatcher(rec *Recorder, watched func(component.ID) bool) extension.Factory {
 	return extension.NewFactory(StatusWatcherType,
 		func() component.Config { return &struct{}{} },
@@ -41,9 +42,19 @@ type statusWatcher struct {
 	state map[component.ID]componentstatus.Status
 }
 
+// Changed is ComponentStatusChanged under the name v0.165.0 calls: its
+// service notifies extensions that are an
+// extensioncapabilities.ComponentStatusWatcher, which replaced
+// componentstatus.Watcher. That interface does not exist in the releases
+// before, so the watcher implements both methods without naming either.
+func (w *statusWatcher) Changed(source *componentstatus.InstanceID, event *componentstatus.Event) {
+	w.ComponentStatusChanged(source, event)
+}
+
 // ComponentStatusChanged records the end of a watched extension's Start
 // (the first status after Starting) and Shutdown (the first after
-// Stopping). A permanent or fatal error then is the call's error.
+// Stopping). A permanent or fatal error then is the call's error. Releases
+// up to v0.164.0 call it as componentstatus.Watcher.
 func (w *statusWatcher) ComponentStatusChanged(source *componentstatus.InstanceID, event *componentstatus.Event) {
 	if source.Kind() != component.KindExtension || !w.watched(source.ComponentID()) {
 		return

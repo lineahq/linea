@@ -254,6 +254,11 @@ the first item below.
   end). `s3 Open` now lasts until the object is read and closed. An upgrade
   check, a comparison and a comparison of two runs read the change feed once
   and bind each runtime once, instead of once per step.
+- **Fixed:** on Collector 0.165.0, runs recorded no start or stop for custom
+  extensions, and the runtime self-check failed `extension_status`. 0.165.0
+  reports component status through
+  `extensioncapabilities.ComponentStatusWatcher` instead of
+  `componentstatus.Watcher`; the debugger's watcher now answers both.
 
 ## [0.2.0]
 
