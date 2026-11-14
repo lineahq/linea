@@ -756,7 +756,6 @@ func (s *Service) admitLocked(ctx context.Context, caller Caller, mode InputMode
 	caller.touch(r.id)
 	s.queueing(r)
 	if s.repository != nil {
-		r.persist = func(evidence bool) error { return s.persistRun(context.Background(), r, evidence) }
 		if err := s.persistRun(context.WithoutCancel(ctx), r, false); err != nil {
 			cancel(nil)
 			if errors.Is(err, artifact.ErrRunLimit) {
@@ -786,6 +785,15 @@ func (s *Service) admitLocked(ctx context.Context, caller Caller, mode InputMode
 // queueing connects a run's cancellation and end to the run queue.
 func (s *Service) queueing(r *Handle) {
 	r.requestCancel = s.requestCancelHook(r)
+	r.endRun = func(p runPublication) (bool, error) {
+		ended, err := s.endRun(nil, r, p, false)
+		if err != nil {
+			// The queue no longer holds the run (RequestCancel), so nothing
+			// else ends it.
+			s.endLater(r, p, StateQueued)
+		}
+		return ended, err
+	}
 	if s.localQueue != nil {
 		r.ended = func() { s.localQueue.Remove(r.id) }
 	}
@@ -1025,6 +1033,7 @@ func (s *Service) Close() {
 		_ = s.metrics.observed.Unregister()
 	}
 	var held []artifact.Assignment
+	var cancel []*Handle
 	s.mu.Lock()
 	if !s.closed {
 		s.closed = true
@@ -1047,12 +1056,16 @@ func (s *Service) Close() {
 			}
 		} else {
 			for _, r := range s.runs {
-				r.Cancel()
+				cancel = append(cancel, r)
 			}
 		}
 		clear(s.jobs)
 	}
 	s.mu.Unlock()
+	// Not under s.mu: a queued run's end is written, then applied under it.
+	for _, r := range cancel {
+		_ = r.Cancel()
+	}
 	// Handed back first, the runs wait for another instance only as long as
 	// their executions take to stop, not for a lease to end.
 	s.releaseHeld(held)

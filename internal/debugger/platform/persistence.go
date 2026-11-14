@@ -110,6 +110,103 @@ func (r *Handle) storedLocked(record *artifact.RunRecord) {
 	}
 }
 
+// writeRun writes p, with its evidence when evidence is set. Without a
+// repository the run lives in this service only, and p is accepted at the
+// next generation: endRun's generation check then decides between two
+// transitions of the run.
+func (s *Service) writeRun(ctx context.Context, p *runPublication, evidence bool) (*artifact.RunRecord, error) {
+	if s.repository == nil {
+		return &artifact.RunRecord{ID: p.id, Project: p.project, Generation: p.generation + 1, Terminal: p.state.Terminal()}, nil
+	}
+	return s.savePublication(ctx, p, evidence)
+}
+
+// recordedLocked takes the generation of the record the repository, or the
+// local writer, accepted for r. r.mu is held.
+func (s *Service) recordedLocked(r *Handle, record *artifact.RunRecord) {
+	if s.repository == nil {
+		r.generation = record.Generation
+		return
+	}
+	r.storedLocked(record)
+}
+
+// transitionTimeout bounds a write of a run's metadata: a third of the lease,
+// so a stalled write ends before the lease does.
+func (s *Service) transitionTimeout() time.Duration { return s.lease / 3 }
+
+// endRun writes the end p of run r, decided under r.mu (endingLocked), and
+// ends the handle as p records it once the repository accepts it. When the
+// write fails for another reason than a conflict, p is written again as a
+// persistence error without its evidence. It reports whether the run ended
+// as p records it: false without an error when another transition moved the
+// run first, here or on another instance, and false with a persistence error
+// when the repository accepted neither write, which leaves the handle as the
+// repository holds the run. With evidence the writes are published under a
+// publish span below span. Neither s.mu nor r.mu is held.
+func (s *Service) endRun(span context.Context, r *Handle, p runPublication, evidence bool) (bool, error) {
+	return s.endRunSettled(span, r, p, evidence, nil)
+}
+
+// endRunSettled is endRun that, when the run ends, calls settle under s.mu
+// in the same critical section, so whoever sees the run ended also sees
+// what settle changed.
+func (s *Service) endRunSettled(span context.Context, r *Handle, p runPublication, evidence bool, settle func()) (bool, error) {
+	ctx := context.Background()
+	var publish trace.Span
+	if evidence {
+		// The writes carry the publish span, so the store's spans nest under it.
+		publish = s.startPublishSpan(span)
+		ctx = trace.ContextWithSpan(ctx, publish)
+	}
+	save := func(evidence bool) (*artifact.RunRecord, error) {
+		timeout := s.transitionTimeout()
+		if evidence {
+			timeout = publishTimeout
+		}
+		ctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		return s.writeRun(ctx, &p, evidence)
+	}
+	record, err := save(evidence)
+	written := evidence && err == nil
+	if err != nil && !errors.Is(err, artifact.ErrConflict) {
+		p.state, p.report, p.err = StateError, nil, persistenceError(err)
+		record, err = save(false)
+	}
+	if publish != nil {
+		endPublishSpan(publish, written, err != nil && !errors.Is(err, artifact.ErrConflict))
+	}
+	if errors.Is(err, artifact.ErrConflict) {
+		return false, nil
+	}
+	if err != nil {
+		return false, persistenceError(err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r.mu.Lock()
+	var ended bool
+	switch {
+	case r.terminalLocked():
+		// The change feed may have brought this record first.
+		ended = r.generation == record.Generation
+	case record.Generation <= r.generation:
+		// Another transition applied first (without a repository, where
+		// both writes are accepted).
+	default:
+		r.endLocked(p)
+		r.weight = p.weight
+		s.recordedLocked(r, record)
+		ended = true
+	}
+	r.mu.Unlock()
+	if ended && settle != nil {
+		settle()
+	}
+	return ended, nil
+}
+
 // persistRun writes r under ctx, whose span the store's spans join.
 func (s *Service) persistRun(ctx context.Context, r *Handle, includeEvidence bool) error {
 	p := r.publicationLocked()
@@ -474,7 +571,6 @@ func (s *Service) handleFromRecord(ctx context.Context, record artifact.RunRecor
 			return nil, fmt.Errorf("%w: event identity", artifact.ErrCorrupt)
 		}
 	}
-	r.persist = func(evidence bool) error { return s.persistRun(context.Background(), r, evidence) }
 	if record.Terminal {
 		close(r.done)
 	}
@@ -491,8 +587,10 @@ func (s *Service) recoverUnfinished(r *Handle) error {
 		return err
 	}
 	if err != nil || r.bundleInfo == nil {
-		r.interrupted = true
-		return r.finishLocked(StateError, nil, ErrInterrupted)
+		p := r.endingLocked(StateError, nil, ErrInterrupted)
+		p.interrupted = true
+		_, err := s.endRun(nil, r, p, false)
+		return err
 	}
 	r.runtimeKey = a.Runtime
 	if a.State == artifact.QueueQueued {

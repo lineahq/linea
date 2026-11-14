@@ -67,10 +67,14 @@ func newExecutorID() string {
 // worker holds it, so that worker ends it.
 func (s *Service) requestCancelHook(r *Handle) func() (bool, error) {
 	return func() (bool, error) {
-		a, err := s.runQueue.RequestCancel(context.Background(), r.id)
+		ctx, cancel := context.WithTimeout(context.Background(), s.transitionTimeout())
+		defer cancel()
+		a, err := s.runQueue.RequestCancel(ctx, r.id)
 		if errors.Is(err, artifact.ErrNotFound) || errors.Is(err, artifact.ErrConflict) {
 			// No queue entry (a run admitted before scheduling was durable),
 			// or the queue already ended it: the handle's state decides.
+			r.mu.Lock()
+			defer r.mu.Unlock()
 			return r.state != StateQueued, nil
 		}
 		if err != nil {
@@ -202,12 +206,19 @@ func (s *Service) dispatch() bool {
 			}
 			var jobs []*pendingRun
 			var adopt []artifact.Assignment
+			var unstarted []unstartedRun
 			s.mu.Lock()
 			e.busy -= n
-			if s.closed && s.shared {
-				// Closed during the claim: hand the runs straight back.
+			if s.closed {
 				s.mu.Unlock()
-				s.releaseHeld(as)
+				if s.shared {
+					// Closed during the claim: hand the runs straight back.
+					s.releaseHeld(as)
+				} else {
+					// Close cancelled the runs, and left these to their
+					// holder, which is this service.
+					s.cancelClaimed(as)
+				}
 				return true
 			}
 			for _, a := range as {
@@ -216,11 +227,16 @@ func (s *Service) dispatch() bool {
 					// Another instance's run: keep its slot while it is read.
 					e.busy++
 					adopt = append(adopt, a)
-				} else if job := s.takeLocked(a, e); job != nil {
+				} else if job, end := s.takeLocked(a, e); end != nil {
+					unstarted = append(unstarted, unstartedRun{job, *end})
+				} else if job != nil {
 					jobs = append(jobs, job)
 				}
 			}
 			s.mu.Unlock()
+			for _, u := range unstarted {
+				s.failStart(u.job, u.end)
+			}
 			for _, a := range adopt {
 				if job := s.adoptClaimed(a, e); job != nil {
 					jobs = append(jobs, job)
@@ -314,31 +330,32 @@ func (s *Service) runJob(job *pendingRun) {
 	s.finish(job, report, err)
 }
 
-// takeLocked assigns a claimed run to executor e. A run that ended or was
-// cancelled meanwhile is finished instead.
-func (s *Service) takeLocked(a artifact.Assignment, e *executor) *pendingRun {
+// takeLocked assigns a claimed run to executor e. A run that ended meanwhile
+// is left; one that was cancelled meanwhile is returned with its end, which
+// the caller writes once s.mu is released (failStart).
+func (s *Service) takeLocked(a artifact.Assignment, e *executor) (*pendingRun, *runPublication) {
 	job := s.jobs[a.RunID]
 	if job == nil || s.closed || !e.serves(job.pooled, a.Runtime) || e.pool() != "" && !e.runs(engine.RuntimeTarget{ID: a.Runtime}, a.Binary) {
 		// A run this service holds no job for, or one bound to the other
 		// kind of executor or to no binary of a pool's: its lease ends and
 		// it is requeued.
-		return nil
+		return nil, nil
 	}
 	r := job.handle
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.terminalLocked() {
 		delete(s.jobs, a.RunID)
-		return nil
+		return nil, nil
 	}
 	if a.Generation > r.generation {
 		r.generation = a.Generation
 	}
 	if job.ctx.Err() != nil || a.CancelRequested {
-		r.cancel(context.Cause(job.ctx))
-		r.finishLocked(StateCancelled, nil, nil)
-		delete(s.jobs, a.RunID)
-		return nil
+		job.assignment = a
+		end := r.endingLocked(StateCancelled, nil, nil)
+		end.attempt = a.Attempt
+		return job, &end
 	}
 	if a.Attempt == 1 && !r.created.IsZero() {
 		// The first claim: the run's wait in the queue since admission.
@@ -349,7 +366,37 @@ func (s *Service) takeLocked(a artifact.Assignment, e *executor) *pendingRun {
 	job.assignment = a
 	job.exec = e
 	e.busy++
-	return job
+	return job, nil
+}
+
+// cancelClaimed ends the runs a closed service claimed, which it will not
+// start, as cancelled. s.mu is not held.
+func (s *Service) cancelClaimed(as []artifact.Assignment) {
+	for _, a := range as {
+		s.mu.Lock()
+		r := s.runs[a.RunID]
+		s.mu.Unlock()
+		if r == nil {
+			continue
+		}
+		r.mu.Lock()
+		if r.terminalLocked() {
+			r.mu.Unlock()
+			continue
+		}
+		end := r.endingLocked(StateCancelled, nil, nil)
+		r.mu.Unlock()
+		end.generation, end.attempt = max(end.generation, a.Generation), a.Attempt
+		if _, err := s.endRun(nil, r, end, false); err != nil {
+			s.logError("cancelling a run claimed while closing", err)
+		}
+	}
+}
+
+// unstartedRun is a claimed run that ends before it starts.
+type unstartedRun struct {
+	job *pendingRun
+	end runPublication
 }
 
 // releaseLocked frees the slot a job held on its executor.
@@ -363,65 +410,139 @@ func (s *Service) releaseLocked(job *pendingRun) {
 }
 
 // startJob restores a claimed job's request when it has none and starts the
-// run. It reports false when the run was finished or its lease lost instead.
+// run: the queue records the start, then the run's record, and only then
+// the handle. Neither write holds s.mu or the run's mu. It reports false when
+// the run ended, moved or was handed back instead.
 func (s *Service) startJob(job *pendingRun) bool {
 	var restoreErr error
 	if job.restore {
 		restoreErr = s.restore(job)
 	}
-	retry := false
-	defer func() {
-		// After s.mu is released: wakeAt takes it.
-		if retry {
-			now := s.now()
-			s.wakeAt(now, now.Add(startRetryDelay))
-		}
-	}()
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	r := job.handle
+	s.mu.Lock()
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	fail := func(state State, err error) bool {
+	if !s.startableLocked(job) {
+		r.mu.Unlock()
 		s.releaseLocked(job)
-		r.cancel(nil)
-		r.finishLocked(state, nil, err)
-		s.dropJobLocked(job)
+		s.mu.Unlock()
 		return false
 	}
-	if r.terminalLocked() || r.state != StateAssigned || r.attempt != job.assignment.Attempt || s.closed && s.shared {
-		s.releaseLocked(job)
-		return false
-	}
+	var end *runPublication
 	if job.ctx.Err() != nil {
-		return fail(StateCancelled, nil)
+		p := r.endingLocked(StateCancelled, nil, nil)
+		end = &p
+	} else if restoreErr != nil {
+		p := r.endingLocked(StateError, nil, restoreErr)
+		end = &p
 	}
-	if restoreErr != nil {
-		return fail(StateError, restoreErr)
-	}
-	if err := s.runQueue.Start(s.ctx, job.assignment); err != nil {
+	r.mu.Unlock()
+	if end != nil {
 		s.releaseLocked(job)
-		if errors.Is(err, artifact.ErrConflict) {
-			// The lease ended before the run started; expiry requeues it.
-			return false
-		}
+	}
+	s.mu.Unlock()
+	if end != nil {
+		s.failStart(job, *end)
+		return false
+	}
+	// Not under s.ctx: a run Close cancels meanwhile still starts, and its
+	// execution ends it (finish).
+	ctx, cancel := context.WithTimeout(context.Background(), s.transitionTimeout())
+	err := s.runQueue.Start(ctx, job.assignment)
+	cancel()
+	if errors.Is(err, artifact.ErrConflict) {
+		// The lease ended before the run started; expiry requeues it.
+		s.mu.Lock()
+		s.releaseLocked(job)
+		s.mu.Unlock()
+		return false
+	}
+	if err != nil {
 		// The lease is still held, and renewal would keep it while the
 		// executor is connected: hand the run back to the queue.
 		s.logError("starting a claimed run", err)
-		if s.releaseUnstartedLocked(job) {
-			retry = true
-		}
+		s.handBack(job)
 		return false
 	}
-	r.state, r.started = StateRunning, time.Now().UTC()
-	job.request.Observer, job.request.Log = r.recordLocked(r.attempt)
-	if r.persist != nil {
-		if err := r.persist(false); err != nil {
-			return fail(StateError, persistenceError(err))
-		}
+	r.mu.Lock()
+	p := r.publicationLocked()
+	r.mu.Unlock()
+	p.state, p.started = StateRunning, time.Now().UTC()
+	ctx, cancel = context.WithTimeout(context.Background(), s.transitionTimeout())
+	record, err := s.writeRun(ctx, &p, false)
+	cancel()
+	if err != nil && !errors.Is(err, artifact.ErrConflict) {
+		r.mu.Lock()
+		end := r.endingLocked(StateError, nil, persistenceError(err))
+		r.mu.Unlock()
+		s.mu.Lock()
+		s.releaseLocked(job)
+		s.mu.Unlock()
+		s.failStart(job, end)
+		return false
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// The change feed may have brought this record first.
+	ours := err == nil && (record.Generation > r.generation && r.state == StateAssigned ||
+		record.Generation == r.generation && r.state == StateRunning)
+	if !ours || r.attempt != job.assignment.Attempt || s.closed && s.shared {
+		// The run moved first: expiry, a cancel, or another instance.
+		s.releaseLocked(job)
+		return false
+	}
+	r.state, r.started = StateRunning, p.started
+	s.recordedLocked(r, record)
+	job.request.Observer, job.request.Log = r.recordLocked(r.attempt)
 	r.notifyLocked()
 	return true
+}
+
+// startableLocked reports whether job's run still waits for its executor to
+// start it. s.mu and the run's mu are held.
+func (s *Service) startableLocked(job *pendingRun) bool {
+	r := job.handle
+	return !r.terminalLocked() && r.state == StateAssigned && r.attempt == job.assignment.Attempt && !(s.closed && s.shared)
+}
+
+// failStart ends a claimed run that cannot start, as end records it, and
+// drops its job once it ended. When the repository accepts no end, the run
+// is handed back to the queue, whose next claim tries again. Its executor
+// slot is free; s.mu is not held.
+func (s *Service) failStart(job *pendingRun, end runPublication) {
+	r := job.handle
+	ended, err := s.endRun(nil, r, end, false)
+	if err != nil {
+		s.logError("ending a run that could not start", err)
+		s.handBack(job)
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ended || r.terminalLocked() {
+		r.cancel(nil)
+		s.dropJobLocked(job)
+	}
+}
+
+// handBack frees a claimed run's slot and returns it to the queue. s.mu is
+// not held.
+func (s *Service) handBack(job *pendingRun) {
+	s.mu.Lock()
+	r := job.handle
+	r.mu.Lock()
+	s.releaseLocked(job)
+	retry := s.releaseUnstartedLocked(job)
+	r.mu.Unlock()
+	s.mu.Unlock()
+	if retry {
+		// Not under s.mu: wakeAt takes it.
+		now := s.now()
+		s.wakeAt(now, now.Add(startRetryDelay))
+	}
 }
 
 // startRetryDelay is how long dispatch waits to claim again after a run it
@@ -457,13 +578,15 @@ func (s *Service) releaseUnstartedLocked(job *pendingRun) bool {
 // A connected worker's run whose connection ended is left to its lease,
 // which requeues it.
 //
-// With a repository it decides, writes and applies: the outcome is decided
-// under the locks without changing the handle, written without holding s.mu
-// or the run's mu, so a slow repository does not hold up lease renewal or
-// other runs, and applied only once the repository accepted it. Until then
-// the run stays running and its executor busy. Whatever moves the run
+// It decides, writes and applies (endRun): the outcome is decided under the
+// locks without changing the handle, written without holding s.mu or the
+// run's mu, so a slow repository does not hold up lease renewal or other
+// runs, and applied only once the repository accepted it. Until then the
+// run stays running and its executor busy. Whatever moves the run
 // meanwhile, here (expire, cancel) or on another instance, moves it in the
 // repository first, and the run's generation makes this write the conflict.
+// When the repository accepts no write, finish writes again, backing off,
+// until one is accepted, the run moves or the service closes.
 func (s *Service) finish(job *pendingRun, report *engine.Report, err error) {
 	r := job.handle
 	s.mu.Lock()
@@ -486,66 +609,86 @@ func (s *Service) finish(job *pendingRun, report *engine.Report, err error) {
 	if err != nil {
 		state, report = StateError, nil
 	}
-	if r.persist == nil {
-		r.finishLocked(state, report, err)
-		r.mu.Unlock()
-	} else {
-		p := r.endingLocked(state, report, err)
-		r.mu.Unlock()
-		job.returned = true
-		s.mu.Unlock()
-		record, conflict := s.publishEnd(job.span, &p)
-		s.mu.Lock()
-		r.mu.Lock()
-		switch {
-		case conflict || r.terminalLocked():
-			// The run moved first, here or on another instance, or the change
-			// feed already brought this publication: the handle holds, or
-			// catches up on, what the repository holds.
-		case record != nil:
-			r.endLocked(p)
-			r.weight = p.weight
-			r.storedLocked(record)
-		case r.state == StateRunning && r.attempt == p.attempt:
-			// Neither write was accepted: the run ends here as a persistence
-			// error the repository does not hold.
-			r.endLocked(p)
-		}
-		r.mu.Unlock()
+	p := r.endingLocked(state, report, err)
+	r.mu.Unlock()
+	job.returned = true
+	s.mu.Unlock()
+	// Until the repository accepts it, the run stays running on this
+	// instance's lease.
+	settled := false
+	s.endEventually(job.span, r, p, true, StateRunning, func() {
+		settled = true
 		// A run that just ended is the one someone opens next.
 		s.touchLocked(r)
+		s.releaseLocked(job)
+		s.dropJobLocked(job)
+		s.evictLocked()
+	})
+	s.mu.Lock()
+	if !settled {
+		s.releaseLocked(job)
+		s.dropJobLocked(job)
+		s.evictLocked()
 	}
-	s.releaseLocked(job)
-	s.dropJobLocked(job)
-	s.evictLocked()
 }
 
-// publishEnd writes a run's outcome p with its evidence, within
-// publishTimeout. When that fails, p becomes an error without a report and
-// is written without evidence, best effort: an uncertain repository refuses
-// this write too. It returns the record written, if any, and whether the run
-// moved first, which leaves p unwritten.
-func (s *Service) publishEnd(span context.Context, p *runPublication) (*artifact.RunRecord, bool) {
-	publish := s.startPublishSpan(span)
-	// The writes carry the publish span, so the store's spans nest under it.
-	traced := trace.ContextWithSpan(context.Background(), publish)
-	save := func(evidence bool) (*artifact.RunRecord, error) {
-		ctx, cancel := context.WithTimeout(traced, publishTimeout)
-		defer cancel()
-		return s.savePublication(ctx, p, evidence)
+// endRetryDelay is the first wait before a run's end that the repository
+// did not accept is written again.
+const endRetryDelay = 250 * time.Millisecond
+
+// endEventually writes the end p of run r as endRun does and, while the
+// repository accepts neither write, writes it again, backing off, until one
+// is accepted, the run is no longer in state was at p's generation, or the
+// service closes. settle is as for endRunSettled. s.mu and r.mu are not held.
+func (s *Service) endEventually(span context.Context, r *Handle, p runPublication, evidence bool, was State, settle func()) {
+	for delay := endRetryDelay; ; delay = min(2*delay, s.transitionTimeout()) {
+		ended, err := s.endRunSettled(span, r, p, evidence, settle)
+		if ended || err == nil {
+			return
+		}
+		s.logError("ending a run", err)
+		if !s.pause(delay) || !s.unchanged(r, p, was) {
+			return
+		}
 	}
-	record, err := save(true)
-	if errors.Is(err, artifact.ErrConflict) {
-		endPublishSpan(publish, false, false)
-		return nil, true
+}
+
+// endLater writes the end p of a run in state was, which the repository did
+// not accept, again in the background (endEventually) until the service
+// closes, which waits for it.
+func (s *Service) endLater(r *Handle, p runPublication, was State) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
 	}
-	evidence := err == nil
-	if err != nil {
-		p.state, p.report, p.err = StateError, nil, persistenceError(err)
-		record, err = save(false)
+	s.executing.Add(1)
+	go func() {
+		defer s.executing.Done()
+		if s.pause(endRetryDelay) && s.unchanged(r, p, was) {
+			s.endEventually(nil, r, p, false, was, nil)
+		}
+	}()
+}
+
+// pause waits d, and reports false when the service closes first.
+func (s *Service) pause(d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-s.ctx.Done():
+		return false
+	case <-t.C:
+		return true
 	}
-	endPublishSpan(publish, evidence, err != nil)
-	return record, false
+}
+
+// unchanged reports whether run r is still in state was, as it was when its
+// end p was decided.
+func (s *Service) unchanged(r *Handle, p runPublication, was State) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.state == was && r.attempt == p.attempt && r.generation == p.generation
 }
 
 func (s *Service) dropJobLocked(job *pendingRun) {
@@ -677,7 +820,7 @@ func (s *Service) tendLeases(now time.Time) {
 
 // renewed handles an executor's last renewal: it stops the executor's runs
 // when cancellation was requested or the leases were not renewed in time,
-// and publishes again a terminal state a failed write left held.
+// and hands back again a run that could not be handed back.
 func (s *Service) renewed(e *executor, now time.Time) {
 	e.lease.mu.Lock()
 	fresh, held, err, renewed := e.lease.fresh, e.lease.held, e.lease.err, e.lease.renewed
@@ -708,8 +851,6 @@ func (s *Service) renewed(e *executor, now time.Time) {
 		job := s.jobs[a.RunID]
 		r.mu.Lock()
 		switch {
-		case r.terminalLocked() && r.persist != nil:
-			_ = r.persist(false)
 		case a.CancelRequested && job != nil && job.exec == e:
 			r.cancel(context.Canceled)
 		case job != nil && job.unreleased && job.exec == nil && a.Attempt == job.assignment.Attempt:
@@ -722,63 +863,108 @@ func (s *Service) renewed(e *executor, now time.Time) {
 }
 
 // expire requeues a run whose lease ended, or ends it: cancelled when
-// cancellation was requested, lost on its last attempt.
+// cancellation was requested, lost on its last attempt, interrupted when
+// nothing is left to run it again from. It decides under the locks and
+// writes without them; finish may be writing the run's outcome meanwhile,
+// and the run's generation decides between the two. A write the repository
+// did not accept is tried again by the next tendLeases, since the lease
+// stays expired.
 func (s *Service) expire(a artifact.Assignment, now time.Time) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	r := s.runs[a.RunID]
 	if r == nil || s.closed {
+		s.mu.Unlock()
 		return // another installation's run, or deleted
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	// finish may be writing the run's outcome: the requeue or end below and
-	// that write race in the repository, and the run's generation decides.
-	if job := s.jobs[r.id]; job != nil && job.exec != nil {
+	old := s.jobs[r.id]
+	if old != nil && old.exec != nil {
 		// This service's own lease ended: whatever its executor publishes
 		// now is stale.
-		if !r.terminalLocked() && context.Cause(job.ctx) == nil {
+		if !r.terminalLocked() && context.Cause(old.ctx) == nil {
 			s.metrics.leasesLost.Add(s.ctx, 1)
 		}
 		r.cancel(errLeaseLost)
 	}
 	if r.terminalLocked() {
+		r.mu.Unlock()
+		s.mu.Unlock()
 		return
 	}
-	if a.Generation > r.generation {
-		r.generation = a.Generation
+	var end *runPublication
+	switch {
+	case a.CancelRequested:
+		p := r.endingLocked(StateCancelled, nil, nil)
+		end = &p
+	case a.Attempt-a.Released >= maxAttempts:
+		p := r.endingLocked(StateLost, nil, ErrLost)
+		end = &p
+	case old == nil && r.bundleInfo == nil:
+		p := r.endingLocked(StateError, nil, ErrInterrupted)
+		p.interrupted = true
+		end = &p
 	}
-	r.attempt = a.Attempt
-	if a.CancelRequested || a.Attempt-a.Released >= maxAttempts {
-		if a.CancelRequested {
-			r.finishLocked(StateCancelled, nil, nil)
-		} else {
-			r.finishLocked(StateLost, nil, ErrLost)
+	r.mu.Unlock()
+	s.mu.Unlock()
+	if end != nil {
+		end.generation, end.attempt = max(end.generation, a.Generation), a.Attempt
+		ended, err := s.endRun(nil, r, *end, false)
+		if err != nil {
+			s.logError("ending a run whose lease ended", err)
+			return
+		}
+		if ended && end.state == StateLost {
 			s.metrics.expiries.Add(s.ctx, 1, expLost)
 		}
-		delete(s.jobs, r.id)
+		s.mu.Lock()
+		if ended && s.jobs[r.id] == old {
+			delete(s.jobs, r.id)
+		}
+		s.mu.Unlock()
 		return
 	}
-	generation, err := s.runQueue.Requeue(s.ctx, a, now)
+	ctx, cancel := context.WithTimeout(s.ctx, s.transitionTimeout())
+	generation, err := s.runQueue.Requeue(ctx, a, now)
+	cancel()
 	if err != nil {
 		if !errors.Is(err, artifact.ErrConflict) {
 			s.logError("requeueing a run", err)
 		}
 		return
 	}
-	job, err := s.requeuedJobLocked(r)
-	r.generation, r.state, r.started = generation, StateQueued, time.Time{}
-	if err == nil && r.persist != nil {
-		if perr := r.persist(false); perr != nil {
-			err = persistenceError(perr)
-		}
+	// The queue holds the run queued at generation; its record follows.
+	r.mu.Lock()
+	p := r.publicationLocked()
+	r.mu.Unlock()
+	p.generation, p.state, p.started, p.attempt = generation, StateQueued, time.Time{}, a.Attempt
+	ctx, cancel = context.WithTimeout(context.Background(), s.transitionTimeout())
+	record, err := s.writeRun(ctx, &p, false)
+	cancel()
+	if errors.Is(err, artifact.ErrConflict) {
+		return // the run moved first; the change feed brings it
 	}
-	if err != nil {
-		r.cancel(nil)
-		r.interrupted = errors.Is(err, ErrInterrupted)
-		r.finishLocked(StateError, nil, err)
-		delete(s.jobs, r.id)
+	recorded := err == nil
+	if !recorded {
+		// The queue is the truth on whether a run waits, and the run's next
+		// start writes its record.
+		s.logError("recording a requeued run", err)
+		record = &artifact.RunRecord{ID: r.id, Generation: generation}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// The change feed may have brought this record first.
+	if s.closed || r.terminalLocked() || r.generation > record.Generation ||
+		r.generation == record.Generation && r.state != StateQueued {
 		return
+	}
+	job := s.requeuedJobLocked(r, old)
+	r.state, r.started, r.attempt = StateQueued, time.Time{}, a.Attempt
+	if recorded {
+		s.recordedLocked(r, record)
+	} else {
+		r.generation = generation
 	}
 	r.notifyLocked()
 	s.jobs[r.id] = job
@@ -786,14 +972,10 @@ func (s *Service) expire(a artifact.Assignment, now time.Time) {
 	s.wakeLocked()
 }
 
-// requeuedJobLocked is a fresh job for a requeued run: the previous job's
-// request under a new context, or, for a recovered run, one restored from its
-// bundle when claimed.
-func (s *Service) requeuedJobLocked(r *Handle) (*pendingRun, error) {
-	old := s.jobs[r.id]
-	if old == nil && r.bundleInfo == nil {
-		return nil, ErrInterrupted
-	}
+// requeuedJobLocked is a fresh job for a requeued run: the previous job
+// old's request under a new context, or, for a recovered run, one restored
+// from its bundle when claimed. Without old the run has a bundle (expire).
+func (s *Service) requeuedJobLocked(r *Handle, old *pendingRun) *pendingRun {
 	base := s.ctx
 	release := func() {}
 	if old != nil {
@@ -807,14 +989,14 @@ func (s *Service) requeuedJobLocked(r *Handle) (*pendingRun, error) {
 		release()
 	}
 	if old == nil {
-		return &pendingRun{handle: r, ctx: ctx, restore: true, pooled: s.recoversPooled(r)}, nil
+		return &pendingRun{handle: r, ctx: ctx, restore: true, pooled: s.recoversPooled(r)}
 	}
 	// A run adopted from another instance that this one never claimed still
 	// waits to be restored from its bundle.
 	if old.restore {
-		return &pendingRun{handle: r, ctx: ctx, restore: true, pooled: old.pooled}, nil
+		return &pendingRun{handle: r, ctx: ctx, restore: true, pooled: old.pooled}
 	}
-	return &pendingRun{handle: r, ctx: ctx, request: old.request, runtime: old.runtime, pooled: old.pooled}, nil
+	return &pendingRun{handle: r, ctx: ctx, request: old.request, runtime: old.runtime, pooled: old.pooled}
 }
 
 // recoveredJobLocked is the job of a run recovered queued, restored from its

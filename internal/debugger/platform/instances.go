@@ -429,17 +429,24 @@ func (s *Service) adoptClaimed(a artifact.Assignment, e *executor) *pendingRun {
 		fresh, err = s.handleFromRecord(s.ctx, record)
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	e.busy--
 	if err != nil {
+		s.mu.Unlock()
 		s.logError("adopting run "+a.RunID, err)
 		return nil
 	}
 	if s.closed || s.deletedRuns.has(a.RunID) {
+		s.mu.Unlock()
 		return nil
 	}
 	s.adoptLocked(fresh, &a, true)
-	return s.takeLocked(a, e)
+	job, end := s.takeLocked(a, e)
+	s.mu.Unlock()
+	if end != nil {
+		s.failStart(job, *end)
+		return nil
+	}
+	return job
 }
 
 // applyEvents reads the live events another instance published for a run

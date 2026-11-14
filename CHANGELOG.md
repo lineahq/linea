@@ -270,6 +270,14 @@ the first item below.
   hold the limit once per instance. Admission now counts the principal's
   unfinished runs in the database (migration `017_run_principal.sql`); runs
   admitted before the migration count toward no principal.
+- **Fixed:** a run's state changes only once the database holds it. A run
+  whose outcome the database does not accept stays running and is written
+  again until it is accepted, rather than ending as an error only one
+  instance shows; cancelling a queued run then answers with a persistence
+  error and the run is cancelled once the database accepts it. A slow
+  database no longer holds up lease renewal or other runs, and a run
+  claimed while a single-instance service closes is cancelled instead of
+  never ending.
 
 ## [0.2.0]
 

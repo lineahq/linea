@@ -4,7 +4,6 @@ package platform
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
 
@@ -133,7 +132,9 @@ type Handle struct {
 	// at admission against every instance's runs, or zero for a member of a
 	// suite or comparison, whose capacity was reserved when it was accepted.
 	principalRuns int
-	persist       func(bool) error // called with mu held; true includes terminal evidence
+	// endRun writes the run's end p and ends the handle once the repository
+	// accepts it (Service.endRun). Called without mu.
+	endRun func(p runPublication) (bool, error)
 	// bundle is the raw run bundle, until the repository holds the run's
 	// terminal state (storedLocked); RunBundle then reads it from there.
 	bundle      []byte
@@ -156,39 +157,6 @@ func (r *Handle) notifyLocked() {
 	r.changed = make(chan struct{})
 }
 
-func (r *Handle) finishLocked(state State, report *engine.Report, err error) error {
-	priorState, priorReport, priorErr, priorFinished := r.state, r.report, r.err, r.finished
-	priorLog, priorTruncated, priorRunLog := r.log, r.logTruncated, r.runLog
-	r.state, r.report, r.err = state, report, err
-	r.finished = time.Now().UTC()
-	if r.runLog != nil && keepsLog(state, report) {
-		r.log, r.logTruncated = r.runLog.Tail()
-	}
-	r.runLog = nil
-	var publicationErr error
-	if r.persist != nil {
-		if err := r.persist(true); errors.Is(err, artifact.ErrConflict) {
-			// The run moved first, here (finish) or on another instance: the
-			// handle keeps what it was and takes what that write applies.
-			r.state, r.report, r.err, r.finished = priorState, priorReport, priorErr, priorFinished
-			r.log, r.logTruncated, r.runLog = priorLog, priorTruncated, priorRunLog
-			return persistenceError(err)
-		} else if err != nil {
-			publicationErr = persistenceError(err)
-			r.state, r.report, r.err = StateError, nil, publicationErr
-			// Best effort to record the failure without evidence (for example an
-			// oversized report). An uncertain repository refuses this write.
-			_ = r.persist(false)
-		}
-	}
-	if r.ended != nil {
-		r.ended()
-	}
-	r.notifyLocked()
-	close(r.done)
-	return publicationErr
-}
-
 // endingLocked is the run's publication as ending in state records it.
 func (r *Handle) endingLocked(state State, report *engine.Report, err error) runPublication {
 	p := r.publicationLocked()
@@ -203,7 +171,7 @@ func (r *Handle) endingLocked(state State, report *engine.Report, err error) run
 // are p's too: one the Collector recorded after p was decided is not
 // published, so the handle drops it.
 func (r *Handle) endLocked(p runPublication) {
-	r.state, r.report, r.err, r.finished = p.state, p.report, p.err, p.finished
+	r.state, r.report, r.err, r.finished, r.interrupted = p.state, p.report, p.err, p.finished, p.interrupted
 	r.events = p.events
 	r.log, r.logTruncated, r.runLog = p.log, p.logTruncated, nil
 	if r.ended != nil {
@@ -347,31 +315,43 @@ func (r *Handle) cancelWithCause(cause error) error {
 }
 
 // cancelRequest reports whether the run was still unfinished, so the request
-// took effect.
+// took effect. The queue records the request first; a run no worker holds is
+// then ended here, once the repository accepts its end.
 func (r *Handle) cancelRequest(cause error) (bool, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.terminalLocked() {
+		r.mu.Unlock()
 		return false, nil
 	}
-	// finish may be writing the run's outcome: the queue then refuses the
-	// cancel as a conflict once that write lands, and finish ends the run.
 	held := r.state != StateQueued
-	if r.requestCancel != nil {
-		h, err := r.requestCancel()
+	request := r.requestCancel
+	r.mu.Unlock()
+	if request != nil {
+		h, err := request()
 		if err != nil {
 			// The queue is unreachable: stop what this process executes, and
 			// leave a queued run for the queue to end.
 			if held {
+				r.mu.Lock()
 				r.cancel(cause)
+				r.mu.Unlock()
 			}
 			return false, persistenceError(err)
 		}
 		held = h
 	}
+	r.mu.Lock()
 	r.cancel(cause)
-	if !held {
-		return true, r.finishLocked(StateCancelled, nil, nil)
+	if held || r.terminalLocked() {
+		r.mu.Unlock()
+		return true, nil
+	}
+	p := r.endingLocked(StateCancelled, nil, nil)
+	r.mu.Unlock()
+	// A conflict means the run moved first, here or on another instance.
+	// When the repository accepts no end, it is written again later.
+	if _, err := r.endRun(p); err != nil {
+		return false, err
 	}
 	return true, nil
 }
