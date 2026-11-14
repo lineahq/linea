@@ -383,10 +383,53 @@ func (c *Client) do(ctx context.Context, method, path string, body any, want int
 // exchange sends one request with its body and extra headers and returns the
 // response body when its status is want or one of also; any other status is
 // an *Error.
+//
+// A 503 without an operation error code, an instance still waiting for its
+// storage or a load balancer with no instance ready, handled nothing, so
+// exchange sends the request again, a submission included, after the
+// response's Retry-After, until such refusals have lasted waitRetry. It
+// does so only when it can send the body again; a 502 or 504 may follow a
+// request the server handled and is returned.
 func (c *Client) exchange(ctx context.Context, method, path string, reader io.Reader, contentType string, header map[string]string, want int, also ...int) ([]byte, error) {
+	replay, replayable := reader.(io.Seeker)
+	if reader == nil {
+		replayable = true
+	}
+	deadline := time.Now().Add(waitRetry)
+	delay := 250 * time.Millisecond
+	for {
+		raw, after, err := c.attempt(ctx, method, path, reader, contentType, header, want, also...)
+		var e *Error
+		if err == nil || !replayable || !errors.As(err, &e) || e.Status != http.StatusServiceUnavailable || e.Code != "" {
+			return raw, err
+		}
+		wait := delay
+		if after > 0 {
+			wait = after
+		}
+		if time.Now().Add(wait).After(deadline) {
+			return raw, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(wait):
+		}
+		delay = min(2*delay, 4*time.Second)
+		if replay != nil {
+			if _, err := replay.Seek(0, io.SeekStart); err != nil {
+				return nil, err
+			}
+		}
+	}
+}
+
+// attempt sends one request, as exchange describes, and also returns a
+// refusal's Retry-After in seconds, or 0.
+func (c *Client) attempt(ctx context.Context, method, path string, reader io.Reader, contentType string, header map[string]string, want int, also ...int) ([]byte, time.Duration, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, reader)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if c.project != "" {
 		q := req.URL.Query()
@@ -405,17 +448,17 @@ func (c *Client) exchange(ctx context.Context, method, path string, reader io.Re
 	resp, err := c.http.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return nil, 0, ctx.Err()
 		}
-		return nil, fmt.Errorf("cannot reach the debugger server at %s (is linea-server running?): %w", c.base, err)
+		return nil, 0, fmt.Errorf("cannot reach the debugger server at %s (is linea-server running?): %w", c.base, err)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return nil, 0, ctx.Err()
 		}
-		return nil, fmt.Errorf("reading the response of the debugger server at %s: %w", c.base, err)
+		return nil, 0, fmt.Errorf("reading the response of the debugger server at %s: %w", c.base, err)
 	}
 	if resp.StatusCode != want && !slices.Contains(also, resp.StatusCode) {
 		var e struct {
@@ -426,9 +469,13 @@ func (c *Client) exchange(ctx context.Context, method, path string, reader io.Re
 		if json.Unmarshal(raw, &e) == nil && e.Error != "" {
 			msg = e.Error
 		}
-		return nil, &Error{Status: resp.StatusCode, Message: msg, Code: e.Code, Diagnostics: e.Diagnostics, Current: e.Current}
+		var after time.Duration
+		if secs, err := strconv.Atoi(strings.TrimSpace(resp.Header.Get("Retry-After"))); err == nil && secs > 0 {
+			after = time.Duration(secs) * time.Second
+		}
+		return nil, after, &Error{Status: resp.StatusCode, Message: msg, Code: e.Code, Diagnostics: e.Diagnostics, Current: e.Current}
 	}
-	return raw, nil
+	return raw, 0, nil
 }
 
 // waitRetry bounds how long awaited retries a wait whose server went away.

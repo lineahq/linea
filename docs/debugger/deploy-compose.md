@@ -581,6 +581,7 @@ job.
 | `docker compose stop` or `restart`, builder | The builder takes no new build and finishes those it runs, up to the 30 minute build timeout, so `stop_grace_period` is 35 minutes. A build still running then is killed and retried once. `docker compose kill builder` stops it at once. |
 | Server killed | It loses its runs' leases; the restarted server requeues them after 30 s, once, as a new attempt. |
 | CLI waits | A report wait that gets a lost connection, or a 502, 503 or 504, is sent again, for up to 30 s of such failures. |
+| Server starting | Requests other than `/healthz` and `/readyz` answer 503 until the server opens its storage; the connected CLI sends them again for up to 30 s. |
 
 To upgrade, fetch `compose.yaml` and `.env.example` from the new release's tag
 (with the fleet overlay, also `compose.fleet.yaml`, `livecapture.json` and

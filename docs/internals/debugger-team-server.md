@@ -179,7 +179,14 @@ protocols in [debugger-workers.md](debugger-workers.md).
 - The connected CLI retries a report wait (`run`, `test`, suites,
   `runs report --wait`, compare waits) that gets a lost connection or a 502,
   503 or 504 without an operation error code, such as a load balancer's page,
-  for up to 30 s of such failures, so it reaches another instance.
+  for up to 30 s of such failures, so it reaches another instance. Any
+  request (`exchange` in `client/client.go`), a submission included, that
+  gets a 503 without an operation error code is sent again after its
+  `Retry-After` for up to 30 s, when its body can be sent again: such a
+  refusal, an instance waiting for its storage or a load balancer with no
+  instance ready, handled nothing. The fan-out gate needs this: haproxy
+  may send a request to an instance that has just restarted before its
+  checks (`fall 2`, every 500 ms) take it out of rotation.
 
 ### Verification
 

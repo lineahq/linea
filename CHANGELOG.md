@@ -285,6 +285,12 @@ the first item below.
   `limits.runs_per_principal` when other instances hold the principal's
   runs, and a refused admission leaves none of its runs behind. A suite's
   members start once all of them are prepared, not one by one.
+- **Fixed:** the connected CLI sends a request again, a submission included,
+  when it is refused with a 503 that carries no operation error code: an
+  instance still waiting for its storage, or a load balancer with no instance
+  ready. Such a refusal handled nothing. It waits the response's
+  `Retry-After`, for up to 30 s of such refusals, so a run submitted while an
+  instance restarts reaches it or another instance instead of failing.
 
 ## [0.2.0]
 

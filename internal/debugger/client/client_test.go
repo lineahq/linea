@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -282,6 +283,57 @@ func TestInterruptedComparisonCancelsBothRuns(t *testing.T) {
 // TestAWaitOutlivesAStoppedInstance: a wait the load balancer answers with a
 // gateway error, as when the instance serving it stops, is sent again; the
 // server's own refusal is not.
+// TestARefusalThatHandledNothingIsSentAgain: a 503 without an operation
+// error code, an instance waiting for its storage, is sent again with its
+// body, a submission included, while a 502 or a 503 with a code is returned.
+func TestARefusalThatHandledNothingIsSentAgain(t *testing.T) {
+	var mu sync.Mutex
+	sent := map[string][]string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		sent[r.URL.Path] = append(sent[r.URL.Path], string(body))
+		n := len(sent[r.URL.Path])
+		mu.Unlock()
+		switch {
+		case r.URL.Path == "/starting" && n < 3:
+			http.Error(w, "starting: the server is waiting for its storage", http.StatusServiceUnavailable)
+		case r.URL.Path == "/gateway":
+			http.Error(w, "<html>502 Bad Gateway</html>", http.StatusBadGateway)
+		case r.URL.Path == "/refused":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":"no worker","code":"unavailable"}`))
+		default:
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{}`))
+		}
+	}))
+	defer srv.Close()
+	c, err := New(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := c.do(ctx, http.MethodPost, "/starting", map[string]string{"run": "a"}, http.StatusAccepted); err != nil {
+		t.Fatalf("a submission to a starting instance = %v", err)
+	}
+	for _, path := range []string{"/gateway", "/refused"} {
+		if _, err := c.do(ctx, http.MethodPost, path, map[string]string{"run": "a"}, http.StatusAccepted); err == nil {
+			t.Fatalf("%s was accepted", path)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	want := `{"run":"a"}`
+	if got := sent["/starting"]; len(got) != 3 || got[0] != want || got[2] != want {
+		t.Fatalf("sent to the starting instance: %q", got)
+	}
+	if len(sent["/gateway"]) != 1 || len(sent["/refused"]) != 1 {
+		t.Fatalf("resent a 502 %d times or a coded 503 %d times", len(sent["/gateway"]), len(sent["/refused"]))
+	}
+}
+
 func TestAWaitOutlivesAStoppedInstance(t *testing.T) {
 	var waits int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

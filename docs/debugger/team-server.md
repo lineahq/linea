@@ -540,6 +540,7 @@ instance. One instance at a time does housekeeping and run retention.
 | Leader lost | Another instance takes over housekeeping within 5 minutes. |
 | MCP | Stateless: every `POST /mcp` stands alone. `GET` and `DELETE` answer 405. |
 | CLI waits | The connected CLI retries a report wait that gets a lost connection, or a 502, 503 or 504 without an operation error code, for up to 30 s of such failures, so it reaches another instance. |
+| CLI requests | The connected CLI sends any request again, a submission included, that gets a 503 without an operation error code (an instance waiting for its storage, or a load balancer with no instance ready), after its `Retry-After`, for up to 30 s of such refusals. Such a refusal handled nothing; a 502 or 504 may follow a handled request and is not resent. |
 
 [Docker Compose](deploy-compose.md) runs one instance on one machine; the
 [Kubernetes chart](deploy-kubernetes.md) runs `server.replicas` instances.
