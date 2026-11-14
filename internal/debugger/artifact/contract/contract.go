@@ -48,6 +48,7 @@ func Run(t *testing.T, fresh func(t *testing.T) Backend) {
 		{"expired leases requeue once per lease", queueLeases},
 		{"released runs return to the queue without spending an attempt", queueRelease},
 		{"admission refuses a principal at its unfinished-run limit", principalRunLimit},
+		{"a batch admission admits every run or none", admitRunsAllOrNothing},
 		{"runtime catalog keeps names and confirmations", runtimeCatalog},
 		{"runtime catalog keeps the binary of a server build", runtimeBinaries},
 		{"runtime catalog records a suspect binary until the entry is saved again", suspectBinaries},
@@ -1196,7 +1197,7 @@ func principalRunLimit(t *testing.T, b Backend) {
 	if err := submit(4, "user:bob", 2); err != nil {
 		t.Errorf("another principal's admission = %v", err)
 	}
-	// A run admitted without a limit, as a suite member is, still counts.
+	// A run admitted without a limit still counts.
 	if err := submit(5, "user:alice", 0); err != nil {
 		t.Errorf("admission without a limit = %v", err)
 	}
@@ -1222,6 +1223,68 @@ func principalRunLimit(t *testing.T, b Backend) {
 	long.Principal = strings.Repeat("p", artifact.MaxRunIndexField+1)
 	if _, err := r.AdmitRun(ctx, long); !errors.Is(err, artifact.ErrInvalidRequest) {
 		t.Errorf("admission with an oversized principal = %v", err)
+	}
+}
+
+func admitRunsAllOrNothing(t *testing.T, b Backend) {
+	r := openRuns(t, b)
+	batch := func(principal string, limit int, ns ...int) []artifact.Admission {
+		as := []artifact.Admission{}
+		for _, n := range ns {
+			a := admission(runID(n), artifact.DefaultProject, fmt.Appendf(nil, "bundle %d", n))
+			a.Principal, a.PrincipalRuns = principal, limit
+			as = append(as, a)
+		}
+		return as
+	}
+	if got, err := r.AdmitRuns(ctx, nil); err != nil || len(got) != 0 {
+		t.Errorf("empty batch = %v, %v", got, err)
+	}
+	head, err := r.ChangeHead(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.AdmitRuns(ctx, batch("user:alice", 3, 1, 2))
+	if err != nil || len(got) != 2 || got[0].ID != runID(1) || got[1].ID != runID(2) || got[0].Generation != 1 || got[1].Ordinal <= got[0].Ordinal {
+		t.Fatalf("batch = %+v, %v", got, err)
+	}
+	changes, _, err := r.Changes(ctx, head, 10)
+	if err != nil || len(changes) != 2 {
+		t.Errorf("changes after a batch = %+v, %v", changes, err)
+	}
+	// The principal's two runs and the batch's first two fill the limit of
+	// three at the batch's second member, so nothing of it is admitted.
+	if _, err := r.AdmitRuns(ctx, batch("user:alice", 3, 3, 4)); !errors.Is(err, artifact.ErrRunLimit) {
+		t.Errorf("batch over the principal's limit = %v", err)
+	}
+	// A member that conflicts refuses the batch, including members before it.
+	if _, err := r.AdmitRuns(ctx, batch("user:bob", 0, 5, 1)); !errors.Is(err, artifact.ErrConflict) {
+		t.Errorf("batch with an admitted run = %v", err)
+	}
+	if _, err := r.AdmitRuns(ctx, batch("user:bob", 0, 6, 6)); !errors.Is(err, artifact.ErrConflict) {
+		t.Errorf("batch admitting a run twice = %v", err)
+	}
+	bad := batch("user:bob", 0, 7, 8)
+	bad[1].Metadata = []byte("{")
+	if _, err := r.AdmitRuns(ctx, bad); !errors.Is(err, artifact.ErrInvalidRequest) {
+		t.Errorf("batch with an invalid member = %v", err)
+	}
+	for _, n := range []int{3, 4, 5, 6, 7, 8} {
+		if _, err := r.Run(ctx, runID(n)); !errors.Is(err, artifact.ErrNotFound) {
+			t.Errorf("run %d of a refused batch = %v", n, err)
+		}
+	}
+	claims, err := r.Claim(ctx, "w1", "builtin", 10, epoch.Add(time.Minute))
+	if err != nil || !slices.Equal(claimed(claims), []string{runID(1), runID(2)}) {
+		t.Errorf("claim after refused batches = %v, %v", claimed(claims), err)
+	}
+	// A refused batch leaves the principal's places free.
+	if _, err := r.AdmitRuns(ctx, batch("user:alice", 3, 9)); err != nil {
+		t.Errorf("admission within the limit after a refused batch = %v", err)
+	}
+	all, err := r.Runs(ctx)
+	if err != nil || len(all) != 3 {
+		t.Errorf("runs = %d, %v", len(all), err)
 	}
 }
 

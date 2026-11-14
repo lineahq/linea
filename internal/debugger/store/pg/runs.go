@@ -30,6 +30,79 @@ func (s *Store) AdmitRun(ctx context.Context, a artifact.Admission) (*artifact.R
 	return s.saveRun(ctx, a.ID, a.Project, 0, false, a.Index, a.Metadata, nil, a.Bundle, &a)
 }
 
+// AdmitRuns admits every run of as in one transaction, so either all of them
+// are admitted or none is. Each member's principal count sees the members
+// before it.
+func (s *Store) AdmitRuns(ctx context.Context, as []artifact.Admission) ([]*artifact.RunRecord, error) {
+	if err := s.ready(ctx); err != nil {
+		return nil, err
+	}
+	if len(as) == 0 {
+		return nil, nil
+	}
+	pubs := make([]publication, len(as))
+	for i := range as {
+		a := &as[i]
+		p, err := newPublication(a.ID, a.Project, 0, false, a.Index, a.Metadata, nil, a.Bundle, a)
+		if err != nil {
+			return nil, err
+		}
+		pubs[i] = p
+	}
+	recs := make([]*artifact.RunRecord, len(as))
+	err := s.inTx(ctx, "run", func(tx pgx.Tx) error {
+		inst, err := lockInstallation(ctx, tx)
+		if err != nil {
+			return err
+		}
+		for i := range pubs {
+			if recs[i], err = s.saveRunIn(ctx, tx, &inst, true, &pubs[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return recs, nil
+}
+
+// publication is one validated run write.
+type publication struct {
+	id, project        string
+	expected           uint64
+	terminal           bool
+	index              artifact.RunIndex
+	metadata, evidence []byte
+	bundle             []byte
+	admission          *artifact.Admission
+	principal          string
+	pin                artifact.RunBinary
+	evidenceDigest     string
+}
+
+// newPublication validates a run write before any I/O.
+func newPublication(id, project string, expected uint64, terminal bool, index artifact.RunIndex, metadata, evidence, bundle []byte, admission *artifact.Admission) (publication, error) {
+	p := publication{id: id, project: project, expected: expected, terminal: terminal, index: index, metadata: metadata, evidence: evidence, bundle: bundle, admission: admission}
+	if !validRunID(id) || !artifact.ValidProject(project) || !json.Valid(metadata) || len(metadata) > maxRunMetadata || (!terminal && len(evidence) != 0) || !index.Valid() {
+		return p, invalid("invalid run publication")
+	}
+	if admission != nil {
+		if len(admission.Principal) > artifact.MaxRunIndexField || admission.PrincipalRuns < 0 {
+			return p, invalid("invalid run principal")
+		}
+		p.principal = admission.Principal
+		if admission.Binary != nil {
+			if !admission.Binary.Valid() {
+				return p, invalid("invalid run binary")
+			}
+			p.pin = *admission.Binary
+		}
+	}
+	return p, nil
+}
+
 type runRow struct {
 	project    string
 	generation int64
@@ -44,40 +117,26 @@ func (s *Store) saveRun(ctx context.Context, id, project string, expected uint64
 	if err := s.ready(ctx); err != nil {
 		return nil, err
 	}
-	if !validRunID(id) || !artifact.ValidProject(project) || !json.Valid(metadata) || len(metadata) > maxRunMetadata || (!terminal && len(evidence) != 0) || !index.Valid() {
-		return nil, invalid("invalid run publication")
-	}
-	var principal string
-	if admission != nil {
-		if len(admission.Principal) > artifact.MaxRunIndexField || admission.PrincipalRuns < 0 {
-			return nil, invalid("invalid run principal")
-		}
-		principal = admission.Principal
-	}
-	var pin artifact.RunBinary
-	if admission != nil && admission.Binary != nil {
-		if !admission.Binary.Valid() {
-			return nil, invalid("invalid run binary")
-		}
-		pin = *admission.Binary
+	p, err := newPublication(id, project, expected, terminal, index, metadata, evidence, bundle, admission)
+	if err != nil {
+		return nil, err
 	}
 	// Evidence is uploaded before the transaction so the installation lock is
 	// not held for the upload; under the lock keepBlob checks it is still
 	// there. A failed publication leaves an unreferenced object for Sweep.
 	// Bundles stay inside: identical inputs give a bundle the digest of an
 	// old object Sweep may be deleting, and admission is not on a lease.
-	var evidenceDigest string
 	if len(evidence) != 0 {
 		if int64(len(evidence)) > s.limits.RunBytes {
 			return nil, artifact.ErrLimit
 		}
-		evidenceDigest = digestOf(evidence)
-		if err := s.putBlob(ctx, evidenceDigest, evidence); err != nil {
+		p.evidenceDigest = digestOf(evidence)
+		if err := s.putBlob(ctx, p.evidenceDigest, evidence); err != nil {
 			return nil, err
 		}
 	}
 	var rec *artifact.RunRecord
-	err := s.inTx(ctx, "run", func(tx pgx.Tx) error {
+	err = s.inTx(ctx, "run", func(tx pgx.Tx) error {
 		// Creating a run and adding bytes check counts and storage, so they
 		// serialize on the installation; a status update touches its row only.
 		var inst installationRow
@@ -88,6 +147,24 @@ func (s *Store) saveRun(ctx context.Context, id, project string, expected uint64
 				return err
 			}
 		}
+		rec, err = s.saveRunIn(ctx, tx, &inst, locked, &p)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return rec, nil
+}
+
+// saveRunIn writes p in tx. locked reports whether tx holds the installation
+// lock, which inst then reflects; a new run advances inst's run ordinal.
+func (s *Store) saveRunIn(ctx context.Context, tx pgx.Tx, inst *installationRow, locked bool, p *publication) (*artifact.RunRecord, error) {
+	id, project, expected, terminal, index := p.id, p.project, p.expected, p.terminal, p.index
+	metadata, evidence, bundle, admission := p.metadata, p.evidence, p.bundle, p.admission
+	principal, pin := p.principal, p.pin
+	var rec *artifact.RunRecord
+	err := func() error {
+		var err error
 		var deleted bool
 		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM tombstones WHERE kind = 'run' AND id = $1)", id).Scan(&deleted); err != nil {
 			return err
@@ -149,7 +226,7 @@ func (s *Store) saveRun(ctx context.Context, id, project string, expected uint64
 		if len(bundle) != 0 {
 			r.BundleDigest, r.BundleBytes = digestOf(bundle), int64(len(bundle))
 		}
-		r.Digest = evidenceDigest
+		r.Digest = p.evidenceDigest
 		if locked {
 			additional, err := newBytes(ctx, tx, blob{r.Digest, r.Bytes}, blob{r.BundleDigest, r.BundleBytes})
 			if err != nil {
@@ -190,6 +267,7 @@ func (s *Store) saveRun(ctx context.Context, id, project string, expected uint64
 			if _, err = tx.Exec(ctx, "UPDATE installation SET run_ordinal = $1", int64(r.Ordinal)); err != nil {
 				return err
 			}
+			inst.runOrdinal = int64(r.Ordinal)
 			var queue *string
 			var runtime string
 			var priority int
@@ -205,7 +283,7 @@ func (s *Store) saveRun(ctx context.Context, id, project string, expected uint64
 		}
 		rec = &r
 		return err
-	})
+	}()
 	if err != nil {
 		return nil, err
 	}

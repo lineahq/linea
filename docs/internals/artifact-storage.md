@@ -124,7 +124,9 @@ A run record holds the run ID, admission ordinal, generation, terminal flag,
 bounded application metadata (8 KiB), optional evidence digest and size, and
 optional immutable input-bundle digest and size. `AdmitRun` uploads the bundle
 and inserts the run in one transaction; later lifecycle writes preserve that
-binding. A terminal write publishes the terminal flag, metadata and evidence
+binding. `AdmitRuns` admits several runs in one transaction under one
+installation lock: all of them or none, each member's principal count
+seeing the members before it. A terminal write publishes the terminal flag, metadata and evidence
 reference together. Terminal records cannot change; unfinished updates check
 the generation. The repository does not interpret Collector reports or replay
 work. The platform stores schema-2 evidence archives: engine report 0.5,

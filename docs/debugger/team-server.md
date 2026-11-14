@@ -667,7 +667,7 @@ are a contract like the metric names.
 | --- | --- |
 | Worker capacity | A connected worker runs as many runs at once as its `--capacity`. |
 | `queue` | Other runs wait in a queue of this many runs. |
-| `runs_per_principal` | Each principal may hold this many queued or running runs, so one person cannot fill the queue. Instances sharing a database count a principal's runs together. A suite needs a slot for every member; the default of 32 fits the largest suite. |
+| `runs_per_principal` | Each principal may hold this many queued or running runs, so one person cannot fill the queue. Instances sharing a database count a principal's runs together. A suite needs a slot for every member and is admitted whole or refused whole; the default of 32 fits the largest suite. |
 | `captures_per_principal` | Captures that have not ended; every capture ends within 280 seconds. |
 | `connections` | Open connections to the API listener, counting browser tabs, CLIs, workers and builders; one beyond it is closed at once. |
 | `git_clone_size` | A git source the server clones for `runtime manifest --server`, its history and checkout together. The clone stops when it grows past the limit, and the request names the limit. |

@@ -212,6 +212,57 @@ func (s *Service) endRunSettled(span context.Context, r *Handle, p runPublicatio
 // the report's analysis outgrows the evidence budget, p.report becomes the
 // reduced report that was written.
 func (s *Service) savePublication(ctx context.Context, p *runPublication, includeEvidence bool) (*artifact.RunRecord, error) {
+	if p.generation == 0 {
+		a, err := admissionOf(p)
+		if err != nil {
+			return nil, err
+		}
+		record, err := s.repository.AdmitRun(ctx, a)
+		if err == nil {
+			s.nudgeRetention()
+		}
+		return record, err
+	}
+	metadata, err := publicationMetadata(p)
+	if err != nil {
+		return nil, err
+	}
+	var evidence []byte
+	p.weight = 0
+	if includeEvidence && (p.report != nil || len(p.events) != 0 || p.log != "") {
+		limit := s.repository.Limits().RunBytes
+		var decoded int64
+		if evidence, decoded, err = encodeEvidence(p.events, p.report, p.log, p.logTruncated); err != nil {
+			return nil, err
+		}
+		p.weight = decoded
+		// The evidence budget leaves headroom for the report's analysis; when
+		// the analysis outgrows it, keep the run without its derived sections
+		// rather than losing it. The handle keeps the same reduced report, so
+		// answers agree before and after a restart.
+		if !archiveFits(int64(len(evidence)), decoded, limit) && p.report != nil && p.report.Result != nil {
+			reduced := withoutAnalysis(p.report)
+			if smaller, size, err := encodeEvidence(p.events, reduced, p.log, p.logTruncated); err == nil && archiveFits(int64(len(smaller)), size, limit) {
+				p.report, evidence, p.weight = reduced, smaller, size
+			}
+		}
+	}
+	return s.repository.SaveRun(ctx, p.id, p.project, p.generation, p.state.Terminal(), runIndex(p.state, p.report), metadata, evidence)
+}
+
+// admissionOf is the admission of p, a publication without a generation.
+func admissionOf(p *runPublication) (artifact.Admission, error) {
+	metadata, err := publicationMetadata(p)
+	if err != nil {
+		return artifact.Admission{}, err
+	}
+	return artifact.Admission{
+		ID: p.id, Project: p.project, Metadata: metadata, Bundle: p.bundle, Runtime: p.runtimeKey, Binary: p.binary, Index: runIndex(p.state, p.report),
+		Principal: p.caller.Principal, PrincipalRuns: p.principalRuns}, nil
+}
+
+// publicationMetadata is the run metadata p publishes.
+func publicationMetadata(p *runPublication) ([]byte, error) {
 	m := runMetadata{Schema: 2, ID: p.id, Mode: p.mode, State: p.state, Created: p.created, Started: p.started, Finished: p.finished, Interrupted: p.interrupted, Attempt: p.attempt}
 	if p.caller != (Actor{}) {
 		caller := p.caller
@@ -244,38 +295,7 @@ func (s *Service) savePublication(ctx context.Context, p *runPublication, includ
 			return nil, err
 		}
 	}
-	var evidence []byte
-	p.weight = 0
-	if includeEvidence && (p.report != nil || len(p.events) != 0 || p.log != "") {
-		limit := s.repository.Limits().RunBytes
-		var decoded int64
-		if evidence, decoded, err = encodeEvidence(p.events, p.report, p.log, p.logTruncated); err != nil {
-			return nil, err
-		}
-		p.weight = decoded
-		// The evidence budget leaves headroom for the report's analysis; when
-		// the analysis outgrows it, keep the run without its derived sections
-		// rather than losing it. The handle keeps the same reduced report, so
-		// answers agree before and after a restart.
-		if !archiveFits(int64(len(evidence)), decoded, limit) && p.report != nil && p.report.Result != nil {
-			reduced := withoutAnalysis(p.report)
-			if smaller, size, err := encodeEvidence(p.events, reduced, p.log, p.logTruncated); err == nil && archiveFits(int64(len(smaller)), size, limit) {
-				p.report, evidence, p.weight = reduced, smaller, size
-			}
-		}
-	}
-	var record *artifact.RunRecord
-	if p.generation == 0 {
-		record, err = s.repository.AdmitRun(ctx, artifact.Admission{
-			ID: p.id, Project: p.project, Metadata: metadata, Bundle: p.bundle, Runtime: p.runtimeKey, Binary: p.binary, Index: runIndex(p.state, p.report),
-			Principal: p.caller.Principal, PrincipalRuns: p.principalRuns})
-		if err == nil {
-			s.nudgeRetention()
-		}
-	} else {
-		record, err = s.repository.SaveRun(ctx, p.id, p.project, p.generation, p.state.Terminal(), runIndex(p.state, p.report), metadata, evidence)
-	}
-	return record, err
+	return metadata, nil
 }
 
 // Evidence archives are schema 2: the archive JSON, gzip-compressed, with its

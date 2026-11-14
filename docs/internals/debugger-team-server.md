@@ -101,9 +101,10 @@ protocols in [debugger-workers.md](debugger-workers.md).
   (migration `017_run_principal.sql`). A single run's admission counts the
   principal's unfinished rows under the installation lock that every
   admission takes and is refused with `artifact.ErrRunLimit`
-  (`resource_exhausted`, retryable). Suites and comparisons reserve their
-  members against the instance's own view only, so concurrent suites on two
-  instances can still exceed the limit by up to one suite each.
+  (`resource_exhausted`, retryable). Suites and comparisons admit their
+  members in one transaction (`AdmitRuns`) whose count sees the members
+  before each, so a suite that would exceed the limit is refused whole and
+  never admitted in part.
 - An instance claims the runs it learned of from the change feed. As a safety
   net, every heartbeat (a third of the lease, 10 s) it also claims for each
   runtime its connected workers run without starting one: a worker's runtime,

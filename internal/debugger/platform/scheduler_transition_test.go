@@ -38,6 +38,13 @@ func (g *gatedRuns) AdmitRun(ctx context.Context, a artifact.Admission) (*artifa
 	return g.Repository.AdmitRun(ctx, a)
 }
 
+func (g *gatedRuns) AdmitRuns(ctx context.Context, as []artifact.Admission) ([]*artifact.RunRecord, error) {
+	if err := g.gate(ctx, "admit", false, nil); err != nil {
+		return nil, err
+	}
+	return g.Repository.AdmitRuns(ctx, as)
+}
+
 func (g *gatedRuns) Release(ctx context.Context, a artifact.Assignment) (uint64, error) {
 	if err := g.gate(ctx, "release", false, nil); err != nil {
 		return 0, err

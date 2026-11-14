@@ -279,6 +279,12 @@ the first item below.
   renewal, other submissions or other runs, and a run
   claimed while a single-instance service closes is cancelled instead of
   never ending.
+- **Fixed:** a suite or a comparison is admitted whole or refused whole.
+  Its members are admitted in one database transaction, which counts the
+  principal's runs on every instance, so a suite no longer exceeds
+  `limits.runs_per_principal` when other instances hold the principal's
+  runs, and a refused admission leaves none of its runs behind. A suite's
+  members start once all of them are prepared, not one by one.
 
 ## [0.2.0]
 

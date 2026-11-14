@@ -145,6 +145,10 @@ func (failingAdmission) AdmitRun(context.Context, artifact.Admission) (*artifact
 	return nil, artifact.ErrStorage
 }
 
+func (failingAdmission) AdmitRuns(context.Context, []artifact.Admission) ([]*artifact.RunRecord, error) {
+	return nil, artifact.ErrStorage
+}
+
 func (failingAdmission) SaveRun(context.Context, string, string, uint64, bool, artifact.RunIndex, []byte, []byte) (*artifact.RunRecord, error) {
 	return nil, artifact.ErrStorage
 }

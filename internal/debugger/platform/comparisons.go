@@ -280,17 +280,10 @@ func (s *Service) submitPair(ctx context.Context, caller Caller, mode InputMode,
 	if err != nil {
 		return [2]*Handle{}, err
 	}
-	if handles[0], err = s.admit(ctx, caller, as[0]); err != nil {
-		s.mu.Lock()
-		s.withdrawLocked(as[1])
-		s.mu.Unlock()
+	// One write admits both runs or neither.
+	admitted, err := s.admitAll(ctx, caller, as[:])
+	if err != nil {
 		return [2]*Handle{}, err
 	}
-	if handles[1], err = s.admit(ctx, caller, as[1]); err != nil {
-		// Only a failed write of the second run leaves the first admitted;
-		// it is cancelled before it reports anything.
-		_ = handles[0].cancelWithCause(err)
-		return [2]*Handle{}, err
-	}
-	return handles, nil
+	return [2]*Handle(admitted), nil
 }

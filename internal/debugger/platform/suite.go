@@ -107,18 +107,18 @@ func (s *Service) submitSuite(ctx context.Context, caller Caller, perm authz.Per
 	s.suiteSubmitting++
 	s.preparations.Add(1) // Close waits through the final suite publication.
 	s.mu.Unlock()
-	admission := &suiteAdmission{remaining: n, runtime: bound, runtimeName: name}
+	reservation := &suiteAdmission{remaining: n, runtime: bound, runtimeName: name}
 	published := false
 	slotReserved := true
 	defer func() {
 		s.mu.Lock()
-		s.reserved -= admission.remaining
-		s.holdLocked(caller, -admission.remaining)
+		s.reserved -= reservation.remaining
+		s.holdLocked(caller, -reservation.remaining)
 		if slotReserved {
 			s.suiteSubmitting--
 		}
 		if !published {
-			for _, r := range admission.handles {
+			for _, r := range reservation.handles {
 				delete(s.suiteRuns, r.ID())
 			}
 		}
@@ -130,15 +130,38 @@ func (s *Service) submitSuite(ctx context.Context, caller Caller, perm authz.Per
 	suite := Suite{ID: "suite-" + strings.TrimPrefix(instrument.NewRunID(), "run-"), Project: caller.Project, Caller: caller.Actor(), Created: time.Now().UTC(), Config: config, Members: make([]SuiteMember, 0, n)}
 	caller.touch(suite.ID)
 	handles := make([]*Handle, n)
+	// prepared are the members prepared but not yet queued, which hold their
+	// preparation slots.
+	type preparedMember struct {
+		i int
+		p preparedRun
+	}
+	var prepared []preparedMember
 	abort := func(err error) (*Suite, []*Handle, error) {
-		for _, r := range admission.handles {
+		if len(prepared) != 0 {
+			s.mu.Lock()
+			s.preparing -= len(prepared)
+			s.holdLocked(caller, -len(prepared))
+			s.mu.Unlock()
+			for range prepared {
+				s.preparations.Done()
+			}
+			prepared = nil
+		}
+		for _, r := range reservation.handles {
 			_ = r.cancelWithCause(err)
 		}
 		// Private partial metadata lets the foreground wrapper retain admitted
 		// evidence after cancellation. SubmitSuite still returns no suite.
+		cancelled := suiteErrorMessage(&Run{State: StateCancelled})
+		for i := range suite.Members {
+			if m := &suite.Members[i]; m.RunID == "" && m.Error == "" {
+				m.Error = cancelled
+			}
+		}
 		for i := len(suite.Members); i < n; i++ {
 			label := memberLabel(req.Members[i], i)
-			suite.Members = append(suite.Members, SuiteMember{Label: label, Error: suiteErrorMessage(&Run{State: StateCancelled})})
+			suite.Members = append(suite.Members, SuiteMember{Label: label, Error: cancelled})
 		}
 		return &suite, handles, classify(err, CodeValidationFailed)
 	}
@@ -150,14 +173,14 @@ func (s *Service) submitSuite(ctx context.Context, caller Caller, perm authz.Per
 		er := engine.Request{Config: req.Config.Path, ConfigYAML: req.Config.Text, ConfigLabel: req.Config.Label,
 			Scenario: member.Scenario.Path, ScenarioYAML: member.Scenario.Text, ScenarioDir: member.Dir, ScenarioLabel: member.Scenario.Label,
 			Sources: sourceRefs(configRef, nil, memberRefs[i]), Runtime: runtimeSelection(req.Runtime)}
-		r, err := s.submitReserved(ctx, caller, ModeScenario, er, time.Time{}, admission)
+		p, err := s.prepareReserved(ctx, &caller, er, reservation)
 		if err != nil {
 			m.Error = err.Error()
+			if ctx.Err() != nil {
+				m.Error = suiteErrorMessage(&Run{State: StateCancelled})
+			}
 		} else {
-			m.RunID, handles[i] = r.ID(), r
-		}
-		if ctx.Err() != nil && r == nil {
-			m.Error = suiteErrorMessage(&Run{State: StateCancelled})
+			prepared = append(prepared, preparedMember{i, p})
 		}
 		suite.Members = append(suite.Members, m)
 		if ctx.Err() != nil {
@@ -166,6 +189,47 @@ func (s *Service) submitSuite(ctx context.Context, caller Caller, perm authz.Per
 		if errors.Is(err, ErrClosed) || errors.Is(err, ErrPersistence) {
 			return abort(err)
 		}
+	}
+	// Every prepared member is queued and admitted together: with a
+	// repository, one write admits all of them or none, and checks the
+	// principal's limit against all of them.
+	s.mu.Lock()
+	var as []admission
+	var queueErr error
+	for _, m := range prepared {
+		if queueErr != nil {
+			s.preparing--
+			s.holdLocked(caller, -1)
+			continue
+		}
+		a, err := s.queuePreparedLocked(ctx, caller, ModeScenario, m.p, time.Time{}, reservation)
+		if err != nil {
+			queueErr = err
+			continue
+		}
+		as = append(as, a)
+	}
+	if queueErr != nil {
+		for _, a := range as {
+			s.withdrawLocked(a)
+		}
+	}
+	s.mu.Unlock()
+	for range prepared {
+		s.preparations.Done()
+	}
+	members := prepared
+	prepared = nil
+	if queueErr != nil {
+		return abort(queueErr)
+	}
+	admitted, err := s.admitAll(ctx, caller, as)
+	if err != nil {
+		return abort(err)
+	}
+	for k, r := range admitted {
+		i := members[k].i
+		suite.Members[i].RunID, handles[i] = r.ID(), r
 	}
 	s.mu.Lock()
 	if err := ctx.Err(); err != nil {

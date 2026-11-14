@@ -167,7 +167,10 @@ The root Go module is declared in `go.mod`.
   holds its queue slot and principal hold, writes the admission (bundle
   included) without the lock, and withdraws the run if the repository refuses
   it; a claim, the change feed or a load that meets the run meanwhile finds
-  that handle. The service also offers
+  that handle. A suite prepares every member first, each holding its
+  preparation slot, then queues them together and admits them in one
+  `AdmitRuns` write, as a comparison admits its two runs: all of them or
+  none, with the principal's limit counted against all of them. The service also offers
   bounded admission, run handles, cancellation through the queue, events,
   ephemeral or repository-backed history (`platform.Open`), source artifacts,
   captured input bundles, the environment capture policy
@@ -393,7 +396,7 @@ The root Go module is declared in `go.mod`.
   context, and ends it with the run's state, or `released`;
   `endRun` wraps the write in `linea.run.publish` and passes that span
   down to the store. `prepareRun` takes the span context from the request,
-  `queueLocked` keeps it on `Handle.submitted` and `admit` writes the admission under
+  `queueLocked` keeps it on `Handle.submitted` and `admitAll` writes the admission under
   the request's context without its cancellation (`context.WithoutCancel`:
   the store's spans join the request's, and a cancel cannot cut a commit the
   caller would then see as failed), and the run metadata stores

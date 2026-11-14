@@ -553,29 +553,63 @@ func (s *Service) submit(prepare context.Context, caller Caller, mode InputMode,
 // submitReserved shares all validation, preparation and admission with submit.
 // A suite slot transfers atomically from reserved to preparing under s.mu.
 func (s *Service) submitReserved(prepare context.Context, caller Caller, mode InputMode, req engine.Request, deadline time.Time, reservation *suiteAdmission) (*Handle, error) {
-	if err := s.enterPreparation(&caller, req, reservation); err != nil {
+	p, err := s.prepareReserved(prepare, &caller, req, reservation)
+	if err != nil {
 		return nil, err
 	}
+	// Close waits for the admission's write too, so the repository stays
+	// open until it ends.
 	defer s.preparations.Done()
-	p, err := s.prepareRun(prepare, caller.Project, req, reservation)
 	s.mu.Lock()
-	s.preparing--
-	s.holdLocked(caller, -1)
-	switch {
-	case s.closed:
-		err = ErrClosed
-	case err == nil:
-		err = prepare.Err()
-	}
-	var a admission
-	if err == nil {
-		a, err = s.queueLocked(caller, mode, p, deadline, reservation)
-	}
+	a, err := s.queuePreparedLocked(prepare, caller, mode, p, deadline, reservation)
 	s.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
-	return s.admit(prepare, caller, a)
+	handles, err := s.admitAll(prepare, caller, []admission{a})
+	if err != nil {
+		return nil, err
+	}
+	return handles[0], nil
+}
+
+// prepareReserved takes a preparation slot and prepares a run. A prepared
+// run keeps its slot and its principal's hold until queuePreparedLocked;
+// the caller then calls s.preparations.Done. On error nothing is kept.
+func (s *Service) prepareReserved(prepare context.Context, caller *Caller, req engine.Request, reservation *suiteAdmission) (preparedRun, error) {
+	if err := s.enterPreparation(caller, req, reservation); err != nil {
+		return preparedRun{}, err
+	}
+	p, err := s.prepareRun(prepare, caller.Project, req, reservation)
+	if err == nil {
+		err = prepare.Err()
+	}
+	if err != nil {
+		s.mu.Lock()
+		s.preparing--
+		s.holdLocked(*caller, -1)
+		if s.closed {
+			err = ErrClosed
+		}
+		s.mu.Unlock()
+		s.preparations.Done()
+		return preparedRun{}, err
+	}
+	return p, nil
+}
+
+// queuePreparedLocked gives up a prepared run's preparation slot and hold
+// and queues it, unless the service closed or prepare ended. s.mu is held.
+func (s *Service) queuePreparedLocked(prepare context.Context, caller Caller, mode InputMode, p preparedRun, deadline time.Time, reservation *suiteAdmission) (admission, error) {
+	s.preparing--
+	s.holdLocked(caller, -1)
+	if s.closed {
+		return admission{}, ErrClosed
+	}
+	if err := prepare.Err(); err != nil {
+		return admission{}, err
+	}
+	return s.queueLocked(caller, mode, p, deadline, reservation)
 }
 
 // enterPreparation validates a request and takes a preparation slot: one of
@@ -761,7 +795,7 @@ func (s *Service) queueLocked(caller Caller, mode InputMode, p preparedRun, dead
 	if p.runtime != nil {
 		r.binary = p.runtime.binary
 	}
-	if reservation == nil && s.limits.Runs > 0 {
+	if s.limits.Runs > 0 {
 		r.principalRuns = s.limits.Runs
 	}
 	caller.touch(r.id)
@@ -789,25 +823,52 @@ func (s *Service) queueLocked(caller Caller, mode InputMode, p preparedRun, dead
 	return admission{r: r, job: job, reservation: reservation}, nil
 }
 
-// admit writes a run queueLocked installed, without s.mu, so a slow
-// repository or a large bundle does not hold up other runs. The write joins
-// the span of the request in ctx but not its cancellation: a write
-// cancelled while it commits could leave a stored run its caller was told
-// failed. A run the repository refuses is withdrawn; one admitted while a
-// service that is not shared closed is cancelled, as Close cancels every
-// other run.
-func (s *Service) admit(ctx context.Context, caller Caller, a admission) (*Handle, error) {
-	r := a.r
-	if s.repository == nil {
-		return r, nil
+// admitAll writes the runs queueLocked installed, without s.mu, so a slow
+// repository or a large bundle does not hold up other runs. Several runs
+// are admitted in one write, so either all of them are queued or none is,
+// and the repository checks the principal's limit against all of them. The
+// write joins the span of the request in ctx but not its cancellation: a
+// write cancelled while it commits could leave a stored run its caller was
+// told failed. Runs the repository refuses are withdrawn; runs admitted
+// while a service that is not shared closed are cancelled, as Close cancels
+// every other run.
+func (s *Service) admitAll(ctx context.Context, caller Caller, as []admission) ([]*Handle, error) {
+	handles := make([]*Handle, len(as))
+	for i, a := range as {
+		handles[i] = a.r
 	}
-	r.mu.Lock()
-	p := r.publicationLocked()
-	r.mu.Unlock()
-	record, err := s.savePublication(context.WithoutCancel(ctx), &p, false)
+	if s.repository == nil || len(as) == 0 {
+		return handles, nil
+	}
+	batch := make([]artifact.Admission, len(as))
+	var err error
+	for i, a := range as {
+		a.r.mu.Lock()
+		p := a.r.publicationLocked()
+		a.r.mu.Unlock()
+		if batch[i], err = admissionOf(&p); err != nil {
+			break
+		}
+	}
+	var records []*artifact.RunRecord
+	if err == nil {
+		ctx = context.WithoutCancel(ctx)
+		if len(batch) == 1 {
+			var record *artifact.RunRecord
+			record, err = s.repository.AdmitRun(ctx, batch[0])
+			records = []*artifact.RunRecord{record}
+		} else {
+			records, err = s.repository.AdmitRuns(ctx, batch)
+		}
+		if err == nil {
+			s.nudgeRetention()
+		}
+	}
 	s.mu.Lock()
 	if err != nil {
-		s.withdrawLocked(a)
+		for _, a := range as {
+			s.withdrawLocked(a)
+		}
 		s.mu.Unlock()
 		if errors.Is(err, artifact.ErrRunLimit) {
 			// Runs other instances admitted fill the limit.
@@ -815,21 +876,25 @@ func (s *Service) admit(ctx context.Context, caller Caller, a admission) (*Handl
 		}
 		return nil, persistenceError(err)
 	}
-	r.mu.Lock()
-	// A claim or the change feed may have brought the record first.
-	if record.Generation > r.generation {
-		r.storedLocked(record)
+	for i, r := range handles {
+		r.mu.Lock()
+		// A claim or the change feed may have brought the record first.
+		if records[i].Generation > r.generation {
+			r.storedLocked(records[i])
+		}
+		r.mu.Unlock()
+		s.order = append(s.order, r.id)
 	}
-	r.mu.Unlock()
-	s.order = append(s.order, r.id)
 	cancel := s.closed && !s.shared
 	s.evictLocked()
 	s.wakeLocked()
 	s.mu.Unlock()
 	if cancel {
-		_ = r.Cancel()
+		for _, r := range handles {
+			_ = r.Cancel()
+		}
 	}
-	return r, nil
+	return handles, nil
 }
 
 // withdrawLocked removes a run queueLocked installed that will not be
