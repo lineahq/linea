@@ -267,19 +267,29 @@ func (s *Service) submitPair(ctx context.Context, caller Caller, mode InputMode,
 	case ctx.Err() != nil:
 		err = ctx.Err()
 	}
+	var as [2]admission
 	if err == nil {
-		handles[0], err = s.admitLocked(ctx, caller, mode, p1, time.Time{}, nil)
+		as[0], err = s.queueLocked(caller, mode, p1, time.Time{}, nil)
 	}
 	if err == nil {
-		handles[1], err = s.admitLocked(ctx, caller, mode, p2, time.Time{}, nil)
+		if as[1], err = s.queueLocked(caller, mode, p2, time.Time{}, nil); err != nil {
+			s.withdrawLocked(as[0])
+		}
 	}
 	s.mu.Unlock()
 	if err != nil {
-		// Only a failed journal publication of the second run can leave the
-		// first admitted; it is cancelled before it reports anything.
-		if handles[0] != nil {
-			_ = handles[0].cancelWithCause(err)
-		}
+		return [2]*Handle{}, err
+	}
+	if handles[0], err = s.admit(ctx, caller, as[0]); err != nil {
+		s.mu.Lock()
+		s.withdrawLocked(as[1])
+		s.mu.Unlock()
+		return [2]*Handle{}, err
+	}
+	if handles[1], err = s.admit(ctx, caller, as[1]); err != nil {
+		// Only a failed write of the second run leaves the first admitted;
+		// it is cancelled before it reports anything.
+		_ = handles[0].cancelWithCause(err)
 		return [2]*Handle{}, err
 	}
 	return handles, nil

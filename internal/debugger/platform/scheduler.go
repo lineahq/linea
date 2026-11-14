@@ -532,13 +532,9 @@ func (s *Service) failStart(job *pendingRun, end runPublication) {
 // not held.
 func (s *Service) handBack(job *pendingRun) {
 	s.mu.Lock()
-	r := job.handle
-	r.mu.Lock()
 	s.releaseLocked(job)
-	retry := s.releaseUnstartedLocked(job)
-	r.mu.Unlock()
 	s.mu.Unlock()
-	if retry {
+	if s.releaseUnstarted(job) {
 		// Not under s.mu: wakeAt takes it.
 		now := s.now()
 		s.wakeAt(now, now.Add(startRetryDelay))
@@ -550,25 +546,33 @@ func (s *Service) handBack(job *pendingRun) {
 // tight loop.
 const startRetryDelay = time.Second
 
-// releaseUnstartedLocked returns a claimed run whose start could not be
-// recorded to the queue, counted as released rather than as an attempt.
-// It reports whether the run is queued again; if the store refused, the
+// releaseUnstarted returns a claimed run whose start could not be recorded
+// to the queue, counted as released rather than as an attempt. It writes
+// without s.mu or the run's mu and applies once the queue accepted it. It
+// reports whether the run is queued again; if the store refused, the
 // executor's next renewal tries again.
-func (s *Service) releaseUnstartedLocked(job *pendingRun) bool {
+func (s *Service) releaseUnstarted(job *pendingRun) bool {
 	ctx, cancel := context.WithTimeout(s.ctx, releaseTimeout)
-	defer cancel()
 	generation, err := s.runQueue.Release(ctx, job.assignment)
-	job.unreleased = err != nil && !errors.Is(err, artifact.ErrConflict)
+	cancel()
+	unreleased := err != nil && !errors.Is(err, artifact.ErrConflict)
+	if unreleased {
+		s.logError("returning a run that could not start", err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job.unreleased = unreleased
 	if err != nil {
-		if job.unreleased {
-			s.logError("returning a run that could not start", err)
-		}
 		return false
 	}
 	r := job.handle
-	if generation > r.generation {
-		r.generation = generation
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// Whatever moved the run since moved it past the release's generation.
+	if r.terminalLocked() || r.generation > generation {
+		return false
 	}
+	r.generation = generation
 	r.state, r.started = StateQueued, time.Time{}
 	r.notifyLocked()
 	return true
@@ -826,6 +830,18 @@ func (s *Service) renewed(e *executor, now time.Time) {
 	fresh, held, err, renewed := e.lease.fresh, e.lease.held, e.lease.err, e.lease.renewed
 	e.lease.fresh, e.lease.held, e.lease.err = false, nil, nil
 	e.lease.mu.Unlock()
+	var unreleased []*pendingRun
+	// Deferred before the unlock, so it runs after it: each release writes
+	// without s.mu.
+	defer func() {
+		for _, job := range unreleased {
+			if s.releaseUnstarted(job) {
+				s.mu.Lock()
+				s.wakeLocked()
+				s.mu.Unlock()
+			}
+		}
+	}()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if fresh && err != nil {
@@ -854,9 +870,7 @@ func (s *Service) renewed(e *executor, now time.Time) {
 		case a.CancelRequested && job != nil && job.exec == e:
 			r.cancel(context.Canceled)
 		case job != nil && job.unreleased && job.exec == nil && a.Attempt == job.assignment.Attempt:
-			if s.releaseUnstartedLocked(job) {
-				s.wakeLocked()
-			}
+			unreleased = append(unreleased, job)
 		}
 		r.mu.Unlock()
 	}

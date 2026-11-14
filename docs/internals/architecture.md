@@ -162,7 +162,12 @@ The root Go module is declared in `go.mod`.
   `finish` writes the outcome again, backing off, and a refused cancel of a
   queued run reports a persistence error and is written again in the
   background, both until accepted, the run moves or the service closes.
-  Without a repository a trivial local writer accepts every write. The service also offers
+  Without a repository a trivial local writer accepts every write.
+  Admission installs the run's handle and job under the service lock, which
+  holds its queue slot and principal hold, writes the admission (bundle
+  included) without the lock, and withdraws the run if the repository refuses
+  it; a claim, the change feed or a load that meets the run meanwhile finds
+  that handle. The service also offers
   bounded admission, run handles, cancellation through the queue, events,
   ephemeral or repository-backed history (`platform.Open`), source artifacts,
   captured input bundles, the environment capture policy
@@ -386,9 +391,9 @@ The root Go module is declared in `go.mod`.
   trace API on `Options.TracerProvider`: `runJob` starts one root
   `linea.run` span per attempt, linked to the submitting request's span
   context, and ends it with the run's state, or `released`;
-  `publishEnd` wraps the write in `linea.run.publish` and passes that span
+  `endRun` wraps the write in `linea.run.publish` and passes that span
   down to the store. `prepareRun` takes the span context from the request,
-  `admitLocked` keeps it on `Handle.submitted` and writes the admission under
+  `queueLocked` keeps it on `Handle.submitted` and `admit` writes the admission under
   the request's context without its cancellation (`context.WithoutCancel`:
   the store's spans join the request's, and a cancel cannot cut a commit the
   caller would then see as failed), and the run metadata stores

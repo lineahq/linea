@@ -275,7 +275,8 @@ the first item below.
   again until it is accepted, rather than ending as an error only one
   instance shows; cancelling a queued run then answers with a persistence
   error and the run is cancelled once the database accepts it. A slow
-  database no longer holds up lease renewal or other runs, and a run
+  database or a large input bundle being stored no longer holds up lease
+  renewal, other submissions or other runs, and a run
   claimed while a single-instance service closes is cancelled instead of
   never ending.
 

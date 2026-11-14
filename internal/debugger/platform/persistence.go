@@ -61,7 +61,7 @@ type evidenceArchive struct {
 	LogTruncated bool   `json:"log_truncated,omitempty"`
 }
 
-// runPublication is what persistRun writes of a run: the handle's fields,
+// runPublication is what savePublication writes of a run: the handle's fields,
 // copied under its mu so they can be written without holding it.
 type runPublication struct {
 	id           string
@@ -205,21 +205,6 @@ func (s *Service) endRunSettled(span context.Context, r *Handle, p runPublicatio
 		settle()
 	}
 	return ended, nil
-}
-
-// persistRun writes r under ctx, whose span the store's spans join.
-func (s *Service) persistRun(ctx context.Context, r *Handle, includeEvidence bool) error {
-	p := r.publicationLocked()
-	record, err := s.savePublication(ctx, &p, includeEvidence)
-	if err != nil {
-		return err
-	}
-	r.report = p.report
-	if includeEvidence {
-		r.weight = p.weight
-	}
-	r.storedLocked(record)
-	return nil
 }
 
 // savePublication writes p: its admission when p has no generation yet,
