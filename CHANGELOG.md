@@ -262,6 +262,14 @@ the first item below.
 - **Fixed:** a team server refuses a runtime source that is not an
   `https://` repository before it runs git. Some git versions looked a local
   path up first and answered whether it existed on the server's host.
+- **Fixed:** team server instances whose clocks disagree no longer requeue
+  each other's live runs or builds. The database store moves every lease
+  time onto the database's clock by an offset it measures every 30 seconds.
+- **Fixed:** `limits.runs_per_principal` holds across the instances of a
+  team server. Each instance counted only its own runs, so a principal could
+  hold the limit once per instance. Admission now counts the principal's
+  unfinished runs in the database (migration `017_run_principal.sql`); runs
+  admitted before the migration count toward no principal.
 
 ## [0.2.0]
 

@@ -102,6 +102,8 @@ type Store struct {
 	// generation is the last workspace generation read, returned by Info when
 	// the database cannot be reached.
 	generation atomic.Uint64
+	// clock moves lease times onto the database's clock (clock.go).
+	clock dbClock
 }
 
 var _ artifact.Repository = (*Store)(nil)

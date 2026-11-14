@@ -85,16 +85,18 @@ type runPublication struct {
 	// weight is the decoded size of the evidence savePublication wrote.
 	weight int64
 	// Admission only.
-	bundle     []byte
-	runtimeKey string
-	binary     *artifact.RunBinary
+	bundle        []byte
+	runtimeKey    string
+	binary        *artifact.RunBinary
+	principalRuns int
 }
 
 func (r *Handle) publicationLocked() runPublication {
 	return runPublication{id: r.id, project: r.project, mode: r.mode, caller: r.caller, state: r.state, err: r.err,
 		created: r.created, started: r.started, finished: r.finished, interrupted: r.interrupted, attempt: r.attempt,
 		bundleInfo: r.bundleInfo, events: r.events, report: r.report, log: r.log, logTruncated: r.logTruncated,
-		generation: r.generation, submitted: r.submitted, bundle: r.bundle, runtimeKey: r.runtimeKey, binary: r.binary}
+		generation: r.generation, submitted: r.submitted, bundle: r.bundle, runtimeKey: r.runtimeKey, binary: r.binary,
+		principalRuns: r.principalRuns}
 }
 
 // storedLocked records that the repository holds record. Once it holds the
@@ -183,7 +185,8 @@ func (s *Service) savePublication(ctx context.Context, p *runPublication, includ
 	var record *artifact.RunRecord
 	if p.generation == 0 {
 		record, err = s.repository.AdmitRun(ctx, artifact.Admission{
-			ID: p.id, Project: p.project, Metadata: metadata, Bundle: p.bundle, Runtime: p.runtimeKey, Binary: p.binary, Index: runIndex(p.state, p.report)})
+			ID: p.id, Project: p.project, Metadata: metadata, Bundle: p.bundle, Runtime: p.runtimeKey, Binary: p.binary, Index: runIndex(p.state, p.report),
+			Principal: p.caller.Principal, PrincipalRuns: p.principalRuns})
 		if err == nil {
 			s.nudgeRetention()
 		}

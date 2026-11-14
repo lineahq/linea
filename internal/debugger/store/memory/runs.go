@@ -125,6 +125,9 @@ func (s *Store) saveRun(ctx context.Context, id, project string, expected uint64
 		return nil, invalid("invalid run publication")
 	}
 	var pin *artifact.RunBinary
+	if admission != nil && (len(admission.Principal) > artifact.MaxRunIndexField || admission.PrincipalRuns < 0) {
+		return nil, invalid("invalid run principal")
+	}
 	if admission != nil && admission.Binary != nil {
 		if !admission.Binary.Valid() {
 			return nil, invalid("invalid run binary")
@@ -154,6 +157,17 @@ func (s *Store) saveRun(ctx context.Context, id, project string, expected uint64
 		}
 		if !stored {
 			return nil, artifact.ErrNotFound
+		}
+	}
+	if admission != nil && admission.PrincipalRuns > 0 {
+		held := 0
+		for _, p := range d.principals {
+			if p == admission.Principal {
+				held++
+			}
+		}
+		if held >= admission.PrincipalRuns {
+			return nil, artifact.ErrRunLimit
 		}
 	}
 	if !exists && len(d.runs.Records) >= s.limits.Runs || int64(len(evidence)) > s.limits.RunBytes || int64(len(bundle)) > s.limits.BundleBytes {
@@ -220,6 +234,9 @@ func (s *Store) saveRun(ctx context.Context, id, project string, expected uint64
 		if pin != nil {
 			d.pins[id] = *pin
 		}
+		if admission.Principal != "" {
+			d.principals[id] = admission.Principal
+		}
 	}
 	if e := d.queue[id]; e != nil {
 		e.generation = r.Generation
@@ -227,6 +244,7 @@ func (s *Store) saveRun(ctx context.Context, id, project string, expected uint64
 	if terminal {
 		delete(d.queue, id)
 		delete(d.pins, id)
+		delete(d.principals, id)
 		delete(d.feed.events, id)
 	}
 	d.change(artifact.ChangeRun, id)

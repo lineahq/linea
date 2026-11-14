@@ -87,6 +87,23 @@ protocols in [debugger-workers.md](debugger-workers.md).
   requeued run executes as a new attempt: its event stream sends `restart`,
   and the new attempt's events replace the earlier ones. The worker reconnects
   with a backoff of 1 s to 30 s until stopped.
+- Lease clock: instances pass lease times from their own clocks, which may
+  disagree. The PostgreSQL store (`store/pg/clock.go`) moves each lease time
+  onto the database's clock by an offset it measures with
+  `SELECT clock_timestamp()` (midpoint of the round trip, in whole
+  microseconds) and refreshes every 30 s. It keeps the offset while a new
+  measurement stays within 250 ms, so round-trip noise never moves a
+  boundary, and drops a later measurement whose round trip exceeds 1 s.
+  Times read back are moved onto the reader's clock. Run and build leases
+  both go through it; `TestLeasesUseTheDatabaseClock` runs two instances an
+  hour apart.
+- `runs_per_principal` with instances: each run row records its principal
+  (migration `017_run_principal.sql`). A single run's admission counts the
+  principal's unfinished rows under the installation lock that every
+  admission takes and is refused with `artifact.ErrRunLimit`
+  (`resource_exhausted`, retryable). Suites and comparisons reserve their
+  members against the instance's own view only, so concurrent suites on two
+  instances can still exceed the limit by up to one suite each.
 - An instance claims the runs it learned of from the change feed. As a safety
   net, every heartbeat (a third of the lease, 10 s) it also claims for each
   runtime its connected workers run without starting one: a worker's runtime,

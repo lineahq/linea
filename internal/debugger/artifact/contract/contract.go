@@ -47,6 +47,7 @@ func Run(t *testing.T, fresh func(t *testing.T) Backend) {
 		{"cancellation dequeues or flags", queueCancel},
 		{"expired leases requeue once per lease", queueLeases},
 		{"released runs return to the queue without spending an attempt", queueRelease},
+		{"admission refuses a principal at its unfinished-run limit", principalRunLimit},
 		{"runtime catalog keeps names and confirmations", runtimeCatalog},
 		{"runtime catalog keeps the binary of a server build", runtimeBinaries},
 		{"runtime catalog records a suspect binary until the entry is saved again", suspectBinaries},
@@ -1173,6 +1174,54 @@ func queueOrder(t *testing.T, b Backend) {
 	held, err := r.Renew(ctx, "w1", epoch.Add(2*time.Minute))
 	if err != nil || !slices.Equal(claimed(held), []string{runID(1), runID(4)}) || !held[0].Expires.Equal(epoch.Add(2*time.Minute)) {
 		t.Errorf("renew = %+v, %v", held, err)
+	}
+}
+
+func principalRunLimit(t *testing.T, b Backend) {
+	r := openRuns(t, b)
+	submit := func(n int, principal string, limit int) error {
+		a := admission(runID(n), artifact.DefaultProject, fmt.Appendf(nil, "bundle %d", n))
+		a.Principal, a.PrincipalRuns = principal, limit
+		_, err := r.AdmitRun(ctx, a)
+		return err
+	}
+	for n := 1; n <= 2; n++ {
+		if err := submit(n, "user:alice", 2); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := submit(3, "user:alice", 2); !errors.Is(err, artifact.ErrRunLimit) || !errors.Is(err, artifact.ErrLimit) {
+		t.Errorf("admission over the limit = %v", err)
+	}
+	if err := submit(4, "user:bob", 2); err != nil {
+		t.Errorf("another principal's admission = %v", err)
+	}
+	// A run admitted without a limit, as a suite member is, still counts.
+	if err := submit(5, "user:alice", 0); err != nil {
+		t.Errorf("admission without a limit = %v", err)
+	}
+	if err := submit(6, "user:alice", 3); !errors.Is(err, artifact.ErrRunLimit) {
+		t.Errorf("admission with the unlimited run counted = %v", err)
+	}
+	// A refused admission leaves nothing behind.
+	if _, err := r.Assignment(ctx, runID(3)); !errors.Is(err, artifact.ErrNotFound) {
+		t.Errorf("refused run's assignment = %v", err)
+	}
+	// A finished run frees its place.
+	got, err := r.Claim(ctx, "w1", "builtin", 1, epoch.Add(time.Minute))
+	if err != nil || len(got) != 1 {
+		t.Fatalf("claim = %v, %v", claimed(got), err)
+	}
+	if _, err := r.SaveRun(ctx, got[0].RunID, artifact.DefaultProject, got[0].Generation, true, artifact.RunIndex{}, []byte(`{}`), []byte("evidence")); err != nil {
+		t.Fatal(err)
+	}
+	if err := submit(7, "user:alice", 3); err != nil {
+		t.Errorf("admission after a run finished = %v", err)
+	}
+	long := admission(runID(8), artifact.DefaultProject, []byte("bundle 8"))
+	long.Principal = strings.Repeat("p", artifact.MaxRunIndexField+1)
+	if _, err := r.AdmitRun(ctx, long); !errors.Is(err, artifact.ErrInvalidRequest) {
+		t.Errorf("admission with an oversized principal = %v", err)
 	}
 }
 

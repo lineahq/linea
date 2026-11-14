@@ -47,6 +47,13 @@ func (s *Store) saveRun(ctx context.Context, id, project string, expected uint64
 	if !validRunID(id) || !artifact.ValidProject(project) || !json.Valid(metadata) || len(metadata) > maxRunMetadata || (!terminal && len(evidence) != 0) || !index.Valid() {
 		return nil, invalid("invalid run publication")
 	}
+	var principal string
+	if admission != nil {
+		if len(admission.Principal) > artifact.MaxRunIndexField || admission.PrincipalRuns < 0 {
+			return nil, invalid("invalid run principal")
+		}
+		principal = admission.Principal
+	}
 	var pin artifact.RunBinary
 	if admission != nil && admission.Binary != nil {
 		if !admission.Binary.Valid() {
@@ -109,6 +116,17 @@ func (s *Store) saveRun(ctx context.Context, id, project string, expected uint64
 		}
 		if int64(len(evidence)) > s.limits.RunBytes || int64(len(bundle)) > s.limits.BundleBytes {
 			return artifact.ErrLimit
+		}
+		if admission != nil && admission.PrincipalRuns > 0 {
+			// The installation lock, held for every admission, serializes
+			// this count with the other instances' admissions.
+			var held int
+			if err := tx.QueryRow(ctx, "SELECT count(*) FROM runs WHERE principal = $1 AND NOT terminal", principal).Scan(&held); err != nil {
+				return err
+			}
+			if held >= admission.PrincipalRuns {
+				return artifact.ErrRunLimit
+			}
 		}
 		if pin.Digest != "" {
 			// The installation lock keeps Sweep from deleting the object
@@ -180,10 +198,10 @@ func (s *Store) saveRun(ctx context.Context, id, project string, expected uint64
 				queue, runtime, priority = &queued, admission.Runtime, admission.Priority
 			}
 			_, err = tx.Exec(ctx, `INSERT INTO runs (id, project_id, generation, ordinal, terminal, metadata, evidence_digest, evidence_bytes, bundle_digest, bundle_bytes, queue_state, runtime, priority,
-					scenario, runtime_name, result, indexed, binary_digest, binary_bytes, binary_platform)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, true, $17, $18, $19)`, id, project, int64(r.Generation), int64(r.Ordinal), terminal, []byte(r.Metadata),
+					scenario, runtime_name, result, indexed, binary_digest, binary_bytes, binary_platform, principal)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, true, $17, $18, $19, $20)`, id, project, int64(r.Generation), int64(r.Ordinal), terminal, []byte(r.Metadata),
 				r.Digest, r.Bytes, r.BundleDigest, r.BundleBytes, queue, runtime, priority, nullable(index.Scenario), nullable(index.Runtime), nullable(index.Result),
-				pin.Digest, pin.Bytes, pin.Platform)
+				pin.Digest, pin.Bytes, pin.Platform, principal)
 		}
 		rec = &r
 		return err

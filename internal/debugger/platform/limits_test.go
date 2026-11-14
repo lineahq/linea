@@ -10,6 +10,7 @@ import (
 	"github.com/lineahq/linea/internal/debugger/artifact"
 	"github.com/lineahq/linea/internal/debugger/authz"
 	"github.com/lineahq/linea/internal/debugger/engine"
+	"github.com/lineahq/linea/internal/debugger/store/memory"
 )
 
 // limitedUsers binds alice and bob as engineers in the default project.
@@ -93,6 +94,43 @@ func TestRunsPerPrincipalCountsEveryHeldSlot(t *testing.T) {
 	s.mu.Unlock()
 	if holds != 0 {
 		t.Fatalf("slots still held after admission: %v", s.holds)
+	}
+}
+
+// TestRunsPerPrincipalHoldsAcrossInstances: instances sharing a store count
+// a principal's runs together, so a second instance refuses the run that
+// would exceed the limit even though it holds none of them.
+func TestRunsPerPrincipalHoldsAcrossInstances(t *testing.T) {
+	access, alice, bob := limitedUsers(t)
+	data := memory.NewData()
+	block := func(ctx context.Context, req engine.Request) (*engine.Report, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	open := func() *Service {
+		return openPlatform(t, data, Options{Shared: true, Access: access, Limits: PrincipalLimits{Runs: 2},
+			QueueCapacity: 10, Prepare: unprepared, Execute: block})
+	}
+	a, b := open(), open()
+	run := func(s *Service, c Caller) (*Handle, error) {
+		return s.submit(s.ctx, c, ModeQuick, request(c.Principal.ID), time.Time{})
+	}
+	first, err := run(a, alice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run(a, alice); err != nil {
+		t.Fatal(err)
+	}
+	_, err = run(b, alice)
+	wantPrincipalLimit(t, err, "limits.runs_per_principal")
+	if _, err := run(b, bob); err != nil {
+		t.Fatalf("another principal = %v", err)
+	}
+	_ = first.cancelWithCause(nil)
+	waitRun(t, first)
+	if _, err := run(b, alice); err != nil {
+		t.Fatalf("after a finished run = %v", err)
 	}
 }
 

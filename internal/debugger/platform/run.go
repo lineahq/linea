@@ -134,8 +134,12 @@ type Handle struct {
 	runtimeKey string
 	// binary pins the run of a runtime built on the server to its binary,
 	// recorded at admission.
-	binary  *artifact.RunBinary
-	persist func(bool) error // called with mu held; true includes terminal evidence
+	binary *artifact.RunBinary
+	// principalRuns is limits.runs_per_principal for the repository to check
+	// at admission against every instance's runs, or zero for a member of a
+	// suite or comparison, whose capacity was reserved when it was accepted.
+	principalRuns int
+	persist       func(bool) error // called with mu held; true includes terminal evidence
 	// bundle is the raw run bundle, until the repository holds the run's
 	// terminal state (storedLocked); RunBundle then reads it from there.
 	bundle      []byte

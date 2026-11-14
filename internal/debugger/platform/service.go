@@ -628,10 +628,16 @@ func (s *Service) admitsLocked(caller Caller, n int) error {
 		}
 	}
 	if held+n > s.limits.Runs {
-		return &Error{Code: CodeResourceExhausted, Retryable: true, Message: fmt.Sprintf(
-			"%s already has %d runs reserved, queued or running; at most %d are allowed (limits.runs_per_principal); wait for one to finish", id, held, s.limits.Runs)}
+		return s.runLimitError(id, fmt.Sprintf("%d runs reserved, queued or running", held))
 	}
 	return nil
+}
+
+// runLimitError refuses a run of principal id, which already holds what
+// held describes.
+func (s *Service) runLimitError(id, held string) error {
+	return &Error{Code: CodeResourceExhausted, Retryable: true, Message: fmt.Sprintf(
+		"%s already has %s; at most %d are allowed (limits.runs_per_principal); wait for one to finish", id, held, s.limits.Runs)}
 }
 
 // holdLocked changes the preparing or reserved slots caller holds by n.
@@ -740,12 +746,19 @@ func (s *Service) admitLocked(ctx context.Context, caller Caller, mode InputMode
 	if p.runtime != nil {
 		r.binary = p.runtime.binary
 	}
+	if reservation == nil && s.limits.Runs > 0 {
+		r.principalRuns = s.limits.Runs
+	}
 	caller.touch(r.id)
 	s.queueing(r)
 	if s.repository != nil {
 		r.persist = func(evidence bool) error { return s.persistRun(context.Background(), r, evidence) }
 		if err := s.persistRun(context.WithoutCancel(ctx), r, false); err != nil {
 			cancel(nil)
+			if errors.Is(err, artifact.ErrRunLimit) {
+				// Runs other instances admitted fill the limit.
+				return nil, s.runLimitError(caller.Principal.ID, fmt.Sprintf("at least %d unfinished runs on the server", s.limits.Runs))
+			}
 			return nil, persistenceError(err)
 		}
 	} else if err := s.localQueue.Admit(r.id, r.runtimeKey, 0); err != nil {

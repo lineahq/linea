@@ -7,6 +7,7 @@ package artifact
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -39,6 +40,9 @@ var (
 	ErrUnsupportedSchema = errors.New("unsupported workspace schema")
 	ErrLimit             = errors.New("workspace storage limit exceeded")
 	ErrStorage           = errors.New("workspace storage operation failed")
+	// ErrRunLimit refuses an admission whose principal already has
+	// Admission.PrincipalRuns unfinished runs. It is an ErrLimit.
+	ErrRunLimit = fmt.Errorf("%w: the principal's unfinished runs are at their limit", ErrLimit)
 )
 
 type Info struct {
