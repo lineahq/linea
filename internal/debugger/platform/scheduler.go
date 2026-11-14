@@ -457,10 +457,13 @@ func (s *Service) releaseUnstartedLocked(job *pendingRun) bool {
 // A connected worker's run whose connection ended is left to its lease,
 // which requeues it.
 //
-// The outcome is written without holding s.mu or the run's mu, so a slow
-// repository does not hold up lease renewal or other runs. Until it is
-// written the run stays running and its executor busy; expire leaves it to
-// this call.
+// With a repository it decides, writes and applies: the outcome is decided
+// under the locks without changing the handle, written without holding s.mu
+// or the run's mu, so a slow repository does not hold up lease renewal or
+// other runs, and applied only once the repository accepted it. Until then
+// the run stays running and its executor busy. Whatever moves the run
+// meanwhile, here (expire, cancel) or on another instance, moves it in the
+// repository first, and the run's generation makes this write the conflict.
 func (s *Service) finish(job *pendingRun, report *engine.Report, err error) {
 	r := job.handle
 	s.mu.Lock()
@@ -487,24 +490,25 @@ func (s *Service) finish(job *pendingRun, report *engine.Report, err error) {
 		r.finishLocked(state, report, err)
 		r.mu.Unlock()
 	} else {
-		p, shared := r.endingLocked(state, report, err), r.shared
-		r.publishing = true
+		p := r.endingLocked(state, report, err)
 		r.mu.Unlock()
+		job.returned = true
 		s.mu.Unlock()
-		record, conflict := s.publishEnd(job.span, &p, shared)
+		record, conflict := s.publishEnd(job.span, &p)
 		s.mu.Lock()
 		r.mu.Lock()
-		r.publishing = false
 		switch {
 		case conflict || r.terminalLocked():
-			// Another instance published the run first, or the change feed
-			// already brought this publication: the handle catches up on
-			// what the repository holds.
+			// The run moved first, here or on another instance, or the change
+			// feed already brought this publication: the handle holds, or
+			// catches up on, what the repository holds.
 		case record != nil:
 			r.endLocked(p)
 			r.weight = p.weight
 			r.storedLocked(record)
 		case r.state == StateRunning && r.attempt == p.attempt:
+			// Neither write was accepted: the run ends here as a persistence
+			// error the repository does not hold.
 			r.endLocked(p)
 		}
 		r.mu.Unlock()
@@ -519,9 +523,9 @@ func (s *Service) finish(job *pendingRun, report *engine.Report, err error) {
 // publishEnd writes a run's outcome p with its evidence, within
 // publishTimeout. When that fails, p becomes an error without a report and
 // is written without evidence, best effort: an uncertain repository refuses
-// this write too. It returns the record written, if any, and whether
-// another instance published the run first, which leaves p unwritten.
-func (s *Service) publishEnd(span context.Context, p *runPublication, shared bool) (*artifact.RunRecord, bool) {
+// this write too. It returns the record written, if any, and whether the run
+// moved first, which leaves p unwritten.
+func (s *Service) publishEnd(span context.Context, p *runPublication) (*artifact.RunRecord, bool) {
 	publish := s.startPublishSpan(span)
 	// The writes carry the publish span, so the store's spans nest under it.
 	traced := trace.ContextWithSpan(context.Background(), publish)
@@ -531,7 +535,7 @@ func (s *Service) publishEnd(span context.Context, p *runPublication, shared boo
 		return s.savePublication(ctx, p, evidence)
 	}
 	record, err := save(true)
-	if shared && errors.Is(err, artifact.ErrConflict) {
+	if errors.Is(err, artifact.ErrConflict) {
 		endPublishSpan(publish, false, false)
 		return nil, true
 	}
@@ -728,11 +732,8 @@ func (s *Service) expire(a artifact.Assignment, now time.Time) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.publishing {
-		// finish is writing the run's outcome; a lease still ended after
-		// that write is listed again.
-		return
-	}
+	// finish may be writing the run's outcome: the requeue or end below and
+	// that write race in the repository, and the run's generation decides.
 	if job := s.jobs[r.id]; job != nil && job.exec != nil {
 		// This service's own lease ended: whatever its executor publishes
 		// now is stale.

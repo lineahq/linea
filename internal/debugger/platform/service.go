@@ -234,6 +234,10 @@ type pendingRun struct {
 	unreleased bool
 	// span is the context of the running attempt's span.
 	span context.Context
+	// returned is set, under the service's mu, once the execution returned
+	// and finish writes its outcome. It says nothing about the run's state:
+	// the repository decides that (finish).
+	returned bool
 }
 
 // Service owns scheduling and run history for all attached adapters.
@@ -1030,17 +1034,15 @@ func (s *Service) Close() {
 			// The runs belong to every instance: stop only what this service
 			// executes, publish nothing (finish) and hand the runs back.
 			for id, job := range s.jobs {
-				if job.exec == nil {
+				// A run whose outcome finish is writing is left to that
+				// write: handing it back would make the write a conflict.
+				if job.exec == nil || job.returned {
 					continue
 				}
 				r := s.runs[id]
 				r.mu.Lock()
-				// A run whose outcome finish is writing is left to that
-				// write.
-				if !r.publishing {
-					held = append(held, job.assignment)
-					r.cancel(context.Canceled)
-				}
+				held = append(held, job.assignment)
+				r.cancel(context.Canceled)
 				r.mu.Unlock()
 			}
 		} else {

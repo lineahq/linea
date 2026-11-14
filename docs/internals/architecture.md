@@ -153,7 +153,9 @@ The root Go module is declared in `go.mod`.
   service lock, and `finish` writes a run's outcome without holding it (each
   write within two minutes), so a slow repository does not stop renewals; the
   run reads as running, and its executor stays busy, until the write
-  completes. The service also offers
+  completes. The handle takes the outcome only once the repository accepts
+  it: an expiry or cancel during the write races it there, and the run's
+  generation decides (a conflict means the other write moved the run first). The service also offers
   bounded admission, run handles, cancellation through the queue, events,
   ephemeral or repository-backed history (`platform.Open`), source artifacts,
   captured input bundles, the environment capture policy

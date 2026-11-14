@@ -321,7 +321,6 @@ func (s *Service) checkCancel(ctx context.Context, r *Handle) error {
 // it; claimed adopts a run this service's executor just claimed whatever
 // its queue state. s.mu is held.
 func (s *Service) adoptLocked(fresh *Handle, a *artifact.Assignment, claimed bool) *Handle {
-	fresh.shared = true
 	if a != nil {
 		fresh.runtimeKey = a.Runtime
 	}
@@ -391,7 +390,6 @@ func (s *Service) updateLocked(r *Handle, fresh *Handle) *Handle {
 	if r.stored {
 		r.bundle = nil
 	}
-	r.shared = true
 	if fresh.terminalLocked() {
 		r.events, r.recording = fresh.events, fresh.recording
 		r.runLog = nil

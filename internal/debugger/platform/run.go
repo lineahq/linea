@@ -105,17 +105,11 @@ type Handle struct {
 	attempt     int
 	kept        bool
 	generation  uint64
-	// shared is set when other instances publish the run too (Options.Shared):
-	// a publication they superseded leaves the handle unfinished.
-	shared bool
 	// ordinal is the run's admission order in the repository; zero without
 	// one. stored is set while the repository holds the run's terminal
 	// state, so a cache may drop the handle and read it again.
 	ordinal uint64
 	stored  bool
-	// publishing is set while the service writes the run's outcome without
-	// holding mu (Service.finish); the run stays running until it is written.
-	publishing bool
 	// used is when the service last admitted, ended or read the run
 	// (Service.uses), under the service's mu.
 	used uint64
@@ -173,9 +167,9 @@ func (r *Handle) finishLocked(state State, report *engine.Report, err error) err
 	r.runLog = nil
 	var publicationErr error
 	if r.persist != nil {
-		if err := r.persist(true); r.shared && errors.Is(err, artifact.ErrConflict) {
-			// Another instance published the run first: the handle keeps
-			// what it was and catches up on what that instance wrote.
+		if err := r.persist(true); errors.Is(err, artifact.ErrConflict) {
+			// The run moved first, here (finish) or on another instance: the
+			// handle keeps what it was and takes what that write applies.
 			r.state, r.report, r.err, r.finished = priorState, priorReport, priorErr, priorFinished
 			r.log, r.logTruncated, r.runLog = priorLog, priorTruncated, priorRunLog
 			return persistenceError(err)
@@ -205,9 +199,12 @@ func (r *Handle) endingLocked(state State, report *engine.Report, err error) run
 	return p
 }
 
-// endLocked ends the run as p records it and wakes its observers.
+// endLocked ends the run as p records it and wakes its observers. The events
+// are p's too: one the Collector recorded after p was decided is not
+// published, so the handle drops it.
 func (r *Handle) endLocked(p runPublication) {
 	r.state, r.report, r.err, r.finished = p.state, p.report, p.err, p.finished
+	r.events = p.events
 	r.log, r.logTruncated, r.runLog = p.log, p.logTruncated, nil
 	if r.ended != nil {
 		r.ended()
@@ -287,7 +284,7 @@ func (r *Handle) recordLocked(attempt int) (func(instrument.Event), *engine.LogT
 	observer := r.observer
 	return func(e instrument.Event) {
 		r.mu.Lock()
-		if r.recording != attempt || r.terminalLocked() || r.publishing {
+		if r.recording != attempt || r.terminalLocked() {
 			r.mu.Unlock()
 			return
 		}
@@ -357,10 +354,8 @@ func (r *Handle) cancelRequest(cause error) (bool, error) {
 	if r.terminalLocked() {
 		return false, nil
 	}
-	if r.publishing {
-		// The run has ended and its outcome is being written.
-		return false, nil
-	}
+	// finish may be writing the run's outcome: the queue then refuses the
+	// cancel as a conflict once that write lands, and finish ends the run.
 	held := r.state != StateQueued
 	if r.requestCancel != nil {
 		h, err := r.requestCancel()
