@@ -217,6 +217,8 @@ func (s *Server) Watch(stream grpc.ServerStream) error {
 	}()
 	go func() {
 		var generation uint64
+		resend := time.NewTicker(resendInterval)
+		defer resend.Stop()
 		for {
 			select {
 			case <-p.done:
@@ -228,23 +230,27 @@ func (s *Server) Watch(stream grpc.ServerStream) error {
 					failures <- ErrUnavailable
 					return
 				}
-				s.mu.Lock()
-				message, err := s.desiredLocked(p)
-				s.mu.Unlock()
-				if err != nil {
-					failures <- err
-					return
-				}
-				generation++
-				message.Generation = generation
-				// grpc SendMsg has no caller deadline; retiring this RPC cancels its IO.
-				timer := time.AfterFunc(time.Second, p.close)
-				err = stream.SendMsg(message)
-				timer.Stop()
-				if err != nil {
-					failures <- err
-					return
-				}
+			case <-resend.C:
+				// The Collector ends a remote session after 10 s without a
+				// desired state. The repeat reads the database flag that
+				// desiredLocked checks and does not ping.
+			}
+			s.mu.Lock()
+			message, err := s.desiredLocked(p)
+			s.mu.Unlock()
+			if err != nil {
+				failures <- err
+				return
+			}
+			generation++
+			message.Generation = generation
+			// grpc SendMsg has no caller deadline; retiring this RPC cancels its IO.
+			timer := time.AfterFunc(time.Second, p.close)
+			err = stream.SendMsg(message)
+			timer.Stop()
+			if err != nil {
+				failures <- err
+				return
 			}
 		}
 	}()
@@ -259,6 +265,10 @@ func (s *Server) Watch(stream grpc.ServerStream) error {
 		return status.Error(codes.Unavailable, "capture control disconnected")
 	}
 }
+
+// resendInterval is how often the sender repeats the complete desired state
+// when nothing changed.
+var resendInterval = 3 * time.Second
 
 // desiredLocked builds the complete desired state for p; the sender stamps
 // its stream generation.

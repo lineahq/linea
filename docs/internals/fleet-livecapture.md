@@ -32,6 +32,15 @@ the generic plugin mechanisms are in [fleet-plugin-host.md](fleet-plugin-host.md
   the introspected `credential_id` and the identity attributes. Only a
   unique match is linked.
 
+## Control stream
+
+- Each stream gets the complete desired state first, on every change and
+  again every 3 s when nothing changed. The Collector ends a remote session
+  as `control_lost` after 10 s without one, so a healthy stream never lets
+  it expire.
+- A change pings the database before sending. The 3 s repeat does not; it
+  reads the database flag the desired state already checks.
+
 ## Delivery and reservations
 
 - Before forwarding, the plugin validates the current credential, session,

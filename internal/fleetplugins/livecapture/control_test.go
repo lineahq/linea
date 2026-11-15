@@ -19,38 +19,9 @@ import (
 // The control stream speaks the extension's typed protocol: identity first,
 // numbered complete desired states back, enum session states in reports.
 func TestWatchSpeaksTypedProtocol(t *testing.T) {
+	setResendInterval(t, time.Hour)
 	s, request, _ := fixture(t)
-	s.mu.Lock()
-	s.dbOK = true
-	s.mu.Unlock()
-	server := grpc.NewServer()
-	controlpb.RegisterCaptureControlServer(server, captureControl{server: s})
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	go server.Serve(listener)
-	t.Cleanup(server.Stop)
-	conn, err := grpc.NewClient(listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { conn.Close() })
-	ctx, cancel := context.WithTimeout(metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+strings.Repeat("d", 64)), 10*time.Second)
-	defer cancel()
-	stream, err := controlpb.NewCaptureControlClient(conn).WatchCaptures(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	identity := &controlpb.Identity{Cluster: "cluster", Pod: "typed", CollectorGroup: "test", CollectorVersion: "0.162.0", Enabled: true, Capabilities: []string{},
-		CapturePoints: []*controlpb.CapturePoint{{Pipeline: "traces", Point: "egress", Signal: controlpb.Signal_SIGNAL_TRACES, Sensitivity: controlpb.Sensitivity_SENSITIVITY_REDACTED}}}
-	send := func(r *controlpb.CollectorReport) {
-		t.Helper()
-		r.Identity = identity
-		if err := stream.Send(r); err != nil {
-			t.Fatal(err)
-		}
-	}
+	stream, identity, send := watch(t, s)
 	send(&controlpb.CollectorReport{})
 	first, err := stream.Recv()
 	if err != nil || first.GetGeneration() != 1 || len(first.GetSessions()) != 0 {
@@ -138,6 +109,66 @@ func TestWatchSpeaksTypedProtocol(t *testing.T) {
 	send(&controlpb.CollectorReport{AppliedGeneration: 3})
 	if _, err := stream.Recv(); err == nil {
 		t.Fatal("invalid catalog accepted")
+	}
+}
+
+func setResendInterval(t *testing.T, d time.Duration) {
+	t.Helper()
+	old := resendInterval
+	resendInterval = d
+	t.Cleanup(func() { resendInterval = old })
+}
+
+// watch opens a control stream to s as the pod "typed" and returns a send
+// helper that stamps the identity on each report.
+func watch(t *testing.T, s *Server) (controlpb.CaptureControl_WatchCapturesClient, *controlpb.Identity, func(*controlpb.CollectorReport)) {
+	t.Helper()
+	s.mu.Lock()
+	s.dbOK = true
+	s.mu.Unlock()
+	server := grpc.NewServer()
+	controlpb.RegisterCaptureControlServer(server, captureControl{server: s})
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go server.Serve(listener)
+	t.Cleanup(server.Stop)
+	conn, err := grpc.NewClient(listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	ctx, cancel := context.WithTimeout(metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+strings.Repeat("d", 64)), 10*time.Second)
+	t.Cleanup(cancel)
+	stream, err := controlpb.NewCaptureControlClient(conn).WatchCaptures(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := &controlpb.Identity{Cluster: "cluster", Pod: "typed", CollectorGroup: "test", CollectorVersion: "0.162.0", Enabled: true, Capabilities: []string{},
+		CapturePoints: []*controlpb.CapturePoint{{Pipeline: "traces", Point: "egress", Signal: controlpb.Signal_SIGNAL_TRACES, Sensitivity: controlpb.Sensitivity_SENSITIVITY_REDACTED}}}
+	send := func(r *controlpb.CollectorReport) {
+		t.Helper()
+		r.Identity = identity
+		if err := stream.Send(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return stream, identity, send
+}
+
+// The sender repeats the complete desired state while nothing changes, so
+// the Collector's control timeout never ends a healthy session.
+func TestWatchResendsDesiredState(t *testing.T) {
+	setResendInterval(t, 20*time.Millisecond)
+	s, _, _ := fixture(t)
+	stream, _, send := watch(t, s)
+	send(&controlpb.CollectorReport{})
+	for want := uint64(1); want <= 3; want++ {
+		desired, err := stream.Recv()
+		if err != nil || desired.GetGeneration() != want || len(desired.GetSessions()) != 0 {
+			t.Fatalf("desired state %d: %v, %v", want, desired, err)
+		}
 	}
 }
 
