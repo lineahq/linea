@@ -16,6 +16,9 @@ import (
 	"github.com/lineahq/linea/pluginsdk"
 )
 
+// maxPeerIdentities caps the durable peer identities (capture.peers rows).
+const maxPeerIdentities = 10000
+
 //go:embed migrations/001_initial.sql
 var schema string
 
@@ -310,23 +313,19 @@ func (s *Store) Ready(ctx context.Context) error {
 func (s *Store) NextGeneration(ctx context.Context, id string) (uint64, error) {
 	var gen uint64
 	err := s.access(ctx, func(ctx context.Context) error {
-		var count int
-		if err := s.conn.QueryRow(ctx, "SELECT count(*) FROM capture.peers").Scan(&count); err != nil {
-			return err
-		}
-		var exists bool
-		if err := s.conn.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM capture.peers WHERE id=$1)", id).Scan(&exists); err != nil {
-			return err
-		}
-		if !exists && count >= 10000 {
+		// One statement: a known peer gets its next generation; a new one is
+		// admitted below the identity cap and starts above every generation
+		// ever deleted (the floor), so a peer that comes back after retention
+		// never repeats a generation. No row means the cap refused it.
+		err := s.conn.QueryRow(ctx, `INSERT INTO capture.peers(id,generation)
+SELECT $1,(SELECT generation_floor FROM capture.metadata WHERE singleton)+1
+WHERE EXISTS(SELECT 1 FROM capture.peers WHERE id=$1) OR (SELECT count(*) FROM capture.peers)<$2
+ON CONFLICT(id) DO UPDATE SET generation=capture.peers.generation+1,seen_at=now()
+RETURNING generation`, id, maxPeerIdentities).Scan(&gen)
+		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrCapacity
 		}
-		// A new row starts above every generation ever deleted (the floor), so a
-		// peer that comes back after retention never repeats a generation.
-		return s.conn.QueryRow(ctx, `INSERT INTO capture.peers(id,generation)
-VALUES($1,(SELECT generation_floor FROM capture.metadata WHERE singleton)+1)
-ON CONFLICT(id) DO UPDATE SET generation=capture.peers.generation+1,seen_at=now()
-RETURNING generation`, id).Scan(&gen)
+		return err
 	})
 	return gen, err
 }

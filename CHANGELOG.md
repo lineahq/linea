@@ -296,6 +296,15 @@ the first item below.
   `peer_link_no_match_total`, `peer_link_ambiguous_total` and
   `peer_link_error_total`.
 
+- The live capture plugin no longer writes to its database while holding its
+  lock (plugin 0.5.0). Operation state is decided under the lock and written
+  by one writer in order, so a Collector reconnect storm or a slow database
+  no longer stalls control streams, delivery and the API. A read returns the
+  decided state at once. Concurrent identical creates answer like a replay
+  instead of 409. The control handshake mints the peer generation in one
+  statement outside the lock. The transition log reports a state once it is
+  written.
+
 - The live capture plugin bounds its gRPC connections (plugin 0.5.0). Both
   listeners ping a quiet connection after 30 s and close it when the ping goes
   unanswered for 10 s, close a connection without streams after 30 s and cap

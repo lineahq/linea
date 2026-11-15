@@ -80,7 +80,7 @@ func (s *Server) closeChannelLocked(c *channel) {
 			if a.op.Reason == "" {
 				a.op.Reason = "consumer_unavailable"
 			}
-			_ = s.stopLocked(a, "stopping")
+			s.stopLocked(a, "stopping")
 		}
 	}
 }

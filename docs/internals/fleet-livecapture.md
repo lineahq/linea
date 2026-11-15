@@ -121,6 +121,36 @@ safe against a running authority:
   (`internal/fleet/plugins/api.go`). A value of 1 would be a promise the
   plugin cannot keep.
 
+## Writes behind the lock
+
+`Server.mu` guards peers, operations, channels and the credential cache. No
+database call runs under it.
+
+- State changes are decided under the lock and queued (`persist.go`). One
+  writer goroutine inserts and saves operations in decision order, so a
+  released lease is written before the insert that takes the peer next.
+- A save still queued absorbs the next save of the same operation: the row
+  goes from the first queued revision to the latest snapshot in one write.
+  Revisions only grow and released targets stay released, so this is safe.
+- Reads (`Get`, `Stop`, an idempotent `Create`) take the decided state from
+  memory or the queue first, so a caller sees its own change before the
+  writer wrote it. An operation that is neither in memory nor queued is read
+  and written outside the lock.
+- `Create` decides admission, holds the peers and its slot, queues the
+  insert and waits for it without the lock. Peers learn of the operation
+  only after the insert succeeded. A concurrent identical create waits for
+  that insert and answers like a replay. A failed insert is the creator's
+  error; the writer drops the saves queued behind it.
+- A failed save ends the plugin (`save_failed`), as before. The transition
+  log reports a state once it is written; coalesced saves log one line from
+  the last written state.
+- On shutdown the writer keeps writing for at most 2 s after the server's
+  context ended, then drops what is left; recovery marks those operations
+  interrupted.
+- The control handshake reserves the peer's slot and identity under the
+  lock, mints the generation outside it in one statement (`NextGeneration`),
+  then installs the peer.
+
 ## Peer retention
 
 `capture.peers` holds one row per peer ID (a hash of credential, cluster,
@@ -138,6 +168,9 @@ everyone.
   that connects between the plugin's snapshot of connected peers and the
   delete has a fresh `seen_at`, so it is kept. Plugin calls to the database
   are serialized, so no other writer in the process races the delete.
+- `NextGeneration` is one statement: it increments a known row or inserts a
+  new one at `generation_floor+1` while fewer than 10,000 rows exist, and
+  returns no row (capacity) otherwise.
 - Generations. A row's generation increments on every connect, so while the
   row exists its numbers never repeat. A delete would restart a returning peer
   at 1, so the same statement raises `metadata.generation_floor` to the

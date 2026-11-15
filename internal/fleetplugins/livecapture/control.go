@@ -162,14 +162,24 @@ func (s *Server) Watch(stream grpc.ServerStream) error {
 		s.mu.Unlock()
 		return status.Error(codes.Unavailable, "capture authority draining")
 	}
-	if len(s.peers) >= s.config.peerLimit() || s.peers[id] != nil {
+	if len(s.peers)+len(s.joining) >= s.config.peerLimit() || s.peers[id] != nil || s.joining[id] {
 		s.mu.Unlock()
 		return status.Error(codes.ResourceExhausted, "capture connection capacity")
 	}
+	// The slot and the identity are reserved while the generation is minted
+	// outside the lock.
+	s.joining[id] = true
+	s.mu.Unlock()
 	gen, err := s.repo.NextGeneration(stream.Context(), id)
+	s.mu.Lock()
+	delete(s.joining, id)
 	if err != nil {
 		s.mu.Unlock()
 		return status.Error(codes.Unavailable, "capture generation unavailable")
+	}
+	if s.draining {
+		s.mu.Unlock()
+		return status.Error(codes.Unavailable, "capture authority draining")
 	}
 	p := &peer{info: PeerInfo{AuthorityID: s.repo.AuthorityID(), PluginInstance: s.instance, ID: id, Generation: gen, CredentialID: credential.id, Link: PeerLink{State: linkPending}, Identity: r.Identity}, credential: credential.hash, stream: stream, lastSeen: time.Now(), wake: make(chan struct{}, 1), done: make(chan struct{})}
 	s.peers[id] = p
@@ -199,9 +209,9 @@ func (s *Server) Watch(stream grpc.ServerStream) error {
 						a.op.Reason = "peer_disconnected"
 					}
 					if a.op.State == "stopping" {
-						_ = s.saveLocked(a)
+						s.saveLocked(a)
 					}
-					_ = s.stopLocked(a, "stopping")
+					s.stopLocked(a, "stopping")
 				}
 			}
 		}
@@ -294,7 +304,7 @@ var resendInterval = 3 * time.Second
 func (s *Server) desiredLocked(p *peer) (*controlpb.DesiredState, error) {
 	message := &controlpb.DesiredState{}
 	if s.hostOK && s.dbOK && p.operation != "" {
-		if a := s.operations[p.operation]; a != nil && (a.op.State == "starting" || a.op.State == "active") && time.Now().Before(a.op.ExpiresAt) {
+		if a := s.operations[p.operation]; a != nil && !a.inserting && (a.op.State == "starting" || a.op.State == "active") && time.Now().Before(a.op.ExpiresAt) {
 			for _, t := range a.op.Targets {
 				if t.PeerID == p.info.ID && t.Generation == p.info.Generation {
 					session, err := wireSession(a, t.WireID, p.info.Identity)
@@ -390,7 +400,7 @@ func (s *Server) applyReportLocked(p *peer, r report) {
 			if a.op.Reason == "" {
 				a.op.Reason = "collector_rejected"
 			}
-			_ = s.stopLocked(a, "stopping")
+			s.stopLocked(a, "stopping")
 		}
 		allActive, allDone := true, true
 		for _, t := range a.op.Targets {
@@ -421,9 +431,7 @@ func (s *Server) applyReportLocked(p *peer, r report) {
 				}
 			}
 		}
-		if s.saveLocked(a) != nil {
-			return
-		}
+		s.saveLocked(a)
 		if allDone {
 			delete(s.operations, a.op.ID)
 		}

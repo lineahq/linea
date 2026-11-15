@@ -45,13 +45,18 @@ func TestOperationTransitionsAreLogged(t *testing.T) {
 	s.mu.Lock()
 	s.applyReportLocked(p, report{Statuses: []collectorStatus{{SessionID: wire, State: "active"}}})
 	s.mu.Unlock()
+	// Each step waits for the writer: a save still queued absorbs the next one,
+	// and the log shows saved states only.
+	s.saves.waitSettled()
 	stopped, err := s.Stop(context.Background(), "owner", op.ID, s.operations[op.ID].op.Revision)
 	if err != nil || stopped.State != "stopping" {
 		t.Fatalf("stop: %v, %v", stopped.State, err)
 	}
+	s.saves.waitSettled()
 	s.mu.Lock()
 	s.applyReportLocked(p, report{Statuses: []collectorStatus{{SessionID: wire, State: "completed"}}})
 	s.mu.Unlock()
+	s.saves.waitSettled()
 
 	type step struct{ from, to, reason string }
 	var got []step
@@ -113,12 +118,12 @@ func TestFatalCarriesItsCause(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.mu.Lock()
-	err = s.stopLocked(s.operations[op.ID], "stopping")
+	s.stopLocked(s.operations[op.ID], "stopping")
+	s.mu.Unlock()
+	s.saves.waitSettled()
+	s.mu.Lock()
 	s.fatalLocked(translog.ReasonStorageLost)
 	s.mu.Unlock()
-	if err == nil {
-		t.Fatal("the failing save did not fail")
-	}
 	fatal := <-s.Fatal()
 	if CauseOf(fatal) != translog.ReasonSaveFailed || !errors.Is(fatal, ErrUnavailable) {
 		t.Fatalf("fatal %v has cause %v", fatal, CauseOf(fatal))
