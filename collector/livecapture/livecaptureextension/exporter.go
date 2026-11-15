@@ -142,8 +142,11 @@ func (d *otlpDelivery) shutdown(ctx context.Context) error {
 		}
 	}
 	d.mu.Unlock()
-	// The stock queue ignores the context while draining, so wait for each
-	// signal concurrently and give up at the deadline.
+	// The Collector's shutdown context has no deadline, and the stock queue
+	// ignores it while draining, so wait for each signal concurrently and
+	// give up after drainLimit.
+	ctx, cancel := context.WithTimeout(ctx, drainLimit)
+	defer cancel()
 	results := make(chan error, len(components))
 	for _, c := range components {
 		go func() { results <- c.Shutdown(ctx) }()

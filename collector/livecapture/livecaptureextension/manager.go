@@ -219,9 +219,11 @@ func (m *Manager) exportFailed(signal Signal, n int64) {
 	}
 }
 
-// drainLimit bounds how long an ended session waits for its queued copies:
-// one flush, the export timeout and the retry budget (otlpDelivery.config).
-const drainLimit = 7 * time.Second
+// drainLimit bounds how long an ended session waits for its queued copies,
+// and how long shutdown waits for the exporters: one flush and one export
+// attempt, which never retries (otlpDelivery.config). Copies still queued
+// after it are dropped.
+const drainLimit = 2 * time.Second
 
 func NewFactory() extension.Factory {
 	return extension.NewFactory(component.MustNewType("livecapture"), defaultConfig, func(_ context.Context, settings extension.Settings, config component.Config) (extension.Extension, error) {

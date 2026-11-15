@@ -95,7 +95,7 @@ A `SessionStatus` carries `session_id`, `state`, `reason`, `expires_at` and
 
 States: `ACTIVE`, `STOPPING`, `COMPLETED`, `EXPIRED`, `LIMIT_REACHED`,
 `FAILED`, `DISABLED`. An ending session stays `STOPPING` until its queued
-copies left the delivery queue (at most 7 s), so a terminal state means the
+copies left the delivery queue (at most 2 s), so a terminal state means the
 Collector sends nothing more for it.
 
 The status `reason` says why a session ended: `user` (stopped or removed

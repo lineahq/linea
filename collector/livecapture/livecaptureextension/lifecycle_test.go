@@ -2,12 +2,14 @@ package livecaptureextension
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 	"go.opentelemetry.io/collector/pdata/ptrace/ptraceotlp"
 	"google.golang.org/grpc"
@@ -72,5 +74,29 @@ func TestStopStartCyclesKeepQueueWithinCap(t *testing.T) {
 			t.Fatal(err)
 		}
 		cancel()
+	}
+}
+
+// stuckTraces is a traces exporter whose shutdown never returns.
+type stuckTraces struct {
+	exporter.Traces
+	release chan struct{}
+}
+
+func (s stuckTraces) Shutdown(context.Context) error { <-s.release; return nil }
+
+// The Collector shuts down without a deadline, so the delivery bounds its
+// own wait for the exporters.
+func TestDeliveryShutdownIsBounded(t *testing.T) {
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	d := &otlpDelivery{trace: stuckTraces{release: release}}
+	started := time.Now()
+	err := d.shutdown(context.Background())
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("shutdown error %v", err)
+	}
+	if elapsed := time.Since(started); elapsed < drainLimit || elapsed > drainLimit+time.Second {
+		t.Fatalf("shutdown took %v, want about %v", elapsed, drainLimit)
 	}
 }

@@ -81,10 +81,11 @@ settings. It logs nothing: a lost copy is counted, never logged.
   starts, and runs until the Collector shuts down.
 - Stopping a session ends admission immediately. The session keeps
   reporting `STOPPING` until the copies already queued were exported or
-  failed, at most 7 s (one flush, the attempt timeout and the retry budget),
-  so the service still accepts them.
-- Collector shutdown does not wait for this; it drains the queues within its
-  own deadline.
+  failed, at most 2 s (one flush and one export attempt), so the service
+  still accepts them. Copies still queued after that are dropped.
+- Collector shutdown does not wait for this. It drains the queues for at
+  most 2 s, or less when its own context ends first, then drops what is
+  left.
 - `max_queue_bytes` is split equally between the three signals, so each can
   queue a third of it. Unused capacity in one signal is not borrowed by
   another.
