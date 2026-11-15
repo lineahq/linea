@@ -3371,7 +3371,7 @@
             "maxLength": 64
           },
           "protocol_version": {
-            "const": "2"
+            "const": "4"
           },
           "enabled": {
             "type": "boolean",

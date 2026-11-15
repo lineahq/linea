@@ -50,6 +50,9 @@ type entry struct {
 	apiReads    chan struct{}
 	apiWrites   chan struct{}
 	apiClient   *http.Client
+	// sessions is the host slot of the session route alone, so the session
+	// poll never waits for the two general host slots (reads).
+	sessions chan struct{}
 }
 
 type Registry struct {
@@ -107,7 +110,7 @@ func New(ctx context.Context, configs []Config, store fleet.Repository) *Registr
 			desired = "disabled"
 		}
 		lease, endLease := context.WithCancel(ctx)
-		e := &entry{config: config, host: host, client: pluginsdk.NewHTTPClient(), probeClient: pluginsdk.NewHTTPClient(), probes: make(chan struct{}, 1), calls: make(chan struct{}, 2), reads: make(chan struct{}, 2), work: make(chan struct{}, 1), lease: lease, endLease: endLease, info: Info{
+		e := &entry{config: config, host: host, client: pluginsdk.NewHTTPClient(), probeClient: pluginsdk.NewHTTPClient(), probes: make(chan struct{}, 1), calls: make(chan struct{}, 2), reads: make(chan struct{}, 2), sessions: make(chan struct{}, 1), work: make(chan struct{}, 1), lease: lease, endLease: endLease, info: Info{
 			ID: config.ID, Version: config.Version, ProtocolVersion: pluginsdk.ProtocolVersion,
 			Enabled: config.Enabled, Permissions: slices.Clone(config.Permissions), State: state,
 			Desired: desired, Epoch: pluginsdk.RandomID(),
@@ -261,6 +264,12 @@ func (r *Registry) rpc(ctx context.Context, e *entry, method, path string, heade
 				return fleet.ErrNotFound
 			case 409:
 				return fleet.ErrConflict
+			case pluginsdk.StatusMisdirected:
+				// Never an answer for the caller: the plugin sees another
+				// authority than this entry.
+				if path != pluginsdk.ManifestPath {
+					r.refresh(e)
+				}
 			case 429:
 				return fleet.ErrCapacity
 			}
@@ -351,9 +360,15 @@ func (r *Registry) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		hostError(w, 401)
 		return
 	}
+	// The session route has a slot of its own: the poll that keeps the
+	// plugin's authority alive never competes with its other host calls.
+	slot := owner.reads
+	if req.URL.Path == pluginsdk.SessionPath {
+		slot = owner.sessions
+	}
 	select {
-	case owner.reads <- struct{}{}:
-		defer func() { <-owner.reads }()
+	case slot <- struct{}{}:
+		defer func() { <-slot }()
 	default:
 		hostError(w, 503)
 		return
@@ -364,7 +379,7 @@ func (r *Registry) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 	info := owner.snapshot()
 	if req.Header.Get(pluginsdk.InstanceHeader) != info.InstanceID {
-		hostError(w, 409)
+		hostError(w, pluginsdk.StatusMisdirected)
 		return
 	}
 	if req.URL.Path == pluginsdk.SessionPath {
@@ -376,7 +391,7 @@ func (r *Registry) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if req.Header.Get(pluginsdk.EpochHeader) != info.Epoch {
-		hostError(w, 409)
+		hostError(w, pluginsdk.StatusMisdirected)
 		return
 	}
 	route, ok := hostRoutes[req.URL.Path]

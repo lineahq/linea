@@ -44,7 +44,8 @@ func hostJSONBounded(w http.ResponseWriter, value any, max int) {
 	_, _ = w.Write(data)
 }
 
-// decodeHost reads one strict JSON object of at most MaxRequestBytes.
+// decodeHost reads one JSON object of at most MaxRequestBytes. Unknown fields
+// are ignored, as protocol 4 requires of every receiver.
 func decodeHost(req *http.Request, out any) bool {
 	if req.URL.RawQuery != "" {
 		return false
@@ -54,7 +55,6 @@ func decodeHost(req *http.Request, out any) bool {
 		return false
 	}
 	d := json.NewDecoder(strings.NewReader(string(body)))
-	d.DisallowUnknownFields()
 	return d.Decode(out) == nil && d.Decode(new(any)) == io.EOF
 }
 

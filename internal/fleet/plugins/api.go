@@ -142,6 +142,14 @@ func (r *Registry) ServeAPI(w http.ResponseWriter, request *http.Request, id, pa
 		return
 	}
 	defer response.Body.Close()
+	if response.StatusCode == pluginsdk.StatusMisdirected {
+		// The plugin refused the instance or epoch we sent. Never forward it:
+		// to the caller it is a transient 503 while the state is refreshed.
+		r.refresh(e)
+		w.Header().Set("Retry-After", "1")
+		fail(503)
+		return
+	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
 	if err != nil || len(data) > 1<<20 || e.snapshot().Epoch != before.Epoch || ctx.Err() != nil {
 		fail(503)

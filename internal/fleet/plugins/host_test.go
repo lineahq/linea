@@ -124,7 +124,6 @@ func TestHostServices(t *testing.T) {
 		{pluginsdk.AgentsResolvePath, `{"attributes":{"a":"b"},"credential_id":"Not Valid"}`},
 		{pluginsdk.AgentsResolvePath, `{"attributes":{"a":"b"},"limit":101}`},
 		{pluginsdk.AgentsResolvePath, `{"attributes":{"a b":"c"}}`},
-		{pluginsdk.AgentsResolvePath, `{"attributes":{"a":"b"},"extra":1}`},
 		{pluginsdk.GroupsResolvePath, `{"group_id":"` + staticGroup + `","selector":"a=b"}`},
 		{pluginsdk.GroupsResolvePath, `{}`},
 		{pluginsdk.GroupsResolvePath, `{"selector":"=="}`},

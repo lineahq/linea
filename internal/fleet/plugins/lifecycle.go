@@ -37,6 +37,14 @@ func (r *Registry) RestoreLifecycle(ctx context.Context, store fleet.PluginLifec
 	return nil
 }
 
+// refresh reloads the plugin's state after the plugin answered 421: it saw an
+// instance or epoch other than this entry's. Today the entry is the only
+// state, so reloading it is a read. When plugin state is shared between core
+// replicas this is the one place that loads the shared row into the entry and
+// adopts a newer epoch (cancelling the lease as fenceLocked does). Callers
+// never act on the result: they answer 503 and the caller retries.
+func (r *Registry) refresh(e *entry) Info { return e.snapshot() }
+
 // fenceLocked cancels admitted plugin calls and publishes a new host epoch.
 func (r *Registry) fenceLocked(e *entry, why translog.Reason) {
 	e.endLease()
