@@ -24,7 +24,9 @@ const (
 	maxCachedCredentials = 1024
 	maxLinksPerPass      = 64
 	linkedRefresh        = time.Minute
-	unlinkedRetry        = 2 * time.Second
+	linkBackoffMin       = 2 * time.Second
+	linkBackoffMax       = time.Minute
+	linkPassGap          = time.Second
 )
 
 type credential struct {
@@ -132,6 +134,7 @@ type linkCandidate struct {
 	generation uint64
 	credential string
 	identity   Identity
+	tried      time.Time
 }
 
 // recheckSchedule decides when credentials are introspected again. It holds a
@@ -178,22 +181,27 @@ func (s *Server) revalidate() {
 }
 
 // revalidatePass runs one loop round and returns how long to wait for the next
-// scheduled recheck.
+// scheduled recheck or due link attempt, whichever is first.
 func (s *Server) revalidatePass(schedule *recheckSchedule) time.Duration {
 	s.mu.Lock()
 	session, ready := s.session, s.hostOK
 	s.mu.Unlock()
+	var link time.Duration
 	if ready {
 		if now := s.now(); schedule.due(now) {
 			schedule.started(now)
 			s.recheckCredentials(session)
 		}
-		s.linkPeers(session)
+		link = s.linkPeers(session)
 	}
-	if wait := schedule.wait(s.now()); wait > 0 {
-		return wait
+	wait := schedule.wait(s.now())
+	if wait <= 0 {
+		return revalidateRetry
 	}
-	return revalidateRetry
+	if link > 0 {
+		wait = min(wait, link)
+	}
+	return wait
 }
 
 func (s *Server) recheckCredentials(session pluginsdk.Session) {
@@ -222,38 +230,123 @@ func (s *Server) recheckCredentials(session pluginsdk.Session) {
 	}
 }
 
-func (s *Server) linkPeers(session pluginsdk.Session) {
-	now := time.Now()
+// Link states shown on a peer. A peer is pending until an attempt finishes
+// without a host error; a host error leaves the state as it was.
+const (
+	linkPending   = "pending"
+	linkLinked    = "linked"
+	linkNoMatch   = "no_match"
+	linkAmbiguous = "ambiguous"
+)
+
+// linkOutcomes are the results of one resolve attempt, each with a counter.
+// An attempt that fails on the host call has no state of its own.
+var linkOutcomes = [...]string{linkLinked, linkNoMatch, linkAmbiguous, "error"}
+
+func linkOutcomeIndex(outcome string) int {
+	for i, name := range linkOutcomes {
+		if name == outcome {
+			return i
+		}
+	}
+	return len(linkOutcomes) - 1
+}
+
+// linkBackoff is the wait after the failures-th consecutive attempt that did
+// not link: 2 s, doubling to 60 s.
+func linkBackoff(failures int) time.Duration {
+	wait := linkBackoffMin
+	for i := 1; i < failures && wait < linkBackoffMax; i++ {
+		wait *= 2
+	}
+	return min(wait, linkBackoffMax)
+}
+
+// linkOrder puts the peers whose last attempt is oldest first, never-tried
+// peers before all others, so one pass's cut cannot favour the same peers.
+func linkOrder(candidates []linkCandidate) {
+	sort.Slice(candidates, func(i, j int) bool {
+		a, b := candidates[i], candidates[j]
+		if !a.tried.Equal(b.tried) {
+			return a.tried.Before(b.tried)
+		}
+		return a.id < b.id
+	})
+}
+
+// linkPeers links one pass of due peers to fleet agents and returns how long
+// until the next peer is due (zero when no peers are connected). Candidates
+// are the due peers with the oldest last attempt, at most maxLinksPerPass. An
+// attempt on any outcome, a host error included, moves the peer's last attempt
+// and next due time, so no peer is retried ahead of the others.
+func (s *Server) linkPeers(session pluginsdk.Session) time.Duration {
+	now := s.now()
 	s.mu.Lock()
 	candidates := []linkCandidate{}
 	for _, p := range s.peers {
-		due := p.linkedAt.IsZero() || (p.info.AgentID == "" && now.Sub(p.linkedAt) >= unlinkedRetry) || now.Sub(p.linkedAt) >= linkedRefresh
-		if due {
-			candidates = append(candidates, linkCandidate{id: p.info.ID, generation: p.info.Generation, credential: p.info.CredentialID, identity: p.info.Identity})
+		if !now.Before(p.linkNext) {
+			candidates = append(candidates, linkCandidate{id: p.info.ID, generation: p.info.Generation, credential: p.info.CredentialID, identity: p.info.Identity, tried: p.linkTried})
 		}
 	}
 	s.mu.Unlock()
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].id < candidates[j].id })
+	linkOrder(candidates)
 	if len(candidates) > maxLinksPerPass {
 		candidates = candidates[:maxLinksPerPass]
 	}
 	for _, c := range candidates {
-		agent, ok := s.resolveAgent(session, c)
-		if !ok {
-			continue
-		}
-		s.mu.Lock()
-		if p := s.peers[c.id]; p != nil && p.info.Generation == c.generation {
-			p.info.AgentID, p.linkedAt = agent, time.Now()
-		}
-		s.mu.Unlock()
+		agent, outcome := s.resolveAgent(session, c)
+		s.recordLink(c, agent, outcome, s.now())
 	}
+	return s.nextLinkWait()
+}
+
+// recordLink applies one attempt's outcome to its peer, if that peer
+// generation is still connected.
+func (s *Server) recordLink(c linkCandidate, agent, outcome string, now time.Time) {
+	s.observed.linkOutcomes[linkOutcomeIndex(outcome)].Add(1)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.peers[c.id]
+	if p == nil || p.info.Generation != c.generation {
+		return
+	}
+	p.linkTried = now
+	if outcome == linkLinked {
+		p.info.AgentID, p.info.Link.State = agent, linkLinked
+		p.linkFailures, p.linkNext = 0, now.Add(linkedRefresh)
+		return
+	}
+	if outcome == linkNoMatch || outcome == linkAmbiguous {
+		p.info.AgentID, p.info.Link.State = "", outcome
+	}
+	p.linkFailures++
+	p.linkNext = now.Add(linkBackoff(p.linkFailures))
+}
+
+// nextLinkWait is the time until the earliest peer is due, at least
+// linkPassGap so a backlog beyond one pass does not spin the loop, or zero
+// when there are no peers.
+func (s *Server) nextLinkWait() time.Duration {
+	now := s.now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var earliest time.Time
+	for _, p := range s.peers {
+		if earliest.IsZero() || p.linkNext.Before(earliest) {
+			earliest = p.linkNext
+		}
+	}
+	if earliest.IsZero() {
+		return 0
+	}
+	return max(earliest.Sub(now), linkPassGap)
 }
 
 // resolveAgent links a capture peer to the one connected fleet agent that
 // used the same credential and reports the same Kubernetes identity. It links
-// only a unique match; host.name equal to the pod name is the fallback.
-func (s *Server) resolveAgent(session pluginsdk.Session, c linkCandidate) (string, bool) {
+// only a unique match; host.name equal to the pod name is the fallback. The
+// outcome is one of linkLinked, linkNoMatch, linkAmbiguous or "error".
+func (s *Server) resolveAgent(session pluginsdk.Session, c linkCandidate) (string, string) {
 	attributes := map[string]string{"k8s.pod.name": c.identity.Pod}
 	if c.identity.Namespace != "" {
 		attributes["k8s.namespace.name"] = c.identity.Namespace
@@ -264,16 +357,16 @@ func (s *Server) resolveAgent(session pluginsdk.Session, c linkCandidate) (strin
 	for _, terms := range []map[string]string{attributes, {"host.name": c.identity.Pod}} {
 		out, err := s.host.ResolveAgents(s.ctx, session, pluginsdk.ResolveRequest{CredentialID: c.credential, Attributes: terms, Limit: 2})
 		if err != nil {
-			return "", false
+			return "", "error"
 		}
 		if len(out.AgentIDs) == 1 && !out.More {
-			return out.AgentIDs[0], true
+			return out.AgentIDs[0], linkLinked
 		}
 		if len(out.AgentIDs) > 1 {
-			return "", true
+			return "", linkAmbiguous
 		}
 	}
-	return "", true
+	return "", linkNoMatch
 }
 
 func (s *Server) wakeLinker() {

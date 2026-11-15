@@ -260,6 +260,15 @@ the first item below.
   credential recheck runs every 10 s even when link wakeups arrive between
   rechecks.
 
+- The live capture plugin links Collectors to fleet agents fairly (plugin
+  0.5.0, API schema 3.0.0). It tries the peer whose last attempt is oldest
+  first, so peers that cannot link no longer keep others from being tried,
+  and retries an unlinked peer after 2 s, doubling to 60 s. `GET v1/peers`
+  shows `link.state` (`pending`, `linked`, `no_match`, `ambiguous`), and the
+  plugin counts attempts by outcome in `peer_link_linked_total`,
+  `peer_link_no_match_total`, `peer_link_ambiguous_total` and
+  `peer_link_error_total`.
+
 - Report schema 0.16: each topology component lists what a run does not show
   of the real component (`not_shown`, a code and a sentence each): export
   outcomes of captured exporters (every export succeeds, so errors, retries,

@@ -86,8 +86,17 @@ type PeerInfo struct {
 	// CredentialID is the fleet agent credential the Collector presented.
 	CredentialID string `json:"credential_id"`
 	// AgentID is the uniquely matching connected fleet agent, when linked.
-	AgentID  string   `json:"agent_id,omitempty"`
+	AgentID string `json:"agent_id,omitempty"`
+	// Link tells how linking the peer to a fleet agent stands.
+	Link     PeerLink `json:"link"`
 	Identity Identity `json:"identity"`
+}
+
+// PeerLink is the state of linking a peer to a fleet agent: pending (no
+// attempt has finished yet), linked, no_match or ambiguous. An attempt that
+// fails on the host call leaves the state as it was.
+type PeerLink struct {
+	State string `json:"state"`
 }
 type TargetRequest struct {
 	PeerID     string `json:"peer_id"`

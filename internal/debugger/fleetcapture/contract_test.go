@@ -38,7 +38,7 @@ func TestTypesMatchContracts(t *testing.T) {
 		Metrics: &MetricFilter{Metric: []string{"true"}, Datapoint: []string{"true"}}}
 	plugin := loadSchemas(t, "livecapture-openapi.json")
 	for name, value := range map[string]any{
-		"Peer": Peer{AuthorityID: id, PluginInstance: id, ID: peer, Generation: 1, CredentialID: "c", AgentID: id, Identity: Identity{Cluster: "c", Namespace: "n", Pod: "p",
+		"Peer": Peer{AuthorityID: id, PluginInstance: id, ID: peer, Generation: 1, CredentialID: "c", AgentID: id, Link: PeerLink{State: "linked"}, Identity: Identity{Cluster: "c", Namespace: "n", Pod: "p",
 			CollectorGroup: "g", CollectorVersion: "v", DistributionVersion: "v", Enabled: true, CapturePoints: []CapturePoint{{"traces", "egress", "traces", "redacted"}},
 			FilterLimits: &FilterLimits{MaxConditions: 16, MaxConditionChars: 256, MaxRegexChars: 256}}},
 		"Channel":        Channel{AuthorityID: id, PluginInstance: id, ID: id, ExpiresAt: now, HeartbeatSeconds: 5},

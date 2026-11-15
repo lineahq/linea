@@ -24,7 +24,7 @@ const Group = "edge"
 // Peer is the server's one Collector: logs egress, redacted.
 var Peer = fleetcapture.Peer{
 	AuthorityID: strings.Repeat("a", 32), PluginInstance: strings.Repeat("b", 32), ID: strings.Repeat("1", 64), Generation: 1,
-	AgentID: strings.Repeat("d", 32), CredentialID: "credential",
+	AgentID: strings.Repeat("d", 32), CredentialID: "credential", Link: fleetcapture.PeerLink{State: "linked"},
 	Identity: fleetcapture.Identity{Pod: "pod", CollectorGroup: "gateways", CollectorVersion: "0.162.0", Enabled: true, CapturePoints: []fleetcapture.CapturePoint{{Pipeline: "logs", Point: "egress", Signal: "logs", Sensitivity: "redacted"}}},
 }
 

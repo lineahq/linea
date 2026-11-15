@@ -16,13 +16,18 @@ import (
 type peer struct {
 	info       PeerInfo
 	credential [32]byte
-	linkedAt   time.Time
-	stream     grpc.ServerStream
-	lastSeen   time.Time
-	operation  string
-	wake       chan struct{}
-	done       chan struct{}
-	once       sync.Once
+	// linkTried is the last link attempt, linkNext when the next one is due and
+	// linkFailures the consecutive attempts that did not link. Guarded by
+	// Server.mu.
+	linkTried    time.Time
+	linkNext     time.Time
+	linkFailures int
+	stream       grpc.ServerStream
+	lastSeen     time.Time
+	operation    string
+	wake         chan struct{}
+	done         chan struct{}
+	once         sync.Once
 }
 
 func (p *peer) close() { p.once.Do(func() { close(p.done) }) }
@@ -159,7 +164,7 @@ func (s *Server) Watch(stream grpc.ServerStream) error {
 		s.mu.Unlock()
 		return status.Error(codes.Unavailable, "capture generation unavailable")
 	}
-	p := &peer{info: PeerInfo{AuthorityID: s.repo.AuthorityID(), PluginInstance: s.instance, ID: id, Generation: gen, CredentialID: credential.id, Identity: r.Identity}, credential: credential.hash, stream: stream, lastSeen: time.Now(), wake: make(chan struct{}, 1), done: make(chan struct{})}
+	p := &peer{info: PeerInfo{AuthorityID: s.repo.AuthorityID(), PluginInstance: s.instance, ID: id, Generation: gen, CredentialID: credential.id, Link: PeerLink{State: linkPending}, Identity: r.Identity}, credential: credential.hash, stream: stream, lastSeen: time.Now(), wake: make(chan struct{}, 1), done: make(chan struct{})}
 	s.peers[id] = p
 	s.mu.Unlock()
 	s.wakeLinker()

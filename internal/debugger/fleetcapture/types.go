@@ -49,7 +49,14 @@ type Peer struct {
 	Generation     uint64   `json:"generation"`
 	CredentialID   string   `json:"credential_id"`
 	AgentID        string   `json:"agent_id,omitempty"`
+	Link           PeerLink `json:"link"`
 	Identity       Identity `json:"identity"`
+}
+
+// PeerLink is how linking the peer to a fleet agent stands: pending, linked,
+// no_match or ambiguous.
+type PeerLink struct {
+	State string `json:"state"`
 }
 
 // PeerPage is a page of connected peers.

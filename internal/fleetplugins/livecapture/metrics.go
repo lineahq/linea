@@ -23,6 +23,8 @@ type pluginMetrics struct {
 	withdrawn        atomic.Uint64
 	credentialClosed atomic.Uint64
 	desiredRejected  atomic.Uint64
+	// linkOutcomes counts peer link attempts by outcome, in linkOutcomes order.
+	linkOutcomes [len(linkOutcomes)]atomic.Uint64
 }
 type metadataView struct {
 	gauges map[string]float64
@@ -124,6 +126,9 @@ func (s *Server) Metrics() MetricSnapshot {
 	m.Counters["captures_withdrawn_total"] = s.observed.withdrawn.Load()
 	m.Counters["peers_credential_closed_total"] = s.observed.credentialClosed.Load()
 	m.Counters["desired_state_rejected_total"] = s.observed.desiredRejected.Load()
+	for i, outcome := range linkOutcomes {
+		m.Counters["peer_link_"+outcome+"_total"] = s.observed.linkOutcomes[i].Load()
+	}
 	for i, signal := range []string{"traces", "logs", "metrics"} {
 		m.Counters["delivered_"+signal+"_records_total"] = s.observed.delivered[i].Load()
 		m.Counters["dropped_"+signal+"_records_total"] = s.observed.droppedRecords[i].Load()

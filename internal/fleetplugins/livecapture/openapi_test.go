@@ -32,7 +32,7 @@ func TestOpenAPIMatchesWireTypes(t *testing.T) {
 	for name, value := range map[string]any{
 		"Envelope":  Envelope{AuthorityID: id, PluginInstance: id, PluginEpoch: id, ID: id, CaptureID: id, PeerID: peer, Generation: 1, Signal: "traces", Records: 1, Encoding: "otlp-protobuf", Data: []byte{1}, ObservedAt: now},
 		"Operation": Operation{AuthorityID: id, ID: id, State: "active", Reason: "r", Revision: 1, ExpiresAt: now, Targets: []Target{{PeerID: peer, Generation: 1, AgentID: id, State: "active", Stats: stats, Delivery: TargetDelivery{ReceivedRecords: 1, DroppedRecords: 1, DroppedBatches: 1}}}, ActingFor: &pluginsdk.Acting{ID: "user:alice", Name: "Alice", RequestID: "r"}},
-		"Peer": PeerInfo{AuthorityID: id, PluginInstance: id, ID: peer, Generation: 1, CredentialID: "c", AgentID: id, Identity: Identity{Cluster: "c", Namespace: "n", Pod: "p", Group: "g",
+		"Peer": PeerInfo{AuthorityID: id, PluginInstance: id, ID: peer, Generation: 1, CredentialID: "c", AgentID: id, Link: PeerLink{State: linkLinked}, Identity: Identity{Cluster: "c", Namespace: "n", Pod: "p", Group: "g",
 			CollectorVersion: "v", DistributionVersion: "v", Enabled: true, Points: points, FilterLimits: v1FilterLimits}},
 		"CaptureRequest": CreateRequest{AuthorityID: id, PluginInstance: id, ID: id, ChannelID: id, Targets: []TargetRequest{{PeerID: peer, Generation: 1}}, Agents: []string{id}, Selector: "a", GroupID: id,
 			Points: []Point{{Pipeline: "traces", Point: "egress"}}, Signals: []string{"traces"}, Filter: filter, Sampling: &Sampling{Rate: 1, Mode: "hash"},

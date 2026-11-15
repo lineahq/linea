@@ -110,7 +110,7 @@ object.
 | Family | Covers |
 | --- | --- |
 | Gauges | Peers, channels, current in-memory operations by state, host and storage readiness, draining state, pending bytes and batches, connections, storage waiters. Operation gauges are not historical database totals |
-| Counters | Admitted, refused and withdrawn captures; delivery errors; ACKs; delivered and dropped records by signal and dropped batches; TCP refusals; storage errors; peers closed because their fleet credential was revoked, expired or no longer allows their group (`peers_credential_closed_total`) |
+| Counters | Admitted, refused and withdrawn captures; delivery errors; ACKs; delivered and dropped records by signal and dropped batches; TCP refusals; storage errors; peers closed because their fleet credential was revoked, expired or no longer allows their group (`peers_credential_closed_total`); peer link attempts by outcome, one counter each (`peer_link_linked_total`, `peer_link_no_match_total`, `peer_link_ambiguous_total`, `peer_link_error_total`; a refresh of a linked peer counts too) |
 | Durations | Delivery (authentication and buffering) and storage operations (excluding their separately measured gate wait) |
 | Snapshot freshness | `metadata_snapshot_available`, `metadata_snapshot_stale`, `metadata_snapshot_age_seconds` |
 

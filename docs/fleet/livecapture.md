@@ -186,6 +186,16 @@ OpAMP extension reports the same identity under the same credential:
 - Only a unique match is linked and shown as the peer's `agent_id`.
   Ambiguous or missing matches stay unlinked and remain addressable by peer
   ID.
+- `GET v1/peers` shows where linking stands in `link.state`: `pending` (no
+  attempt has finished yet), `linked`, `no_match` or `ambiguous`. A peer
+  that is not linked is tried again after 2 s, then 4 s, doubling to 60 s,
+  and a new connection is tried at once. A linked peer is resolved again
+  every minute. A failed call to core leaves the state as it was and backs
+  off the same way. Each pass takes the peers whose last attempt is oldest,
+  so peers that cannot link do not keep others from being tried. The
+  counters `peer_link_linked_total`, `peer_link_no_match_total`,
+  `peer_link_ambiguous_total` and `peer_link_error_total` count attempts by
+  outcome.
 
 ```mermaid
 sequenceDiagram
@@ -459,7 +469,7 @@ its unchanged wire implementation, and clients may request lower limits.
 | Filters admitted | 32 expressions per context, 4,096 bytes per expression, 16 KiB total, and within each target's `filter_limits` |
 | Cached credential introspections | 1,024 hashes, 10 s (rejections 2 s) |
 | Group or selector members resolved / peers admitted | 1,000 / 16 |
-| Peer links resolved per 10 s pass | 64 |
+| Peer links resolved per pass (passes at least 1 s apart) | 64 |
 | Control TCP / HTTP and data TCP | `max_peers` + 16 handshake reserve / 64 each |
 | Peer discovery page | Default 16, maximum 64 peers, encoded JSON at most 512 KiB |
 | Generic ingress | 64 KiB request, 1 MiB response, 2 reads + 2 writes, 2-second deadline |

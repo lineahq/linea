@@ -224,6 +224,10 @@ func TestLinkPeersRequiresUniqueMatch(t *testing.T) {
 		t.Fatalf("resolve request %+v", first)
 	}
 
+	if p.info.Link.State != linkLinked {
+		t.Fatalf("link state %q", p.info.Link.State)
+	}
+
 	// A linked peer is not re-resolved until its refresh is due.
 	requests = nil
 	s.linkPeers(s.session)
@@ -233,17 +237,24 @@ func TestLinkPeersRequiresUniqueMatch(t *testing.T) {
 
 	matches["k8s"] = nil
 	matches["host"] = []string{agent}
-	p.linkedAt, p.info.AgentID = time.Time{}, ""
+	p.linkNext, p.info.AgentID = time.Time{}, ""
 	s.linkPeers(s.session)
 	if p.info.AgentID != agent || len(requests) != 2 {
 		t.Fatal("host.name fallback was not linked")
 	}
 
 	matches["k8s"] = []string{agent, pluginsdk.RandomID()}
-	p.linkedAt = time.Time{}
+	p.linkNext = time.Time{}
 	s.linkPeers(s.session)
-	if p.info.AgentID != "" {
-		t.Fatal("ambiguous match was linked")
+	if p.info.AgentID != "" || p.info.Link.State != linkAmbiguous {
+		t.Fatalf("ambiguous match gave agent %q, state %q", p.info.AgentID, p.info.Link.State)
+	}
+
+	matches["k8s"], matches["host"] = nil, nil
+	p.linkNext = time.Time{}
+	s.linkPeers(s.session)
+	if p.info.AgentID != "" || p.info.Link.State != linkNoMatch {
+		t.Fatalf("no match gave agent %q, state %q", p.info.AgentID, p.info.Link.State)
 	}
 }
 
@@ -408,7 +419,9 @@ func TestRevalidateRechecksEveryPeriod(t *testing.T) {
 		introspect: func(pluginsdk.IntrospectRequest) pluginsdk.Introspection {
 			return pluginsdk.Introspection{Active: true, CredentialID: "credential", Role: "agent", Labels: map[string]string{"capture": "test"}}
 		},
-		resolve: func(pluginsdk.ResolveRequest) pluginsdk.ResolveResponse { return pluginsdk.ResolveResponse{} },
+		resolve: func(pluginsdk.ResolveRequest) pluginsdk.ResolveResponse {
+			return pluginsdk.ResolveResponse{AgentIDs: []string{pluginsdk.RandomID()}}
+		},
 	}
 	withHost(t, s, h)
 	clock := time.Unix(1_700_000_000, 0)
@@ -454,7 +467,10 @@ func TestRevalidateRechecksEveryPeriod(t *testing.T) {
 	s.mu.Lock()
 	s.hostOK = true
 	s.mu.Unlock()
-	if wait := s.revalidatePass(schedule); wait != every || rechecks() != 5 {
-		t.Fatalf("host back: wait=%v rechecks=%d", wait, rechecks())
+	// The peer linked in the first round is due for its refresh before the next
+	// recheck, and the loop wakes for whichever comes first.
+	refresh := time.Unix(1_700_000_000, 0).Add(3*time.Second + linkedRefresh).Sub(clock)
+	if wait := s.revalidatePass(schedule); wait != min(every, refresh) || rechecks() != 5 {
+		t.Fatalf("host back: wait=%v rechecks=%d, want %v", wait, rechecks(), min(every, refresh))
 	}
 }

@@ -40,9 +40,17 @@ the generic plugin mechanisms are in [fleet-plugin-host.md](fleet-plugin-host.md
   link wakeups and early timers neither skip a round nor delay the next.
 - While core is unreachable, new streams are refused and capture stops with
   host authority.
-- Peer links resolve at most 64 per 10 s pass, through `agents/resolve` with
+- Peer links resolve at most 64 per pass, through `agents/resolve` with
   the introspected `credential_id` and the identity attributes. Only a
-  unique match is linked.
+  unique match is linked. Each peer keeps its last attempt and next due
+  time. A pass takes the due peers with the oldest last attempt (never-tried
+  first), and every outcome, a host error included, moves both, so the
+  same peers cannot win every pass. After an attempt that did not link, the
+  peer waits 2 s, doubling to 60 s; a linked peer refreshes after 60 s.
+  The loop sleeps until the earliest due peer or the next credential
+  recheck, but at least 1 s between passes. `link.state` on the peer
+  (`pending`, `linked`, `no_match`, `ambiguous`) is the last answer; a host
+  error does not change it.
 
 ## Control stream
 

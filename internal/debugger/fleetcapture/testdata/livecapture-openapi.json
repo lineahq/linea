@@ -746,6 +746,7 @@
           "id",
           "generation",
           "credential_id",
+          "link",
           "identity",
           "authority_id",
           "plugin_instance"
@@ -770,6 +771,9 @@
             "pattern": "^[0-9a-f]{32}$",
             "description": "Connected fleet agent uniquely linked by credential and pod identity; absent while unlinked or ambiguous."
           },
+          "link": {
+            "$ref": "#/components/schemas/PeerLink"
+          },
           "identity": {
             "$ref": "#/components/schemas/Identity"
           },
@@ -780,6 +784,25 @@
           "plugin_instance": {
             "type": "string",
             "pattern": "^[0-9a-f]{32}$"
+          }
+        }
+      },
+      "PeerLink": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "linked",
+              "no_match",
+              "ambiguous"
+            ],
+            "description": "How linking the peer to a fleet agent stands. pending: no attempt has finished yet. linked: one connected agent matches (see agent_id). no_match: none matches. ambiguous: more than one does. The plugin retries an unlinked peer with a backoff from 2 s to 60 s and re-resolves a linked one every minute; a failed host call leaves the state as it was."
           }
         }
       },
