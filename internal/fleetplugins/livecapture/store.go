@@ -414,21 +414,31 @@ func (s *Store) Save(ctx context.Context, op Operation, previous int64) error {
 	})
 }
 
-// Purge is an offline operator job. It acquires the same exclusive authority
-// lock and removes metadata only after the full expiry guard, never live leases.
+// Purge is an operator job that runs beside the running plugin and takes no
+// authority lock. It removes an operation only when all of these hold: it is
+// in a terminal state, its absolute expiry plus the 5 s guard is not after
+// before, and no lease refers to it. A running plugin writes an operation row
+// only while it is not terminal or while one of its targets still holds a
+// lease, so the purge never deletes a row the plugin will save again. Leases
+// are removed only after their own expiry. Peers are not touched; the plugin
+// retires unused peers itself.
 func Purge(ctx context.Context, url string, before time.Time) (int64, error) {
 	if before.IsZero() || before.After(time.Now()) {
 		return 0, ErrInvalid
 	}
-	s, err := connect(ctx, url)
+	conn, err := dial(ctx, url)
 	if err != nil {
 		return 0, err
 	}
-	defer s.Close()
-	if err := check(ctx, s.conn); err != nil {
+	defer func() {
+		closing, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = conn.Close(closing)
+	}()
+	if err := check(ctx, conn); err != nil {
 		return 0, err
 	}
-	tx, err := s.conn.Begin(ctx)
+	tx, err := conn.Begin(ctx)
 	if err != nil {
 		return 0, ErrUnavailable
 	}
@@ -436,7 +446,7 @@ func Purge(ctx context.Context, url string, before time.Time) (int64, error) {
 	if _, err := tx.Exec(ctx, "DELETE FROM capture.leases WHERE expires_at<=$1", before); err != nil {
 		return 0, ErrUnavailable
 	}
-	result, err := tx.Exec(ctx, "DELETE FROM capture.operations op WHERE op.expires_at+interval '5 seconds'<=$1 AND NOT EXISTS(SELECT 1 FROM capture.leases l WHERE l.operation_id=op.id)", before)
+	result, err := tx.Exec(ctx, "DELETE FROM capture.operations op WHERE op.state IN ('completed','stopped','failed','expired','interrupted') AND op.expires_at+interval '5 seconds'<=$1 AND NOT EXISTS(SELECT 1 FROM capture.leases l WHERE l.operation_id=op.id)", before)
 	if err != nil {
 		return 0, ErrUnavailable
 	}

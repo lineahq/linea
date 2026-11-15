@@ -596,19 +596,28 @@ old operation or lease could refer to. A peer named by a retained operation
 stays until the purge below removes that operation. No operator action is
 needed: the grant is part of the plugin's migration step.
 
-**Retention.** Offline purge, with the plugin stopped, uses the migration
-role (in PowerShell, use `docker compose @captureCompose`):
+**Retention.** The purge runs beside the running plugin; the plugin need not
+stop. It uses the migration role (in PowerShell, use
+`docker compose @captureCompose`):
 
 ```sh
 docker compose $capture_compose run --rm -T capture-migrate purge --before 2026-10-01T00:00:00Z
 ```
 
-- Only operations past absolute expiry plus guard, and eligible expired
-  leases, are removed. Generation counters remain.
+- Only operations in a terminal state, past absolute expiry plus the 5 s
+  guard and with no lease, are removed, together with expired leases.
+  Operations the plugin may still save are never touched. Peers and
+  generation counters remain (the plugin retires unused peers itself, see
+  above).
 - Purging forfeits historical ID reconciliation: clients must not retry old
   IDs after the retention boundary.
-- The exclusive authority lock prevents a purge while the runtime owns the
-  database.
+- The purge takes no authority lock. The operation table holds at most
+  10,000 rows; a create beyond that is refused with 429 until a purge frees
+  rows.
+- A 429 from the plugin carries no `Retry-After`: a full operation table
+  clears only by purge, and full operation or channel slots clear when
+  captures end, on no schedule the plugin can promise. Fleet forwards only
+  its own `Retry-After: 1`. Poll and back off.
 
 **Remove the plugin:** stop it, remove its registration and override, and
 restart core with base Compose. Keep the plugin volume and secrets until

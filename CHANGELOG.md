@@ -245,6 +245,12 @@ the first item below.
   grants the runtime role `DELETE` on `capture.peers`; the plugin refuses to
   start on schema 3.
 
+- The live capture purge runs beside the running plugin (`linea-fleet-livecapture
+  purge`): it no longer needs the plugin stopped, and it removes only
+  operations in a terminal state. A 429 from the plugin no longer carries
+  `Retry-After: 1`, which promised a wait that a full operation table (cleared
+  only by purge) or full slots never kept.
+
 - Report schema 0.16: each topology component lists what a run does not show
   of the real component (`not_shown`, a code and a sentence each): export
   outcomes of captured exporters (every export succeeds, so errors, retries,

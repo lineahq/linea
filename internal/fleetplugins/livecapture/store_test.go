@@ -68,8 +68,9 @@ func TestPostgresReservationRecoveryAndGrants(t *testing.T) {
 	if len(authority) != 32 {
 		t.Fatal("missing durable authority identity")
 	}
-	if _, err := Purge(ctx, url, time.Now()); !errors.Is(err, ErrConflict) {
-		t.Fatal("purge ignored active authority")
+	// The purge runs beside the active plugin and takes no authority lock.
+	if removed, err := Purge(ctx, url, time.Now()); err != nil || removed != 0 {
+		t.Fatal("purge failed while the plugin owns the database", removed, err)
 	}
 	if other, err := Open(ctx, runtimeURL, "test-plugin"); !errors.Is(err, ErrConflict) {
 		if other != nil {
@@ -166,9 +167,9 @@ func TestPostgresReservationRecoveryAndGrants(t *testing.T) {
 	if err := store.Insert(ctx, overlap); err != nil {
 		t.Fatal("confirmed terminal execution remained reserved", err)
 	}
-	store.Close()
-	// Offline retention must preserve unexpired execution fences and generation
-	// counters, but can remove an operation after its conservative expiry guard.
+	// Retention, with the plugin still running, must preserve unexpired
+	// execution fences and generation counters, but can remove a terminal
+	// operation after its conservative expiry guard.
 	if removed, err := Purge(ctx, url, time.Now()); err != nil || removed != 0 {
 		t.Fatal("purge removed unexpired metadata", err)
 	}
@@ -184,10 +185,6 @@ func TestPostgresReservationRecoveryAndGrants(t *testing.T) {
 	// Peer retention: the running plugin deletes a peer only when no lease and
 	// no retained operation refers to it, never one that is connected, and a
 	// peer created afterwards starts above every deleted generation.
-	store, err = Open(ctx, runtimeURL, "test-plugin")
-	if err != nil {
-		t.Fatal("reopen for peer retention failed", err)
-	}
 	if _, err := admin.Exec(ctx, "UPDATE capture.peers SET seen_at=now()-interval '48 hours'"); err != nil {
 		t.Fatal("fixture age setup failed")
 	}
@@ -215,6 +212,26 @@ func TestPostgresReservationRecoveryAndGrants(t *testing.T) {
 	}
 	if generation, err := store.NextGeneration(ctx, one); err != nil || generation != 3 {
 		t.Fatal("a kept peer lost its counter", generation, err)
+	}
+	// The purge never deletes a row the plugin may still save: an expired
+	// operation that is not terminal stays, even with its leases expired.
+	live := Operation{ID: pluginsdk.RandomID(), Owner: "owner", Hash: make([]byte, 32), ChannelID: pluginsdk.RandomID(), State: "active", Revision: 1, ExpiresAt: time.Now().Add(time.Minute), Targets: []Target{{PeerID: two, Generation: 2, WireID: pluginsdk.RandomID(), State: "active"}}}
+	if err := store.Insert(ctx, live); err != nil {
+		t.Fatal("admission after retention failed", err)
+	}
+	_, errOp := admin.Exec(ctx, "UPDATE capture.operations SET expires_at=now()-interval '10 seconds' WHERE id=$1", live.ID)
+	_, errLease := admin.Exec(ctx, "UPDATE capture.leases SET expires_at=now()-interval '1 second' WHERE operation_id=$1", live.ID)
+	if errOp != nil || errLease != nil {
+		t.Fatal("fixture expiry setup failed")
+	}
+	if removed, err := Purge(ctx, url, time.Now()); err != nil || removed != 0 {
+		t.Fatal("purge removed an operation the plugin still owns", removed, err)
+	}
+	if _, err := admin.Exec(ctx, "UPDATE capture.operations SET state='expired' WHERE id=$1", live.ID); err != nil {
+		t.Fatal("fixture state setup failed")
+	}
+	if removed, err := Purge(ctx, url, time.Now()); err != nil || removed != 1 {
+		t.Fatal("terminal expired operation was not purged", removed, err)
 	}
 	store.Close()
 	if _, err := admin.Exec(ctx, "UPDATE capture.schema_version SET checksum=repeat('0',64)"); err != nil {

@@ -9,8 +9,9 @@ the generic plugin mechanisms are in [fleet-plugin-host.md](fleet-plugin-host.md
 - The plugin supervises its own active and standby instances and drains on
   request.
 - One active authority per database. The database holds a stable authority
-  ID, and an exclusive authority lock prevents an offline purge while a
-  runtime owns it.
+  ID, and an exclusive authority lock keeps a second runtime and a migration
+  out while a runtime owns it. The operation purge does not take that lock
+  (see Online purge).
 - A durable authority identity plus a new process instance fences stale
   requests, even if a restore rolls the generation back.
 - Startup after a restore records previous live operations as interrupted,
@@ -61,9 +62,38 @@ the generic plugin mechanisms are in [fleet-plugin-host.md](fleet-plugin-host.md
 - Payloads exist only in bounded memory and are never logged. The database
   keeps metadata only: owners, hashes, reservations, generations and the
   authority ID.
-- The runtime role cannot run DDL or delete operation history. Offline
-  purge removes only operations past absolute expiry plus the guard and
-  eligible expired leases, and keeps generation counters.
+- The runtime role cannot run DDL or delete operation history. The purge
+  (migration role) removes terminal operations past absolute expiry plus the
+  guard that no lease refers to, and expired leases, and keeps peers and
+  generation counters.
+
+## Online purge
+
+`Purge` runs while the plugin owns the database, so the 10,000-operation cap
+is not an outage: `dial` opens a session without `pg_try_advisory_lock`, checks
+the migration ledger and deletes in one transaction. The guards that make it
+safe against a running authority:
+
+- The plugin saves an operation row only while the operation is not terminal,
+  or while one of its targets still holds a lease (`Save` releases a lease in
+  the same transaction that records the target as released). The purge
+  deletes only terminal operations that no lease refers to, so it never
+  removes a row the plugin will save again; a missing row would make `Save`
+  fail with `ErrPrecondition`, which is fatal. The maintenance loop also ends
+  and forgets every operation at its absolute expiry, so none is saved once
+  the 5 s guard has passed.
+- The expiry guard stays: expiry plus 5 s must not be after `--before`, and
+  `--before` may not be in the future. Leases are deleted only after their own
+  expiry, which is the rule `Insert` already applies.
+- Peers are not touched, so the purge cannot race the peer retention below.
+  The purge needs `DELETE` on operations and leases, which only the migration
+  role has.
+- `Retry-After`. No 429 the plugin sends carries one. A full operation table
+  clears only by purge; full operation or channel slots clear when captures
+  end or expire, which the plugin cannot promise by a time; fleet forwards
+  only its own `Retry-After: 1` and drops any other value from a plugin
+  (`internal/fleet/plugins/api.go`). A value of 1 would be a promise the
+  plugin cannot keep.
 
 ## Peer retention
 

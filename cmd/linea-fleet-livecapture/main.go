@@ -36,7 +36,7 @@ func run() error {
 	fs := flag.NewFlagSet(command, flag.ContinueOnError)
 	configPath := fs.String("config", "/etc/livecapture/config.json", "operator plugin configuration")
 	runtimeRole := fs.String("runtime-role", "capture_app", "existing restricted database role")
-	beforeFlag := fs.String("before", "", "offline metadata purge cutoff (RFC3339)")
+	beforeFlag := fs.String("before", "", "metadata purge cutoff (RFC3339); runs beside the plugin")
 	haListen := fs.String("ha-listen", "", "enable active/standby supervision on a private probe listener")
 	if fs.Parse(args) != nil || fs.NArg() != 0 {
 		return errors.New("invalid plugin arguments")

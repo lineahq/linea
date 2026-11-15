@@ -53,9 +53,9 @@ func fail(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrCursorExpired):
 		code = 410
 	}
-	if code == 429 {
-		w.Header().Set("Retry-After", "1")
-	}
+	// No Retry-After: no 429 here clears on a schedule the plugin can promise
+	// (a full store clears by purge, slots by captures ending), and fleet
+	// forwards only its own "Retry-After: 1".
 	reason := "capture_request_refused"
 	if errors.Is(err, ErrPeerBusy) {
 		reason = "collector_busy"
