@@ -221,6 +221,31 @@ the first item below.
   `agent.credential_changed`. Collectors that share a UID across credentials
   (cloned identities) now see one of them refused.
 
+- Plugin host protocol 4 replaces protocol 3 without a fallback. The routes
+  move from `/fleet-plugin/v3/...` and `/fleet-host/v3/...` to `v4`, and a
+  manifest declares `protocol_version` `"4"`. A stale instance or epoch is now
+  answered with **421 Misdirected Request**, by a plugin and by the fleet host
+  listener, where both used 409: 409 is left to conflicts in a plugin's own
+  domain (live capture's `collector_busy`, a changed retry). Fleet never
+  forwards a plugin's 421 to an API caller: it answers 503 with
+  `Retry-After: 1`. Every receiver ignores JSON fields it does not know, in
+  both directions (the manifest, host requests and host answers), so fields
+  may be added within a protocol version. Fleet serves the session route from
+  its own host slot, and a plugin polls it with an HTTP client of its own
+  (`pluginsdk.HostClient.SessionHTTP`), so a plugin's other host calls cannot
+  make it lose its session. The live capture plugin and the example plugin
+  end the session at once on a 421 or a changed epoch, and after two
+  timeouts or transport errors in a row, where one failed poll ended every
+  capture. The live capture public API no longer lists the epoch under 409.
+
+  **Upgrading:** upgrade fleet and its plugins together; a plugin built for
+  protocol 3 is `incompatible` until it is rebuilt on `pluginsdk` 4. Live
+  capture 0.5.0 (unreleased) and its `api_version` 3 do not change, so
+  registrations stay as they are. A plugin of your own changes its paths and
+  `ProtocolVersion` (the SDK constants do both), answers 421 instead of 409
+  for a mismatch (`pluginsdk.AuthorityMatches`, `pluginsdk.StatusMisdirected`)
+  and passes a `SessionHTTP` client.
+
 - The live capture plugin logs its state transitions (plugin 0.5.0). It
   writes one JSON line on stderr per transition, never per request: start and
   stop with the version, the database authority, the host session and its

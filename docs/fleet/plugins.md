@@ -4,7 +4,7 @@ Plugins are separate processes that add a domain to the fleet server without
 core knowing about it. [Livecapture](livecapture.md) is the production
 plugin. [`examples/fleet-agent-summary-plugin`](../../examples/fleet-agent-summary-plugin)
 is a small, complete template. This page is the whole contract for host
-protocol 3.
+protocol 4.
 
 | Reader | Read |
 | --- | --- |
@@ -30,10 +30,10 @@ credential. Build a plugin when you need one of:
 ## How it works
 
 ```
- API client ── /api/v1/plugins/{id}/api/... ──▶ fleet ── /fleet-plugin/v3/api/... ──▶ plugin
+ API client ── /api/v1/plugins/{id}/api/... ──▶ fleet ── /fleet-plugin/v4/api/... ──▶ plugin
  (management credential)                       │  ▲      (service token, caller,       │
                                                │  │       instance, epoch)             │
-                    manifest probe every 1 s ──┘  └── /fleet-host/v3/... ◀─────────────┘
+                    manifest probe every 1 s ──┘  └── /fleet-host/v4/... ◀─────────────┘
                     (service token)                   (host token, instance, epoch)
                                                                                         ▲
  Collector component (unchanged) ── own protocol, fleet agent token as bearer ─────────┘
@@ -52,10 +52,13 @@ credential. Build a plugin when you need one of:
 - **Epoch:** fleet keeps one per plugin and changes it on every lifecycle
   change, plugin restart and loss of readiness. The plugin learns it from the
   host session and sends it on every host request. Fleet sends it on every
-  API call. A request with an old epoch is refused with 409 on both sides, so
-  work admitted before a drain, disable or restart cannot continue after it.
+  API call. A request with an old instance or epoch is refused with 421
+  (Misdirected Request) on both sides, so work admitted before a drain,
+  disable or restart cannot continue after it. 421 means only that: 409 is
+  left to conflicts in the plugin's own domain, and fleet never forwards a
+  plugin's 421 to an API caller (it answers 503 with `Retry-After: 1`).
 - **Start:** fleet probes the manifest every second. After the first matching
-  answer the plugin is `ready` and its session poll succeeds (it got 409
+  answer the plugin is `ready` and its session poll succeeds (it got 421
   until then). Public API calls are forwarded only while the plugin is
   `ready` and its last successful probe is under 3 s old.
 
@@ -66,20 +69,20 @@ sequenceDiagram
   participant P as Plugin process
   participant K as Collector component
   loop every 1 s
-    F->>P: GET /fleet-plugin/v3/manifest (service token)
+    F->>P: GET /fleet-plugin/v4/manifest (service token)
     P-->>F: manifest with instance_id
   end
   Note over F: first matching manifest, state ready, epoch set
   loop about every 500 ms
-    P->>F: GET /fleet-host/v3/session (host token, instance)
+    P->>F: GET /fleet-host/v4/session (host token, instance)
     F-->>P: epoch, revision, permissions
   end
   C->>F: /api/v1/plugins/ID/api/PATH (reader, operator or admin token)
-  F->>P: /fleet-plugin/v3/api/PATH (service token, caller, instance, epoch)
+  F->>P: /fleet-plugin/v4/api/PATH (service token, caller, instance, epoch)
   P-->>F: JSON answer
   F-->>C: same status and body
   K->>P: plugin's own protocol (fleet agent token as bearer)
-  P->>F: POST /fleet-host/v3/credentials/introspect (host token, epoch)
+  P->>F: POST /fleet-host/v4/credentials/introspect (host token, epoch)
   F-->>P: active, credential_id, labels
 ```
 
@@ -220,7 +223,7 @@ curl -s -X POST -H "$auth" -H "If-Match: \"$rev\"" -H 'Content-Type: application
 - Every change rotates the epoch and cancels admitted calls.
 - `draining` and `disabled` survive crashes, restarts and restores.
 - **What the plugin sees:** after `drain` or `disable`, session requests get
-  403 and requests under the old epoch get 409. It must stop work admitted
+  403 and requests under the old epoch get 421. It must stop work admitted
   under that epoch. Fleet stops probing it, so the process can keep running.
   After `enable` it gets a session with a new epoch.
 - **Replace a plugin version or its tokens:** drain or disable, update the
@@ -237,14 +240,14 @@ from a plugin and sends no other headers.
 
 | Route | Fleet sends | Plugin answers |
 | --- | --- | --- |
-| `GET /fleet-plugin/v3/manifest` | Service token only | 200 with the manifest, at most 4 KiB, within 750 ms |
-| `GET /fleet-plugin/v3/status` | Service token, caller ID and role | 200 with a JSON object, at most 32 KiB, within 750 ms |
-| `/fleet-plugin/v3/api/{path}` (only with `api_version`) | Service token, caller ID and role, instance, epoch, `Content-Type: application/json`, optional `If-Match`, the query string | JSON at most 1 MiB, or 204, within 2 s |
+| `GET /fleet-plugin/v4/manifest` | Service token only | 200 with the manifest, at most 4 KiB, within 750 ms |
+| `GET /fleet-plugin/v4/status` | Service token, caller ID and role | 200 with a JSON object, at most 32 KiB, within 750 ms |
+| `/fleet-plugin/v4/api/{path}` (only with `api_version`) | Service token, caller ID and role, instance, epoch, `Content-Type: application/json`, optional `If-Match`, the query string | JSON at most 1 MiB, or 204, within 2 s |
 
 ### Manifest and readiness
 
 ```json
-{"id": "agent-summary", "version": "0.1.0", "protocol_version": "3",
+{"id": "agent-summary", "version": "0.1.0", "protocol_version": "4",
  "instance_id": "292198670168b4a2ea6c81db31dda047", "api_version": "1"}
 ```
 
@@ -252,9 +255,9 @@ from a plugin and sends no other headers.
   (`pluginsdk.RandomID()`) and constant for the life of the process. A new
   one rotates the epoch.
 - `id`, `version` and `api_version` equal the registration. `protocol_version`
-  is `"3"`. Omit `api_version` when the registration has none.
-- Fleet decodes the manifest strictly. An extra field or trailing data makes
-  the answer invalid and the plugin `unavailable`.
+  is `"4"`. Omit `api_version` when the registration has none.
+- Fleet ignores manifest fields it does not know. Trailing data after the
+  JSON value makes the answer invalid and the plugin `unavailable`.
 - Answer non-200 (503) when the plugin cannot serve, for example while its
   database is down or it is shutting down. Fleet reports it `unavailable` and
   stops forwarding. Going from `ready` to not ready rotates the epoch, so
@@ -263,7 +266,7 @@ from a plugin and sends no other headers.
 
 ### Session and epoch
 
-`GET /fleet-host/v3/session` on the host listener, with the host token and
+`GET /fleet-host/v4/session` on the host listener, with the host token and
 `X-Fleet-Plugin-Instance`, returns:
 
 ```json
@@ -277,13 +280,19 @@ from a plugin and sends no other headers.
 | `revision` | The lifecycle revision |
 
 - Poll about every 500 ms for the life of the process.
-- It answers 409 until fleet's probe has seen this instance ID (up to about a
+- It answers 421 until fleet's probe has seen this instance ID (up to about a
   second after start), and 403 while the plugin is disabled, draining or not
   ready. Both are normal: keep polling.
-- When the epoch differs from the one you hold, or the session request
-  fails: cancel everything admitted under the old epoch, forget state derived
-  from host answers (for example cached introspection results), then adopt
-  the new session.
+- Poll with an HTTP client of its own (`HostClient.SessionHTTP`), not the one
+  for resolves and introspection. Fleet likewise serves the session route
+  from a host slot that no other host request uses, so a busy plugin cannot
+  starve its own session.
+- End the session when the epoch differs from the one you hold, when fleet
+  answers with a refusal (421 included), or when two polls in a row get no
+  answer (a timeout or transport error; a single one is not enough). Ending
+  it means: cancel everything admitted under the old epoch, forget state
+  derived from host answers (for example cached introspection results), then
+  adopt the next session.
 - Send the current epoch on every other host request.
 - The example's `watchSession` shows the pattern with a context per epoch.
 
@@ -302,7 +311,7 @@ the caller headers but without instance or epoch.
 ### Opaque public API
 
 With `api_version` granted, an authenticated request to
-`/api/v1/plugins/{id}/api/{path}` reaches `/fleet-plugin/v3/api/{path}`. Core
+`/api/v1/plugins/{id}/api/{path}` reaches `/fleet-plugin/v4/api/{path}`. Core
 interprets no domain fields: the plugin owns its schema, validation and
 authorization.
 
@@ -326,7 +335,7 @@ Headers the plugin receives:
 | `Authorization` | Service token |
 | `X-Fleet-Caller-ID` | The credential ID |
 | `X-Fleet-Caller-Role` | `reader`, `operator` or `admin` |
-| `X-Fleet-Plugin-Instance`, `X-Fleet-Plugin-Epoch` | Check both equal your current session; answer 409 otherwise |
+| `X-Fleet-Plugin-Instance`, `X-Fleet-Plugin-Epoch` | Check both equal your current session (`pluginsdk.AuthorityMatches`); answer 421 otherwise, never 409 |
 | `Content-Type` | `application/json` |
 | `If-Match` | Optional |
 | `X-Fleet-Acting-*` | Optional, validated (below) |
@@ -356,6 +365,7 @@ What fleet returns to the caller:
 | --- | --- |
 | 204 with an empty body | 204 |
 | 2xx, 400, 403, 404, 409, 410, 412, 413, 428, 429 or 503, with `Content-Type: application/json` and a valid JSON body | The same status and body |
+| 421 | 503 with `Retry-After: 1`. The plugin saw another instance or epoch than fleet sent; fleet refreshes what it knows about the plugin and the caller retries |
 | Any other status (including 401, 405, 422, 500), a non-JSON body, more than 1 MiB, a timeout, or an epoch change during the call | 503 with fleet's generic error |
 
 Fleet keeps only the content type, an `ETag` of at most 128 bytes, and
@@ -377,17 +387,19 @@ Fleet serves these on the private host listener.
 
 - Every request carries the host token and `X-Fleet-Plugin-Instance`. Every
   request except the session also carries `X-Fleet-Plugin-Epoch`.
-- POST bodies are at most 4 KiB of strict JSON (unknown fields and trailing
-  data refused), with no query string.
+- POST bodies are at most 4 KiB of JSON, with no query string. Unknown fields
+  are ignored; trailing data is refused. Every receiver of this protocol, fleet
+  and plugin, ignores fields it does not know, so fields may be added within a
+  protocol version.
 - Answers have `Cache-Control: no-store`.
 
 | Route | Permission | Result |
 | --- | --- | --- |
-| `GET /fleet-host/v3/session` | Enabled and ready | Session |
-| `GET /fleet-host/v3/agents` | `agents.read` | Directory page |
-| `POST /fleet-host/v3/agents/resolve` | `agents.read` | Connected agents matching attributes |
-| `POST /fleet-host/v3/groups/resolve` | `agents.read` | Members of a group or selector |
-| `POST /fleet-host/v3/credentials/introspect` | `credentials.introspect` | Agent credential by token hash |
+| `GET /fleet-host/v4/session` | Enabled and ready | Session |
+| `GET /fleet-host/v4/agents` | `agents.read` | Directory page |
+| `POST /fleet-host/v4/agents/resolve` | `agents.read` | Connected agents matching attributes |
+| `POST /fleet-host/v4/groups/resolve` | `agents.read` | Members of a group or selector |
+| `POST /fleet-host/v4/credentials/introspect` | `credentials.introspect` | Agent credential by token hash |
 
 ### Agent directory
 
@@ -445,12 +457,17 @@ Refusals are a fixed JSON error.
 | 403 | Not enabled and ready, or permission not granted |
 | 404 | Unknown route or group |
 | 405 | Wrong method |
-| 409 | Stale instance or epoch. Treat as the end of your session |
+| 421 | Stale instance or epoch. Treat as the end of your session |
 | 422 | Too many group members |
 | 503 | Busy or database unavailable. Retry (also timeouts) with backoff |
 
-Each plugin gets two concurrent host requests; a third gets 503. Each request
-has a 750 ms deadline and is canceled when the epoch changes.
+Each plugin gets two concurrent host requests besides the session route, which
+has one slot of its own; one more of either kind gets 503. Each request has a
+750 ms deadline and is canceled when the epoch changes.
+
+Limit: `groups/resolve` reads up to 1000 members inside that 750 ms deadline,
+so a very large group on a slow database may be refused with 503; keep group
+operations small or retry.
 
 ## Serving an unchanged Collector component
 
@@ -517,7 +534,7 @@ docker compose -f deploy/compose/fleet/compose.yaml -f examples/fleet-agent-summ
 
 | Version | Meaning |
 | --- | --- |
-| Protocol `"3"` | Fixed for this host protocol: routes, fields and bounds do not change within it |
+| Protocol `"4"` | Fixed for this host protocol: routes, field names and bounds do not change within it, and fields may be added. It replaced protocol 3 without a fallback: a plugin built for protocol 3 is `incompatible` until rebuilt on `pluginsdk` 4 |
 | `version` | The plugin build. The registration pins it, so an image upgrade changes the registration too |
 | `api_version` | Versions the plugin's public API. Change it on breaking API changes so the operator opts in |
 
@@ -530,7 +547,7 @@ does not pin stays `incompatible` and receives no traffic.
 - **Unit tests:** serve your handler with `httptest` and fake the host with
   an `httptest.Server` that answers the session and the services you use.
   Cover wrong service token (401), missing caller headers (403), stale epoch
-  (409), and host 409, 422 and 503 answers.
+  (421; 409 only for your own conflicts), and host 421, 422 and 503 answers.
 - **Against real fleet:** [Try the example](#try-the-example) runs fleet in
   memory mode without Docker. Simulated agents fill the directory:
   `go run ./cmd/linea-fleet-simulator -endpoint ws://127.0.0.1:4320/v1/opamp -allow-insecure-transport -token-file .local/agent_token -agents 5`.

@@ -1,4 +1,4 @@
-// Package pluginsdk defines fleet's HTTP/JSON plugin host protocol 3: the
+// Package pluginsdk defines fleet's HTTP/JSON plugin host protocol 4: the
 // routes a plugin serves, the host services it calls, their wire types and
 // bounds, and bounded HTTP helpers. It depends only on the standard library.
 //
@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -24,7 +25,7 @@ import (
 )
 
 // ProtocolVersion is the host protocol a manifest must declare.
-const ProtocolVersion = "3"
+const ProtocolVersion = "4"
 
 // AgentsRead is the registration permission for the agent directory and the
 // agent and group resolvers.
@@ -32,12 +33,12 @@ const AgentsRead = "agents.read"
 
 // Routes the plugin serves. Fleet sends the service token on each.
 const (
-	ManifestPath = "/fleet-plugin/v3/manifest"
-	StatusPath   = "/fleet-plugin/v3/status"
+	ManifestPath = "/fleet-plugin/v4/manifest"
+	StatusPath   = "/fleet-plugin/v4/status"
 )
 
 // AgentsPath is the host's paged agent directory.
-const AgentsPath = "/fleet-host/v3/agents"
+const AgentsPath = "/fleet-host/v4/agents"
 
 // Headers fleet sets on status and API calls: the authenticated management
 // credential ID and its role, "reader", "operator" or "admin".
@@ -127,15 +128,42 @@ const RequestTimeout = 750 * time.Millisecond
 // carries no upstream text.
 var ErrProtocol = errors.New("plugin protocol request failed")
 
+// ErrUnreachable is returned when no answer arrived: a timeout, a refused or
+// broken connection, or a body that stopped. It wraps ErrProtocol. A caller
+// that must tell a silent host from a refusing one tests it with Unreachable.
+var ErrUnreachable = fmt.Errorf("plugin protocol request did not complete: %w", ErrProtocol)
+
+// Unreachable reports whether err is a request that got no answer, as opposed
+// to an answer that refused (HTTPError) or could not be decoded.
+func Unreachable(err error) bool { return errors.Is(err, ErrUnreachable) }
+
+// StatusMisdirected is the status a plugin answers when the instance or epoch
+// headers of a request are not its current ones, and that fleet answers on the
+// host listener for the same reason. It means "the authority this request was
+// admitted under is no longer current": never a conflict in the plugin's own
+// domain, which stays 409. Fleet never forwards it to an API caller.
+const StatusMisdirected = http.StatusMisdirectedRequest
+
+// Misdirected reports whether err is a refusal with StatusMisdirected.
+func Misdirected(err error) bool { return StatusOf(err) == StatusMisdirected }
+
+// AuthorityMatches reports whether the instance and epoch headers of a request
+// fleet forwarded equal the plugin's current instance and epoch. A plugin
+// answers StatusMisdirected when it returns false.
+func AuthorityMatches(h http.Header, instance, epoch string) bool {
+	instances, epochs := h.Values(InstanceHeader), h.Values(EpochHeader)
+	return len(instances) == 1 && instances[0] == instance && len(epochs) == 1 && epochs[0] == epoch
+}
+
 // HTTPError is a non-200 answer; StatusOf extracts the status.
 type HTTPError struct{ Status int }
 
 func (e *HTTPError) Error() string { return "plugin protocol request refused" }
 func (e *HTTPError) Unwrap() error { return ErrProtocol }
 
-// Manifest is the plugin's answer on ManifestPath. Fleet decodes it strictly:
-// an unknown field makes the plugin unavailable, and an ID, version, protocol
-// or API version different from the registration makes it incompatible.
+// Manifest is the plugin's answer on ManifestPath. Fleet ignores fields it does
+// not know, and an ID, version, protocol or API version different from the
+// registration makes the plugin incompatible.
 type Manifest struct {
 	ID              string `json:"id"`
 	Version         string `json:"version"`
@@ -237,7 +265,9 @@ func GetJSON(ctx context.Context, client *http.Client, endpoint, token string, h
 }
 
 // RequestJSON sends the bearer token, the headers and an optional JSON body,
-// requires 200 and strictly decodes at most maxBytes into out.
+// requires 200 and decodes at most maxBytes of one JSON value into out.
+// Fields out does not declare are ignored, so either side may add fields
+// within a protocol version; trailing data is refused.
 func RequestJSON(ctx context.Context, client *http.Client, method, endpoint, token string, headers http.Header, body []byte, maxBytes int64, out any) error {
 	req, err := http.NewRequestWithContext(ctx, method, endpoint, strings.NewReader(string(body)))
 	if err != nil {
@@ -254,18 +284,20 @@ func RequestJSON(ctx context.Context, client *http.Client, method, endpoint, tok
 	}
 	response, err := client.Do(req)
 	if err != nil {
-		return ErrProtocol
+		return ErrUnreachable
 	}
 	defer response.Body.Close()
 	if response.StatusCode != 200 {
 		return &HTTPError{Status: response.StatusCode}
 	}
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxBytes+1))
-	if err != nil || int64(len(responseBody)) > maxBytes {
+	if err != nil {
+		return ErrUnreachable
+	}
+	if int64(len(responseBody)) > maxBytes {
 		return ErrProtocol
 	}
 	decoder := json.NewDecoder(strings.NewReader(string(responseBody)))
-	decoder.DisallowUnknownFields()
 	if decoder.Decode(out) != nil || decoder.Decode(new(any)) != io.EOF {
 		return ErrProtocol
 	}
