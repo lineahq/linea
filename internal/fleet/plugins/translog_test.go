@@ -48,7 +48,11 @@ func (l *logBuffer) take(t *testing.T) []map[string]any {
 	return out
 }
 
-type lifecycleStore struct{ revision int64 }
+// The embedded interface stays nil: this test never reads or writes plugin state.
+type lifecycleStore struct {
+	fleet.PluginLifecycleRepository
+	revision int64
+}
 
 func (lifecycleStore) PluginLifecycles(context.Context) ([]fleet.PluginLifecycle, error) {
 	return nil, nil

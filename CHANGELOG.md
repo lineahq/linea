@@ -408,6 +408,17 @@ the first item below.
   `Retry-After`, for up to 30 s of such refusals, so a run submitted while an
   instance restarts reaches it or another instance instead of failing.
 
+- `fleet.plugin_lifecycle` can hold each plugin's epoch for all core
+  replicas to share (groundwork for several replicas; fleet schema version
+  13, **run `migrate` before starting the new release**). The row gains
+  `epoch`, `instance_id` and `seen_at`, and a plugin that was probed but never
+  changed has a row at revision 0. The store applies fixed
+  transitions on it, each conditional on the epoch the caller read, with a
+  `fleet_plugin` hint on every change; the memory store applies the same
+  rules, so plugin lifecycle (drain, disable, enable) now also works in
+  memory mode, without surviving a restart. The plugin registry does not use
+  the row yet.
+
 ## [0.2.0]
 
 **Upgrading from 0.1:** a Docker Compose stack needs `LINEA_AUTH=local` in

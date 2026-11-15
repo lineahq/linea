@@ -345,7 +345,7 @@ func TestPostgresReplicas(t *testing.T) {
 		t.Fatal("restored history unreadable:", err)
 	}
 	// Live and starting replicas both refuse migration.
-	if _, err := maintenance.Exec(ctx, "DELETE FROM fleet.schema_version WHERE version=12"); err != nil {
+	if _, err := maintenance.Exec(ctx, "DELETE FROM fleet.schema_version WHERE version=13"); err != nil {
 		t.Fatal(err)
 	}
 	if err := Migrate(ctx, url); !errors.Is(err, ErrReplicasActive) {

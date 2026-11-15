@@ -97,8 +97,9 @@ internals](../internals/fleet-plugin-host.md).
 ## Try the example
 
 The example plugin counts agents and resolves groups. This runs it against
-fleet in memory mode (Git Bash, from the repository root). Memory mode has no
-lifecycle store, so drain and disable need PostgreSQL.
+fleet in memory mode (Git Bash, from the repository root). Memory mode keeps the
+lifecycle in the process, so drain and disable work there but do not survive a
+restart.
 
 ```sh
 sh scripts/fleet/new-plugin-secrets.sh .local/agent-summary

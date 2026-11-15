@@ -32,6 +32,10 @@ database restore.
 | Fleet | `linea-fleet` | Refused at start |
 | Live capture | `linea-fleet-livecapture` | Refused at start |
 
+Fleet schema version 13 adds the shared plugin state (`epoch`, `instance_id`
+and `seen_at` on `fleet.plugin_lifecycle`). Run the fleet `migrate` step before
+starting the new release; an older fleet server refuses the newer schema.
+
 ## Upgrade order
 
 1. Debugger: stop the builders and workers, upgrade `linea-server`, then

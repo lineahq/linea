@@ -61,7 +61,10 @@ var credentialExpiryMigration string
 //go:embed migrations/012_operator_role.sql
 var operatorRoleMigration string
 
-var migrations = []string{migration, deploymentTokensMigration, lifecycleMigration, replicasMigration, inventoryMigration, pluginsMigration, configMigration, rolloutMigration, componentsMigration, actingMigration, credentialExpiryMigration, operatorRoleMigration}
+//go:embed migrations/013_plugin_state.sql
+var pluginStateMigration string
+
+var migrations = []string{migration, deploymentTokensMigration, lifecycleMigration, replicasMigration, inventoryMigration, pluginsMigration, configMigration, rolloutMigration, componentsMigration, actingMigration, credentialExpiryMigration, operatorRoleMigration, pluginStateMigration}
 
 // adminLock serializes offline administration (migrate, bootstrap, grants).
 // v1 servers held the same lock, so a v1 server also blocks migration to v2.
