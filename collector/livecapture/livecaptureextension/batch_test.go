@@ -280,3 +280,55 @@ func TestExhaustedRateWindowSkipsCall(t *testing.T) {
 		t.Fatalf("stats %+v", stats)
 	}
 }
+
+// tickingClock advances by step on every read, so elapsed time does not
+// depend on the platform's clock resolution.
+func tickingClock(t *testing.T, step time.Duration) {
+	t.Helper()
+	current := time.Now()
+	clock = func() time.Time { current = current.Add(step); return current }
+	t.Cleanup(func() { clock = time.Now })
+}
+
+func TestTimeBudgetRefusesCapture(t *testing.T) {
+	t.Run("used up window skips the call", func(t *testing.T) {
+		m, sink := testManager(t)
+		r := traceRequest("time-skip")
+		s := start(t, m, r)
+		s.run.timeStart.Store(time.Now().UnixNano())
+		s.run.timeSpent.Store(int64(timeBudget))
+		m.CaptureTraces(context.Background(), r.CapturePoints[0], tracesWith(1, 1, 2))
+		if len(sink.trace) != 0 || s.stats().Selected != 0 || s.stats().Dropped["time"] != 1 {
+			t.Fatalf("stats %+v", s.stats())
+		}
+	})
+	t.Run("call halts at the budget", func(t *testing.T) {
+		m, sink := testManager(t)
+		r := traceRequest("time-halt")
+		s := start(t, m, r)
+		s.run.timeStart.Store(time.Now().UnixNano())
+		s.run.timeSpent.Store(int64(timeBudget) - 1)
+		tickingClock(t, time.Nanosecond)
+		m.CaptureTraces(context.Background(), r.CapturePoints[0], tracesWith(1, 1, 100))
+		stats := s.stats()
+		// The budget is checked every 32 records, so 31 are taken first.
+		if len(sink.trace) != 1 || stats.Selected != 31 || stats.EnqueuedRecords != 31 || stats.Dropped["time"] != 1 {
+			t.Fatalf("stats %+v", stats)
+		}
+	})
+	t.Run("a new second resets the budget", func(t *testing.T) {
+		m, sink := testManager(t)
+		r := traceRequest("time-reset")
+		s := start(t, m, r)
+		s.run.timeStart.Store(time.Now().Add(-2 * time.Second).UnixNano())
+		s.run.timeSpent.Store(int64(timeBudget))
+		tickingClock(t, time.Microsecond)
+		m.CaptureTraces(context.Background(), r.CapturePoints[0], tracesWith(1, 1, 2))
+		if len(sink.trace) != 1 || len(s.stats().Dropped) != 0 {
+			t.Fatalf("stats %+v", s.stats())
+		}
+		if spent := s.run.spent(time.Now().UnixNano()); spent <= 0 || spent >= int64(timeBudget) {
+			t.Fatalf("window spent %d after reset", spent)
+		}
+	})
+}

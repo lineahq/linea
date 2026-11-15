@@ -161,19 +161,19 @@ processor either way.
 
 ```mermaid
 flowchart TD
-    P[capture processor hands the batch to the extension] --> W[Rate window check]
+    P[capture processor hands the batch to the extension] --> W[Rate and time window check]
     W --> F[Session OTTL filters: resource, then record]
     F --> S[Sampling]
-    S --> L[Rate and total pre-check]
+    S --> L[Rate and total pre-check, time budget every 32 records]
     L --> C[Copy, redact, tag]
     C --> Z[Record size check]
     Z --> G[Admission under one gate: TTL and limits]
     G --> Q[Bounded byte queue per signal]
     Q --> X[Internal OTLP exporter]
     X --> D[delivery.endpoint]
-    W -- rate_records, rate_bytes --> DROP[Dropped and counted]
+    W -- rate_records, rate_bytes, time --> DROP[Dropped and counted]
     S -- sampling --> DROP
-    L -- budget, rate_records, rate_bytes --> DROP
+    L -- budget, rate_records, rate_bytes, time --> DROP
     Z -- record_size --> DROP
     G -- budget, rate_records, rate_bytes, stopping --> DROP
     Q -- queue_full, delivery --> DROP
@@ -189,6 +189,11 @@ flowchart TD
   calls are not examined at all. Each such call counts one drop under
   `rate_records` or `rate_bytes`, so the session shows it is incomplete;
   the drop counts are a lower bound.
+- Capture calls of one session may spend at most 20 ms per second, across
+  all pipelines. A call that reaches it stops with one `time` drop, and
+  later calls in that second are skipped with one `time` drop each. The
+  budget is fixed and bounds what capture takes from the Collector,
+  whatever the filters cost.
 - The queue step drops as `queue_full` when the byte queue is full, or
   `delivery` when the exporter refuses a copy or an export fails.
 

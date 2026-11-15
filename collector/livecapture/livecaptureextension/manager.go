@@ -34,10 +34,16 @@ const (
 	dropStopping
 	dropDelivery
 	dropBudget
+	dropTime
 	dropReasonCount
 )
 
-var dropReasons = [dropReasonCount]string{"queue_full", "rate_bytes", "rate_records", "record_size", "sampling", "stopping", "delivery", "budget"}
+var dropReasons = [dropReasonCount]string{"queue_full", "rate_bytes", "rate_records", "record_size", "sampling", "stopping", "delivery", "budget", "time"}
+
+// timeBudget bounds the time capture calls of one session spend per second,
+// across all pipelines. Beyond it, calls are refused with the time drop
+// reason, so capture never takes more than this from the Collector.
+const timeBudget = 20 * time.Millisecond
 
 type captureKey struct {
 	Point
@@ -64,6 +70,27 @@ type run struct {
 	windowStart, windowBytes, windowRecords atomic.Int64
 	selected, enqueued, bytes, filterErrors atomic.Int64
 	drops                                   [dropReasonCount]atomic.Int64
+	// Time spent in capture calls within the second that began at
+	// timeStart, without a lock: a race at the window's turn loses a call.
+	timeStart, timeSpent atomic.Int64
+}
+
+// spent returns the capture time of the current one-second window.
+func (r *run) spent(now int64) int64 {
+	if now-r.timeStart.Load() >= int64(time.Second) {
+		return 0
+	}
+	return r.timeSpent.Load()
+}
+
+// spend adds a capture call's time to the window it ended in.
+func (r *run) spend(now, elapsed int64) {
+	start := r.timeStart.Load()
+	if now-start >= int64(time.Second) && r.timeStart.CompareAndSwap(start, now) {
+		r.timeSpent.Store(elapsed)
+		return
+	}
+	r.timeSpent.Add(elapsed)
 }
 
 // session is one configuration of a run. An update swaps in a new session

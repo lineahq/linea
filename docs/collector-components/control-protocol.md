@@ -88,7 +88,7 @@ A `SessionStatus` carries `session_id`, `state`, `reason`, `expires_at` and
 | --- | --- |
 | Counts | Selected records, enqueued records, filter errors |
 | Bytes | Enqueued bytes (encoded) |
-| Drops by reason | `queue_full`, `rate_bytes`, `rate_records`, `record_size`, `sampling`, `stopping`, `delivery`, `budget` |
+| Drops by reason | `queue_full`, `rate_bytes`, `rate_records`, `record_size`, `sampling`, `stopping`, `delivery`, `budget`, `time` |
 
 States: `ACTIVE`, `STOPPING`, `COMPLETED`, `EXPIRED`, `LIMIT_REACHED`,
 `FAILED`, `DISABLED`. An ending session stays `STOPPING` until its queued

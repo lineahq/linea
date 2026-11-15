@@ -1169,7 +1169,7 @@ type SessionStats struct {
 	EnqueuedBytes   int64                  `protobuf:"varint,3,opt,name=enqueued_bytes,json=enqueuedBytes,proto3" json:"enqueued_bytes,omitempty"`
 	FilterErrors    int64                  `protobuf:"varint,4,opt,name=filter_errors,json=filterErrors,proto3" json:"filter_errors,omitempty"`
 	// Records dropped by reason: queue_full, rate_bytes, rate_records,
-	// record_size, sampling, stopping, delivery, budget.
+	// record_size, sampling, stopping, delivery, budget, time.
 	Dropped       map[string]int64 `protobuf:"bytes,5,rep,name=dropped,proto3" json:"dropped,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

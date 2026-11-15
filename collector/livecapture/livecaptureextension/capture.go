@@ -51,10 +51,15 @@ type capture struct {
 	pending   int64 // Envelope bytes of groups no staged record paid for yet.
 	budget    bool  // Some record was refused for the session budget.
 	refused   dropReason
+	spent     int64 // Time the session's window had spent when this call began.
+	examined  int
 	// Flushed to the session and telemetry once per call.
 	selected, filterErrors int64
 	drops                  [dropReasonCount]int64
 }
+
+// clock reads the time for the time budget; tests replace it.
+var clock = time.Now
 
 func (m *Manager) begin(signal Signal, point Point) *capture {
 	s := m.active.Load()
@@ -65,15 +70,16 @@ func (m *Manager) begin(signal Signal, point Point) *capture {
 	if !ok {
 		return nil
 	}
-	started := time.Now()
-	if reason := s.exhausted(started.UnixNano()); reason >= 0 {
+	started := clock()
+	now := started.UnixNano()
+	if reason := s.exhausted(now); reason >= 0 {
 		// The window cannot admit anything, so the call is not examined. One
 		// drop marks the capture incomplete; the records are not counted.
 		s.run.drops[reason].Add(1)
 		m.telemetry.dropped.Add(context.Background(), 1, m.telemetry.dropLabels[signal][reason])
 		return nil
 	}
-	c := &capture{manager: m, session: s, signal: signal, point: point, options: selected.options, redact: selected.redactor, started: started, now: started.UnixNano(), refused: -1}
+	c := &capture{manager: m, session: s, signal: signal, point: point, options: selected.options, redact: selected.redactor, started: started, now: now, refused: -1, spent: s.run.spent(now)}
 	c.sizes = c.sizeArray[:0]
 	return c
 }
@@ -97,12 +103,17 @@ func (c *capture) finish() {
 			t.dropped.Add(context.Background(), n, t.dropLabels[c.signal][reason])
 		}
 	}
-	t.duration.Record(context.Background(), time.Since(c.started).Seconds(), c.options)
+	elapsed := clock().Sub(c.started)
+	r.spend(c.started.Add(elapsed).UnixNano(), int64(elapsed))
+	t.duration.Record(context.Background(), elapsed.Seconds(), c.options)
 }
 
-// exhausted reports why the current rate window admits no record, or -1.
+// exhausted reports why the current window admits no record, or -1.
 func (s *session) exhausted(now int64) dropReason {
 	r, limits := s.run, &s.request.Limits
+	if r.spent(now) >= int64(timeBudget) {
+		return dropTime
+	}
 	if now-r.windowStart.Load() >= int64(time.Second) {
 		return -1
 	}
@@ -118,7 +129,20 @@ func (s *session) exhausted(now int64) dropReason {
 // halted ends the walk over the records: the session stopped, or a record
 // was refused. Admission keeps a prefix of the staged records, so no later
 // record of this call could be admitted and none is examined.
-func (c *capture) halted() bool { return c.refused >= 0 || c.session.stopped.Load() }
+func (c *capture) halted() bool {
+	if c.refused >= 0 || c.session.stopped.Load() {
+		return true
+	}
+	// Reading the clock costs more than a record's pre-checks, so check the
+	// time budget every 32 records.
+	c.examined++
+	if c.examined&31 == 0 && c.spent+int64(clock().Sub(c.started)) >= int64(timeBudget) {
+		c.refused = dropTime
+		c.drops[dropTime]++
+		return true
+	}
+	return false
+}
 
 func (c *capture) matched(ok bool, err error) bool {
 	if err != nil {
