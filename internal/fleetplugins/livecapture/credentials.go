@@ -137,6 +137,14 @@ type linkCandidate struct {
 	identity   Identity
 }
 
+// recheckDue reports whether a credential recheck is due. Link wakeups also
+// run the loop, so elapsed time keeps them from rechecking. The threshold sits
+// a tenth below the ticker period so that a tick arriving slightly early still
+// rechecks instead of waiting for the next one.
+func recheckDue(elapsed, every time.Duration) bool {
+	return elapsed >= every-every/10
+}
+
 // revalidate re-introspects connected peers' credentials, closing peers whose
 // credential was revoked, expired or lost the capture label, and links peers
 // to fleet agents.
@@ -158,8 +166,8 @@ func (s *Server) revalidate() {
 		if !ready {
 			continue
 		}
-		if time.Since(lastIntrospection) >= s.revalidateEvery {
-			lastIntrospection = time.Now()
+		if now := time.Now(); recheckDue(now.Sub(lastIntrospection), s.revalidateEvery) {
+			lastIntrospection = now
 			s.recheckCredentials(session)
 		}
 		s.linkPeers(session)

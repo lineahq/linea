@@ -397,3 +397,27 @@ func TestValidateCreateNamesTheRule(t *testing.T) {
 		}
 	}
 }
+
+func TestRecheckDueOnEarlyTick(t *testing.T) {
+	const every = 10 * time.Second
+	tests := []struct {
+		name    string
+		elapsed time.Duration
+		want    bool
+	}{
+		{"link wakeup right after a recheck", 100 * time.Millisecond, false},
+		{"link wakeup halfway", every / 2, false},
+		{"tick a moment early", every - 50*time.Millisecond, true},
+		{"tick a little early", every - 500*time.Millisecond, true},
+		{"tick on time", every, true},
+		{"tick late", every + time.Second, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			start := time.Unix(1_700_000_000, 0)
+			if got := recheckDue(start.Add(tt.elapsed).Sub(start), every); got != tt.want {
+				t.Fatalf("recheckDue(%v, %v) = %v, want %v", tt.elapsed, every, got, tt.want)
+			}
+		})
+	}
+}
