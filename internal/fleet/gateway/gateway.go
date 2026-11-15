@@ -45,8 +45,14 @@ type session struct {
 	// config management only: the instance UID, the stored failure hold
 	// (hex) and the last hash sent, to avoid repeating it before it is
 	// reported
-	uid       []byte
-	held      string
+	uid  []byte
+	held string
+	// retryOwed: the hold was cleared, so the next decision sends the desired
+	// config whatever hash the agent reports. retrySent: that retry was sent
+	// and the agent has not answered. Both live only in the session; a
+	// reconnect starts from the stored status, and a failure then holds again.
+	retryOwed bool
+	retrySent []byte
 	offered   []byte
 	offeredAt time.Time
 	// config management only: the component set of the reported build,
@@ -367,6 +373,7 @@ func (g *Gateway) message(_ context.Context, c types.Connection, m *protobufs.Ag
 		disconnect(c)
 		return nil
 	}
+	answered := false
 	if g.config != nil {
 		if first && m.AgentDescription == nil && m.RemoteConfigStatus == nil {
 			// A reconnect's first message carries only pending changes, and
@@ -381,10 +388,14 @@ func (g *Gateway) message(_ context.Context, c types.Connection, m *protobufs.Ag
 			response.Flags |= uint64(protobufs.ServerToAgentFlags_ServerToAgentFlags_ReportAvailableComponents)
 		}
 		evaluate = evaluate || changed
+		// A status message answers a retry that is out, even one identical to
+		// the last: a repeated failure is then a new failure to hold.
+		answered = s.retrySent != nil && m.RemoteConfigStatus != nil
+		evaluate = evaluate || answered
 	}
 	if g.config != nil && evaluate {
 		current := statusOf(s.report.RemoteConfig)
-		if remote := g.deliver(ctx, s, previous, first || !sameStatus(previous, current)); remote != nil {
+		if remote := g.deliver(ctx, s, previous, first || answered || !sameStatus(previous, current)); remote != nil {
 			response.RemoteConfig = remote
 			g.config.responses.Add(1)
 		}

@@ -307,7 +307,11 @@ Limits and rules:
 - In both cases the server holds the failed hash (`reported.held_hash`) and
   does not send it again, so a supervisor and the server never loop.
 - The hold ends when the desired config changes, or with
-  `POST $API/agents/{id}/config:retry`, which sends it exactly once more.
+  `POST $API/agents/{id}/config:retry`, which sends it exactly once more,
+  whatever hash the agent reports, including the failed one. If the agent
+  reports that retry as failed again, the hash is held again. The owed retry
+  is kept in the owning replica's session only: an agent that reconnects
+  first reports its status afresh, and a failure then holds as usual.
 - The supervisor's error text can quote config, so it is stored only with
   `--store-health-errors`, redacted and truncated to 256 bytes.
 

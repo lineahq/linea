@@ -35,6 +35,8 @@ type Session struct {
 	Capabilities uint64
 	Status       Status
 	Held         []byte
+	// Retry is Agent.Retry.
+	Retry bool
 	// Components is the agent's reported build; nil skips the
 	// compatibility check.
 	Components Components
@@ -87,7 +89,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, s Session) (Decision, error)
 	if !loaded {
 		return Decision{}, ErrNotLoaded
 	}
-	agent := Agent{Enabled: true, CredentialAllowed: allowed, AcceptsRemoteConfig: s.Capabilities&AcceptsRemoteConfig != 0, Status: s.Status, Held: s.Held}
+	agent := Agent{Enabled: true, CredentialAllowed: allowed, AcceptsRemoteConfig: s.Capabilities&AcceptsRemoteConfig != 0, Status: s.Status, Held: s.Held, Retry: s.Retry}
 	if !agent.CredentialAllowed || !agent.AcceptsRemoteConfig {
 		return Decision{}, nil
 	}

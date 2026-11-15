@@ -217,6 +217,12 @@ func TestDecide(t *testing.T) {
 		{"release", with(func(a *Agent) { a.Status = Status{desired.Hash, Applied} }), Plan{}, false, Decision{Send: true, Plan: unmanaged}},
 		{"released", with(func(a *Agent) { a.Status = Status{unmanaged.Hash, Applied} }), Plan{}, false, Decision{}},
 		{"release after failure", with(func(a *Agent) { a.Status = Status{desired.Hash, Failed}; a.Held = desired.Hash }), Plan{}, false, Decision{Send: true, Plan: unmanaged, ClearHold: true}},
+		{"cleared hold after failure retries", with(func(a *Agent) { a.Status = Status{desired.Hash, Failed}; a.Retry = true }), desired, true, Decision{Send: true, Plan: desired}},
+		{"failure without retry waits", with(func(a *Agent) { a.Status = Status{desired.Hash, Failed} }), desired, true, Decision{}},
+		{"cleared hold after rollback retries", with(func(a *Agent) { a.Status = Status{other.Hash, Applied}; a.Retry = true }), desired, true, Decision{Send: true, Plan: desired}},
+		{"cleared hold whatever the agent reports", with(func(a *Agent) { a.Status = Status{desired.Hash, Applied}; a.Retry = true }), desired, true, Decision{Send: true, Plan: desired}},
+		{"retry never overrides a hold", with(func(a *Agent) { a.Status = Status{desired.Hash, Failed}; a.Held = desired.Hash; a.Retry = true }), desired, true, Decision{Held: true}},
+		{"retry sends nothing to an unmanaged agent", with(func(a *Agent) { a.Retry = true }), Plan{}, false, Decision{}},
 	}
 	for _, c := range cases {
 		got := Decide(c.agent, c.plan, c.matched)
@@ -240,13 +246,13 @@ func TestNoEmptyConfigMap(t *testing.T) {
 		for _, reported := range hashes {
 			for _, held := range hashes {
 				for _, st := range states {
-					for bits := range 8 {
-						a := Agent{Enabled: bits&1 != 0, CredentialAllowed: bits&2 != 0, AcceptsRemoteConfig: bits&4 != 0, Status: Status{reported, st}, Held: held}
+					for bits := range 16 {
+						a := Agent{Enabled: bits&1 != 0, CredentialAllowed: bits&2 != 0, AcceptsRemoteConfig: bits&4 != 0, Status: Status{reported, st}, Held: held, Retry: bits&8 != 0}
 						d := Decide(a, plan.p, plan.ok)
 						if d.Send && len(d.Plan.Entries) == 0 {
 							t.Fatalf("empty config map for %+v", a)
 						}
-						if d.Send && bits != 7 {
+						if d.Send && bits&7 != 7 {
 							t.Fatalf("sent with a gate closed: %+v", a)
 						}
 					}
@@ -273,6 +279,61 @@ func TestNextHold(t *testing.T) {
 	for _, c := range cases {
 		if got := NextHold(c.prev, c.next, c.held); !bytes.Equal(got, c.want) {
 			t.Errorf("%s: got %q want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// TestClearedHoldOwesOneRetry follows an agent through the send rule and the
+// hold rule, the way the gateway chains them: a cleared hold sends the desired
+// config once whatever the agent reports, a repeated failure holds again, and
+// a success leaves no hold.
+func TestClearedHoldOwesOneRetry(t *testing.T) {
+	desired, _, _ := Desired([]Layer{{Layer: 10, Name: "base", Body: []byte("{}")}})
+	h := desired.Hash
+	on := Agent{Enabled: true, CredentialAllowed: true, AcceptsRemoteConfig: true}
+
+	cases := []struct {
+		name string
+		// reported is the agent's status before the hold was cleared.
+		reported Status
+		// answers are the statuses the agent reports after the retry.
+		answers  []Status
+		wantHold []byte
+	}{
+		{"retry fails again", Status{h, Failed}, []Status{{h, Failed}}, h},
+		{"retry fails after applying", Status{h, Failed}, []Status{{h, Applying}, {h, Failed}}, h},
+		{"retry fails after a rollback", Status{[]byte("old"), Applied}, []Status{{h, Applying}, {[]byte("old"), Applied}}, h},
+		{"retry succeeds", Status{h, Failed}, []Status{{h, Applying}, {h, Applied}}, nil},
+		{"retry succeeds at once", Status{h, Failed}, []Status{{h, Applied}}, nil},
+	}
+	for _, c := range cases {
+		agent := on
+		agent.Status = c.reported
+		// The hold was cleared: one send, whatever hash is reported.
+		agent.Retry = true
+		d := Decide(agent, desired, true)
+		if !d.Send || !bytes.Equal(d.Plan.Hash, h) || d.Held {
+			t.Fatalf("%s: cleared hold did not send once: %+v", c.name, d)
+		}
+		// The retry is out: the caller cleared Retry, and nothing more is
+		// sent while the agent answers.
+		agent.Retry = false
+		var held []byte
+		prev := c.reported
+		for i, next := range c.answers {
+			held = NextHold(prev, next, held)
+			agent.Status, agent.Held = next, held
+			d := Decide(agent, desired, true)
+			if d.Send {
+				t.Fatalf("%s: answer %d sent the config again", c.name, i)
+			}
+			prev = next
+		}
+		if !bytes.Equal(held, c.wantHold) {
+			t.Errorf("%s: hold %q, want %q", c.name, held, c.wantHold)
+		}
+		if d := Decide(agent, desired, true); d.Held != (c.wantHold != nil) {
+			t.Errorf("%s: held decision %v, want hold %q", c.name, d.Held, c.wantHold)
 		}
 	}
 }

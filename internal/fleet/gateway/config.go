@@ -147,7 +147,7 @@ func (g *Gateway) resyncHolds() {
 	for _, s := range g.sessions() {
 		s.mu.Lock()
 		if s.identified && holds[s.id] != s.held {
-			s.held, s.offered = holds[s.id], nil
+			s.adoptHold(holds[s.id])
 		}
 		s.mu.Unlock()
 	}
@@ -202,6 +202,16 @@ func (g *Gateway) sweep() {
 	}
 }
 
+// adoptHold takes a hold that changed in the store. A hold that was cleared
+// owes one retry of the desired config, even when the agent reports that very
+// hash as failed.
+func (s *session) adoptHold(stored string) {
+	if s.held != "" && stored == "" {
+		s.retryOwed = true
+	}
+	s.held, s.offered = stored, nil
+}
+
 // owns reports whether s is this replica's current holder of its identity.
 func (g *Gateway) owns(s *session) bool {
 	g.mu.Lock()
@@ -222,9 +232,13 @@ func (g *Gateway) deliver(ctx context.Context, s *session, prev configmgmt.Statu
 	held := decodeHash(s.held)
 	if transition {
 		held = configmgmt.NextHold(prev, status, held)
+		if status.State == configmgmt.Failed || status.State == configmgmt.Applied {
+			// The agent answered the retry, if one was out.
+			s.retrySent = nil
+		}
 	}
 	d, err := c.reconciler.Reconcile(ctx, configmgmt.Session{AgentID: s.id, Credential: s.principal.ID, Attributes: s.report.Attributes,
-		Capabilities: s.report.Capabilities, Status: status, Held: held, Components: s.components})
+		Capabilities: s.report.Capabilities, Status: status, Held: held, Retry: s.retryOwed, Components: s.components})
 	if err != nil {
 		c.errors.Add(1)
 		d = configmgmt.Decision{}
@@ -241,12 +255,13 @@ func (g *Gateway) deliver(ctx context.Context, s *session, prev configmgmt.Statu
 			c.failures.Add(1)
 			return nil
 		}
-		s.held = stored
 		if stored != next {
 			// Changed meanwhile, for example cleared through the API; the
 			// next evaluation starts from the stored hold.
+			s.adoptHold(stored)
 			return nil
 		}
+		s.held = stored
 		if next != "" {
 			c.holdsSet.Add(1)
 		}
@@ -261,6 +276,9 @@ func (g *Gateway) deliver(ctx context.Context, s *session, prev configmgmt.Statu
 		return nil
 	}
 	s.offered, s.offeredAt = d.Plan.Hash, time.Now()
+	if s.retryOwed {
+		s.retryOwed, s.retrySent = false, d.Plan.Hash
+	}
 	files := make(map[string]*protobufs.AgentConfigObject, len(d.Plan.Entries))
 	for _, e := range d.Plan.Entries {
 		files[e.Name] = &protobufs.AgentConfigObject{Body: e.Body, ContentType: "text/yaml"}

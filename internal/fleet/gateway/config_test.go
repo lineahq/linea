@@ -416,3 +416,62 @@ func TestIncompatibleBuildIsWithheld(t *testing.T) {
 		t.Fatal("compatible config not delivered")
 	}
 }
+
+// TestClearedHoldOwesOneRetry covers an agent that failed the desired config
+// itself: clearing the hold sends it once more, a repeated failure (even an
+// identical report) holds it again, and a success leaves no hold.
+func TestClearedHoldOwesOneRetry(t *testing.T) {
+	const (
+		applying = protobufs.RemoteConfigStatuses_RemoteConfigStatuses_APPLYING
+		applied  = protobufs.RemoteConfigStatuses_RemoteConfigStatuses_APPLIED
+		failed   = protobufs.RemoteConfigStatuses_RemoteConfigStatuses_FAILED
+	)
+	cases := []struct {
+		name    string
+		answers []protobufs.RemoteConfigStatuses
+		held    bool
+	}{
+		{"retry fails with an identical report", []protobufs.RemoteConfigStatuses{failed}, true},
+		{"retry fails after applying", []protobufs.RemoteConfigStatuses{applying, failed}, true},
+		{"retry succeeds", []protobufs.RemoteConfigStatuses{applying, applied}, false},
+	}
+	for i, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			uid := bytes.Repeat([]byte{byte(20 + i)}, 16)
+			id := hex.EncodeToString(uid)
+			src := &source{bodies: map[int]string{1: "receivers: {otlp: {}}\n"}, credentials: map[string]map[string]string{"memory-agent": nil}}
+			src.assign(t, id, 1)
+			hs := &holds{held: map[string]string{}}
+			g, url, token := serve(t, src, hs)
+			a := &agent{t: t, g: g, c: dial(t, url, token), uid: uid}
+			want := a.report(acceptsRemoteConfig, nil).RemoteConfig.ConfigHash
+			a.report(acceptsRemoteConfig, status(want, applying))
+			a.report(acceptsRemoteConfig, status(want, failed))
+			if hs.get(id) != hex.EncodeToString(want) {
+				t.Fatal("failed hash not held")
+			}
+
+			// The API clears the hold: the desired config is sent once more
+			// although the agent reports that very hash as failed.
+			hs.mu.Lock()
+			hs.held[id] = ""
+			hs.mu.Unlock()
+			n := g.config.sweeps.Load()
+			g.ConfigChanged(id)
+			waitFor(t, func() bool { return g.config.sweeps.Load() > n })
+			if r := read(t, a.c, 3*time.Second); r == nil || r.RemoteConfig == nil || !bytes.Equal(r.RemoteConfig.ConfigHash, want) {
+				t.Fatal("cleared hold did not send the desired config")
+			}
+			for _, s := range c.answers {
+				if a.report(acceptsRemoteConfig, status(want, s)).RemoteConfig != nil {
+					t.Fatal("the retry was sent a second time")
+				}
+			}
+			if got := hs.get(id) != ""; got != c.held {
+				t.Fatalf("hold set after the retry: %v, want %v", got, c.held)
+			}
+			// Nothing more is sent, now or on later sweeps.
+			a.quiet(acceptsRemoteConfig)
+		})
+	}
+}
