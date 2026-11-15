@@ -6,8 +6,8 @@
 # bounded containers, fixed fixture subnets) and checks: TLS/bearer peers and
 # catalogs, the public API and its pagination, private metrics scopes, a
 # generic consumer receiving filtered and redacted telemetry, ingress identity
-# and bounds, idempotency, overlap and raw-capture denial, partial receipts,
-# lost-consumer backpressure, absolute expiry, generic lifecycle drain/disable,
+# and bounds, idempotency, overlap and raw-capture denial, a rejected filter,
+# lost-consumer drops, absolute expiry, generic lifecycle drain/disable,
 # competing-authority denial, narrow storage grants, API-key revocation, core
 # and plugin crash recovery without replay, shared-credential revocation, a
 # metadata restore into a fresh database and database-outage isolation.
@@ -178,7 +178,7 @@ peers_array() { capi GET v1/peers | json 'json.dumps(d["items"])'; }
 
 new_channel() { capi POST v1/channels "{\"expires_at\":\"$(iso_in 110)\"}" 201 "${1-$admin}"; }
 channel_id_of() { printf '%s' "$1" | json 'd["id"]'; }
-# start_consumer CHANNEL TOKEN-FILE [RATIO=1]: leaves the container name in $consumer_name.
+# start_consumer CHANNEL TOKEN-FILE: leaves the container name in $consumer_name.
 start_consumer() {
     consumer_sequence=$((consumer_sequence + 1))
     consumer_name="$project-consumer-$consumer_sequence"
@@ -186,7 +186,7 @@ start_consumer() {
         --read-only --cap-drop ALL --security-opt no-new-privileges \
         --mount "type=bind,source=$2,target=/consumer_token,readonly" "$consumer_image" \
         --endpoint http://fleet:8080/api/v1/plugins/livecapture/api --allow-insecure-http --token-file /consumer_token \
-        --channel "$1" --duration 100s --accept-ratio "${3:-1}" --verify-redaction >/dev/null \
+        --channel "$1" --duration 100s --verify-redaction >/dev/null \
         || fail 'Independent generic consumer startup failed'
     children+=("$consumer_name")
     consumer_ready() { docker logs "$consumer_name" 2>&1 | grep -q consumer_ready; }
@@ -375,7 +375,7 @@ capi POST "v1/captures/$operation_id/stop" '' 412 "$admin" '"999999"' >/dev/null
 capture_stop "$operation_id"
 docker stop --time 5 "$consumer" >/dev/null
 capi POST v1/captures "$raw_request" 403 >/dev/null
-echo 'PASS public API: real TLS/bearer peers, generic consumer receipts for all signals, OTTL filtering/redaction, fixed roster, overlap denial, raw denial, idempotency and acknowledged stop.'
+echo 'PASS public API: real TLS/bearer peers, a generic consumer receiving all signals, OTTL filtering/redaction, fixed roster, overlap denial, raw denial, idempotency and acknowledged stop.'
 
 # Restart the same real Collector: its capture identity remains, generation advances.
 old_peer=$(printf '%s' "$peers" | json 'json.dumps([p for p in d if p["identity"]["pod"] == "collector-a"][:1])')
@@ -388,29 +388,26 @@ peers=$(peers_array)
 fresh_channel=$(channel_id_of "$(new_channel)")
 capi POST v1/captures "$(capture_body "$fresh_channel" "$old_peer")" 409 >/dev/null
 
-# Partial receipts are returned as OTLP partial success, rather than full ACK.
-start_consumer "$fresh_channel" "$admin_file" 0.5
-partial_consumer=$consumer_name
+# A filter the Collector rejects fails the capture; it is never reported active.
+start_consumer "$fresh_channel" "$admin_file"
+filter_consumer=$consumer_name
 first=$(first_peer "$peers")
 first_pod=$(printf '%s' "$first" | json 'd[0]["identity"]["pod"]')
 invalid_request=$(body_with "$(capture_body "$fresh_channel" "$first")" 'b["filter"]["traces"]["span"] = ["invalid OTTL expression ("]')
 invalid_id=$(capi POST v1/captures "$invalid_request" 202 | json 'd["id"]')
 wait_for 40 'Collector filter rejection was falsely reported active or lost' capi_is "v1/captures/$invalid_id" 'd["state"] == "failed"'
-partial_id=$(capi POST v1/captures "$(capture_body "$fresh_channel" "$first" 25 0)" 202 | json 'd["id"]')
-capture_active "$partial_id"
-generate "$first_pod"
-wait_for 40 'Consumer partial acceptance was not preserved' \
-    counts_match "$partial_consumer" "c.get('accepted_records') == 3 and c.get('rejected_records') == 3"
-capture_stop "$partial_id"
-docker stop --time 5 "$partial_consumer" >/dev/null
+docker stop --time 5 "$filter_consumer" >/dev/null
 
-# A channel without a polling/acknowledging consumer must never ACK OTLP.
+# A channel without a polling consumer drops what the Collector sends and counts
+# it, then withdraws the capture; the Collector never waits.
 lost_channel=$(channel_id_of "$(new_channel)")
 lost_id=$(capi POST v1/captures "$(capture_body "$lost_channel" "$first" 12)" 202 | json 'd["id"]')
 capture_active "$lost_id"
 generate "$first_pod"
-wait_for 40 'Lost consumer did not withdraw capture with visible uncertainty' capi_is "v1/captures/$lost_id" \
-    'd["state"] in ("stopped", "expired") and d.get("reason") in ("receipt_uncertain", "consumer_unavailable")'
+wait_for 40 'Lost consumer did not withdraw capture' capi_is "v1/captures/$lost_id" \
+    'd["state"] in ("stopped", "expired") and d.get("reason") == "consumer_unavailable"'
+[ "$(capi GET v1/metrics | json 'd["counters"]["dropped_batches_total"] >= 1')" = True ] \
+    || fail 'Lost consumer batches were not dropped and counted'
 
 expiry_channel=$(channel_id_of "$(new_channel)")
 start_consumer "$expiry_channel" "$admin_file"
@@ -421,9 +418,9 @@ wait_for 40 'Absolute capture expiry was not enforced' capi_is "v1/captures/$exp
 docker stop --time 5 "$expiry_consumer" >/dev/null
 # The service's expiry guard may conservatively retain a lease for five seconds.
 wait_for 40 'Expiry guard did not elapse' no_live_leases
-echo 'PASS reconnect generation, partial receipts, lost-consumer backpressure and absolute expiry.'
-[ "$(capi GET v1/metrics | json 'd["counters"]["receipt_uncertain_total"] >= 1 and d["counters"]["consumer_rejected_traces_records_total"] >= 1')" = True ] \
-    || fail 'Real delivery partial/uncertain outcomes not observable'
+echo 'PASS reconnect generation, rejected filter, lost-consumer drops and absolute expiry.'
+[ "$(capi GET v1/metrics | json 'd["counters"]["dropped_batches_total"] >= 1 and d["counters"]["delivered_traces_records_total"] >= 1')" = True ] \
+    || fail 'Real delivery and drops not observable'
 
 drain_channel=$(channel_id_of "$(new_channel)")
 start_consumer "$drain_channel" "$admin_file"

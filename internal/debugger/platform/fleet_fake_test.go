@@ -39,7 +39,7 @@ type fakeFleet struct {
 type fakeChannel struct {
 	expiresAt time.Time
 	queue     []fleetcapture.Envelope
-	acks      map[string]int64
+	acks      map[string]int
 	deleted   bool
 }
 
@@ -107,7 +107,7 @@ func (f *fakeFleet) CreateChannel(_ context.Context, expiresAt time.Time) (*flee
 		return nil, err
 	}
 	id := f.newID()
-	f.channels[id] = &fakeChannel{expiresAt: expiresAt, acks: map[string]int64{}}
+	f.channels[id] = &fakeChannel{expiresAt: expiresAt, acks: map[string]int{}}
 	return &fleetcapture.Channel{AuthorityID: strings.Repeat("a", 32), PluginInstance: strings.Repeat("b", 32), ID: id, ExpiresAt: expiresAt, HeartbeatSeconds: 5}, nil
 }
 
@@ -149,7 +149,7 @@ func (f *fakeFleet) Acknowledge(_ context.Context, id string, ack fleetcapture.A
 	defer f.mu.Unlock()
 	ch, err := f.channel(id)
 	if err == nil {
-		ch.acks[ack.BatchID] = ack.Accepted
+		ch.acks[ack.BatchID]++
 	}
 	return err
 }
@@ -374,22 +374,21 @@ func (f *fakeFleet) enqueue(session string, e fleetcapture.Envelope) string {
 	return e.BatchID
 }
 
-// acked waits for a batch's acknowledgement.
-func (f *fakeFleet) acked(t *testing.T, session, batch string) int64 {
+// acked waits until a batch was acknowledged at least n times.
+func (f *fakeFleet) acked(t *testing.T, session, batch string, n int) {
 	t.Helper()
 	_, ch := f.request(session)
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		f.mu.Lock()
-		accepted, ok := ch.acks[batch]
+		got := ch.acks[batch]
 		f.mu.Unlock()
-		if ok {
-			return accepted
+		if got >= n {
+			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("batch %s was never acknowledged", batch)
-	return 0
+	t.Fatalf("batch %s was not acknowledged %d times", batch, n)
 }
 
 func (f *fakeFleet) channelDeleted(session string) bool {
@@ -514,12 +513,22 @@ func (f *captureFixture) finish(t *testing.T, id, state string) *CaptureSession 
 	})
 }
 
-// deliver sends a batch from a peer and returns the records accepted.
+// deliver sends a batch from a peer and returns the records the capture
+// stored from it.
 func (f *captureFixture) deliver(t *testing.T, id string, peer int, raw []byte, records int64) int64 {
 	t.Helper()
+	received := func() int64 {
+		v, err := f.s.GetCaptureSession(context.Background(), testCaller, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v.Data.ReceivedRecords
+	}
+	before := received()
 	p := f.fleet.peers[peer]
 	batch := f.fleet.enqueue(id, fleetcapture.Envelope{PeerID: p.ID, Generation: p.Generation, Data: raw, Records: records})
-	return f.fleet.acked(t, id, batch)
+	f.fleet.acked(t, id, batch, 1)
+	return received() - before
 }
 
 func captureLogBytes(t *testing.T, body string) []byte {

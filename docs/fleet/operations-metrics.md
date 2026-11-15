@@ -109,9 +109,9 @@ object.
 
 | Family | Covers |
 | --- | --- |
-| Gauges | Peers, channels, current in-memory operations by state, host and storage readiness, draining state, pending bytes and batches, retained receipts, inflight deliveries, connections, storage waiters. Operation gauges are not historical database totals |
-| Counters | Admitted, refused and withdrawn captures; delivery errors and capacity; uncertain receipts; first and duplicate ACKs; accepted and rejected records by signal; TCP refusals; storage errors; peers closed because their fleet credential was revoked, expired or no longer allows their group (`peers_credential_closed_total`) |
-| Durations | Delivery (authentication, queueing and consumer receipt wait) and storage operations (excluding their separately measured gate wait) |
+| Gauges | Peers, channels, current in-memory operations by state, host and storage readiness, draining state, pending bytes and batches, connections, storage waiters. Operation gauges are not historical database totals |
+| Counters | Admitted, refused and withdrawn captures; delivery errors; ACKs; delivered and dropped records by signal and dropped batches; TCP refusals; storage errors; peers closed because their fleet credential was revoked, expired or no longer allows their group (`peers_credential_closed_total`) |
+| Durations | Delivery (authentication and buffering) and storage operations (excluding their separately measured gate wait) |
 | Snapshot freshness | `metadata_snapshot_available`, `metadata_snapshot_stale`, `metadata_snapshot_age_seconds` |
 
 - Identical ACK retries do not count accepted records twice.

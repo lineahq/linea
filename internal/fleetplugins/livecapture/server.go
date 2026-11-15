@@ -52,11 +52,14 @@ type Server struct {
 	credentials     map[[32]byte]cachedCredential
 	linkWake        chan struct{}
 	revalidateEvery time.Duration
-	dataGate        chan struct{}
-	fatal           chan error
-	wg              sync.WaitGroup
-	observed        pluginMetrics
-	budgets         [3]*connectionBudget
+	// pending is the bytes buffered across all channels.
+	pending int
+	// now is the clock of the delivery buffer; tests replace it.
+	now      func() time.Time
+	fatal    chan error
+	wg       sync.WaitGroup
+	observed pluginMetrics
+	budgets  [3]*connectionBudget
 }
 
 func New(ctx context.Context, c Config, repo Repository) (*Server, error) {
@@ -64,7 +67,7 @@ func New(ctx context.Context, c Config, repo Repository) (*Server, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	s := &Server{config: c, repo: repo, ctx: ctx, cancel: cancel, instance: pluginsdk.RandomID(), dbOK: true, peers: map[string]*peer{}, operations: map[string]*activeOperation{}, channels: map[string]*channel{}, credentials: map[[32]byte]cachedCredential{}, linkWake: make(chan struct{}, 1), revalidateEvery: credentialTTL, dataGate: make(chan struct{}, 16), fatal: make(chan error, 1)}
+	s := &Server{config: c, repo: repo, ctx: ctx, cancel: cancel, instance: pluginsdk.RandomID(), dbOK: true, peers: map[string]*peer{}, operations: map[string]*activeOperation{}, channels: map[string]*channel{}, credentials: map[[32]byte]cachedCredential{}, linkWake: make(chan struct{}, 1), revalidateEvery: credentialTTL, now: time.Now, fatal: make(chan error, 1)}
 	s.host = pluginsdk.HostClient{Endpoint: c.HostEndpoint, Token: c.hostToken, InstanceID: s.instance, HTTP: pluginsdk.NewHTTPClient()}
 	for i, limit := range []int{c.peerLimit() + 16, 64, 64} {
 		s.budgets[i] = &connectionBudget{slots: make(chan struct{}, limit)}
@@ -664,8 +667,11 @@ func (s *Server) liveStats(op *Operation) {
 	}
 	for i, t := range op.Targets {
 		for _, live := range active.op.Targets {
-			if live.PeerID == t.PeerID && live.Generation == t.Generation && live.Stats != nil {
-				op.Targets[i].Stats = live.Stats
+			if live.PeerID == t.PeerID && live.Generation == t.Generation {
+				if live.Stats != nil {
+					op.Targets[i].Stats = live.Stats
+				}
+				op.Targets[i].Delivery = live.Delivery
 			}
 		}
 	}

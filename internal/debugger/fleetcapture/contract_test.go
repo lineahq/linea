@@ -44,12 +44,13 @@ func TestTypesMatchContracts(t *testing.T) {
 		"Channel":        Channel{AuthorityID: id, PluginInstance: id, ID: id, ExpiresAt: now, HeartbeatSeconds: 5},
 		"ChannelRequest": channelRequest{ExpiresAt: now},
 		"Envelope":       Envelope{AuthorityID: id, PluginInstance: id, PluginEpoch: id, BatchID: id, CaptureID: id, PeerID: peer, Generation: 1, Signal: "logs", Records: 1, Encoding: "otlp-protobuf", Data: []byte{1}, ObservedAt: now},
-		"Ack":            Ack{BatchID: id, Accepted: 1},
+		"Ack":            Ack{BatchID: id},
 		"CaptureRequest": CaptureRequest{AuthorityID: id, PluginInstance: id, ID: id, ChannelID: id, Targets: []Target{{peer, 1}}, Agents: []string{id}, Selector: "a", GroupID: id,
 			CapturePoints: []Point{{"traces", "egress"}}, Signals: []string{"traces"}, Filter: filter, Sampling: &Sampling{Rate: 1, Mode: "hash"},
 			Limits: Limits{BytesPerSecond: 1, RecordsPerSecond: 1, TotalBytes: 1, TotalRecords: 1, RecordBytes: 1}, ExpiresAt: now},
 		"Operation": Operation{AuthorityID: id, ID: id, State: "active", Reason: "r", Revision: 1, ExpiresAt: now, Targets: []TargetOutcome{{PeerID: peer, Generation: 1, AgentID: id, State: "active",
-			Stats: &TargetStats{Selected: 1, EnqueuedRecords: 1, EnqueuedBytes: 1, FilterErrors: 1, Dropped: map[string]int64{"sampling": 1}}}}, ActingFor: &Acting{ID: "user:a", Name: "A", RequestID: "r"}},
+			Stats:    &TargetStats{Selected: 1, EnqueuedRecords: 1, EnqueuedBytes: 1, FilterErrors: 1, Dropped: map[string]int64{"sampling": 1}},
+			Delivery: TargetDelivery{ReceivedRecords: 2, DroppedRecords: 1, DroppedBatches: 1}}}, ActingFor: &Acting{ID: "user:a", Name: "A", RequestID: "r"}},
 	} {
 		match(t, plugin, name, plugin[name], encode(t, value), true)
 	}

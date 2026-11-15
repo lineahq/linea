@@ -44,8 +44,8 @@ func (r *collectorRegistry) run(c *captureRecord) {
 		e, err := r.fleet.Next(ctx, c.channel)
 		switch status := fleetcapture.StatusOf(err); {
 		case err == nil && e != nil:
-			accepted := r.ingest(ctx, c, e)
-			_ = r.fleet.Acknowledge(ctx, c.channel, fleetcapture.Ack{BatchID: e.BatchID, Accepted: accepted})
+			r.ingest(ctx, c, e)
+			_ = r.fleet.Acknowledge(ctx, c.channel, fleetcapture.Ack{BatchID: e.BatchID})
 			continue
 		case status == 404 || status == 410 || status == 403:
 			r.lose(c, "capture_channel_lost")

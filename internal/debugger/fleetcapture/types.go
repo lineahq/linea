@@ -88,10 +88,11 @@ type Envelope struct {
 	ObservedAt     time.Time `json:"observed_at"`
 }
 
-// Ack reports how many records of a batch the debugger accepted.
+// Ack frees a batch the debugger has handled. Fleet delivers nothing twice
+// once it is acknowledged, and an ACK for a batch that is not pending is a
+// no-op.
 type Ack struct {
-	BatchID  string `json:"batch_id"`
-	Accepted int64  `json:"accepted_records"`
+	BatchID string `json:"batch_id"`
 }
 
 // Target names a peer at the generation the caller selected.
@@ -173,13 +174,23 @@ type TargetStats struct {
 	Dropped         map[string]int64 `json:"dropped,omitempty"`
 }
 
+// TargetDelivery counts the copies fleet received from one target and the
+// ones it dropped before the debugger acknowledged them. Dropped records are
+// part of the received ones.
+type TargetDelivery struct {
+	ReceivedRecords int64 `json:"received_records"`
+	DroppedRecords  int64 `json:"dropped_records"`
+	DroppedBatches  int64 `json:"dropped_batches"`
+}
+
 // TargetOutcome is a capture's state on one peer.
 type TargetOutcome struct {
-	PeerID     string       `json:"peer_id"`
-	Generation uint64       `json:"generation"`
-	AgentID    string       `json:"agent_id,omitempty"`
-	State      string       `json:"state"`
-	Stats      *TargetStats `json:"stats,omitempty"`
+	PeerID     string         `json:"peer_id"`
+	Generation uint64         `json:"generation"`
+	AgentID    string         `json:"agent_id,omitempty"`
+	State      string         `json:"state"`
+	Stats      *TargetStats   `json:"stats,omitempty"`
+	Delivery   TargetDelivery `json:"delivery"`
 }
 
 // Operation is an admitted capture and its target outcomes.

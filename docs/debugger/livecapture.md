@@ -243,7 +243,7 @@ linea capture stop --session <id> --server http://127.0.0.1:7070
 | Level | States |
 | --- | --- |
 | Capture `state` (fleet's operation state) | `starting`, `active`, `stopping`, then terminal `stopped`, `completed`, `expired`, `failed`, `interrupted`. The debugger adds terminal `uncertain` when it loses track of a capture fleet has not reported finished. |
-| Target | `pending`, `active`, `stopping`, then terminal `completed`, `expired`, `limit_reached`, `failed`, `disabled`, `unknown`. Fleet's per-target stats (selected and enqueued records, filter errors) appear when reported. |
+| Target | `pending`, `active`, `stopping`, then terminal `completed`, `expired`, `limit_reached`, `failed`, `disabled`, `unknown`. Fleet's per-target stats (selected and enqueued records, filter errors) appear when reported, and its `delivery`: records fleet received from the Collector and the records and batches it dropped before the debugger stored them. |
 
 - Targets of an `uncertain` capture become `unknown`, as does a target fleet
   leaves unfinished in an ended operation (for example after `interrupted`):
@@ -252,7 +252,7 @@ linea capture stop --session <id> --server http://127.0.0.1:7070
 
 | Field | Values |
 | --- | --- |
-| `reason` | Fleet's code (`absolute_expiry`, `collector_rejected`, `peer_disconnected`, `delivery_capacity`, `receipt_uncertain`; see [throughput limit](#throughput-limit)), or the debugger's loss reason: `capture_channel_lost`, `fleet_no_longer_reports_capture`, `no_terminal_state_from_fleet_after_expiry`, `platform_restarted; capture_not_resumed` |
+| `reason` | Fleet's code (`absolute_expiry`, `collector_rejected`, `peer_disconnected`, `consumer_unavailable`), or the debugger's loss reason: `capture_channel_lost`, `fleet_no_longer_reports_capture`, `no_terminal_state_from_fleet_after_expiry`, `platform_restarted; capture_not_resumed` |
 | `stop_reason` | Why the debugger asked fleet to stop: `stop_requested`, `capture_storage_error`, `capture_storage_limit`, `capture_processing_limit`, `capture_catalog_changed` |
 
 The web client turns these codes into sentences and marks a capture with failed
@@ -346,14 +346,12 @@ Above the limit nothing is spooled to disk:
 - The Collector queues copies, then drops them. Drops are counted per target in
   its `dropped` stats, by reason such as `queue_full`, `rate_bytes` and
   `rate_records`.
-- The plugin holds at most 16 batches and 1 MiB per capture. When that is full
-  it refuses the delivery and withdraws the capture with the reason
-  `delivery_capacity`.
-- A batch not acknowledged within 2 seconds withdraws the capture with the
-  reason `receipt_uncertain`.
+- The plugin holds at most 64 batches and 2 MiB per capture, 32 MiB in all.
+  A batch that does not fit, or that the debugger has not read within 10
+  seconds, is dropped and counted on its target's `delivery`
+  (`dropped_records`, `dropped_batches`). The capture goes on.
 
-Records already stored stay readable. A capture withdrawn this way is
-incomplete.
+A capture with drops is incomplete; the records it stored stay readable.
 
 For more volume, capture less: a `filter`, a `sampling` rate, lower `limits`,
 fewer points, signals or Collectors, or a shorter `duration_seconds`.

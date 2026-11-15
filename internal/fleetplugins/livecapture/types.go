@@ -130,6 +130,18 @@ type Target struct {
 	State      string       `json:"state"`
 	Released   bool         `json:"-"`
 	Stats      *TargetStats `json:"stats,omitempty"`
+	// Delivery counts what reached the plugin from this target.
+	Delivery TargetDelivery `json:"delivery"`
+}
+
+// TargetDelivery counts the copies the plugin received from one target and
+// the ones it dropped before the consumer acknowledged them: a full buffer,
+// a batch older than 10 s, or a consumer that is gone. Dropped records are
+// part of the received ones. Any drop makes the capture incomplete.
+type TargetDelivery struct {
+	ReceivedRecords int64 `json:"received_records"`
+	DroppedRecords  int64 `json:"dropped_records"`
+	DroppedBatches  int64 `json:"dropped_batches"`
 }
 
 // TargetStats are the Collector's last reported counters for its session.
@@ -144,13 +156,14 @@ type TargetStats struct {
 
 // StoredTarget is private durable metadata; wire IDs are never in public reads.
 type StoredTarget struct {
-	PeerID     string       `json:"peer_id"`
-	Generation uint64       `json:"generation"`
-	AgentID    string       `json:"agent_id,omitempty"`
-	WireID     string       `json:"wire_id"`
-	State      string       `json:"state"`
-	Released   bool         `json:"released"`
-	Stats      *TargetStats `json:"stats,omitempty"`
+	PeerID     string         `json:"peer_id"`
+	Generation uint64         `json:"generation"`
+	AgentID    string         `json:"agent_id,omitempty"`
+	WireID     string         `json:"wire_id"`
+	State      string         `json:"state"`
+	Released   bool           `json:"released"`
+	Stats      *TargetStats   `json:"stats,omitempty"`
+	Delivery   TargetDelivery `json:"delivery"`
 }
 type Operation struct {
 	AuthorityID string    `json:"authority_id"`
@@ -182,8 +195,7 @@ type Envelope struct {
 	ObservedAt     time.Time `json:"observed_at"`
 }
 type Acknowledgement struct {
-	ID       string `json:"batch_id"`
-	Accepted int64  `json:"accepted_records"`
+	ID string `json:"batch_id"`
 }
 
 func terminal(state string) bool {

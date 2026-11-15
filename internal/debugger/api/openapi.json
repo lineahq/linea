@@ -1783,6 +1783,25 @@
         },
         "type": "object"
       },
+      "CaptureTargetDelivery": {
+        "properties": {
+          "dropped_batches": {
+            "type": "integer"
+          },
+          "dropped_records": {
+            "type": "integer"
+          },
+          "received_records": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dropped_batches",
+          "dropped_records",
+          "received_records"
+        ],
+        "type": "object"
+      },
       "CaptureTargetStats": {
         "properties": {
           "dropped": {
@@ -1819,6 +1838,9 @@
           },
           "collector_id": {
             "type": "string"
+          },
+          "delivery": {
+            "$ref": "#/components/schemas/CaptureTargetDelivery"
           },
           "generation": {
             "type": "integer"

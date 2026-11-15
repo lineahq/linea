@@ -248,72 +248,121 @@ func TestExpiryEndsUnfinishedTargets(t *testing.T) {
 	}
 }
 
-func TestDeliveryRequiresReceiptAndPreservesPartialOutcome(t *testing.T) {
+// sourceOf returns the resource attributes the Collector stamps on copies for
+// the operation's first target, and an authenticated delivery context.
+func sourceOf(s *Server, op Operation) (pcommon.Map, context.Context) {
+	attributes := pcommon.NewMap()
+	for key, value := range map[string]string{"capture.session.id": s.operations[op.ID].op.Targets[0].WireID, "capture.point": "egress", "capture.pipeline": "traces", "capture.collector.pod": "pod", "capture.cluster": "cluster"} {
+		attributes.PutStr(key, value)
+	}
+	return attributes, metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+strings.Repeat("d", 64)))
+}
+
+// Every bound export is answered at once; the consumer's ACK only frees the
+// buffer, and a repeated ACK does nothing.
+func TestDeliveryAnswersAtOnceAndAckFrees(t *testing.T) {
 	s, r, p := fixture(t)
 	op, err := s.Create(context.Background(), "owner", r)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wire := s.operations[op.ID].op.Targets[0].WireID
-	attributes := pcommon.NewMap()
-	for key, value := range map[string]string{"capture.session.id": wire, "capture.point": "egress", "capture.pipeline": "traces", "capture.collector.pod": "pod", "capture.cluster": "cluster"} {
-		attributes.PutStr(key, value)
-	}
-	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+strings.Repeat("d", 64)))
-	result := make(chan struct {
-		accepted int64
-		err      error
-	}, 1)
-	go func() {
-		accepted, err := s.deliver(ctx, "traces", []pcommon.Map{attributes}, 2, []byte("bounded-synthetic"))
-		result <- struct {
-			accepted int64
-			err      error
-		}{accepted, err}
-	}()
-	var envelope *Envelope
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		envelope, err = s.Next("owner", r.ChannelID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if envelope != nil {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	if envelope == nil {
-		t.Fatal("no delivery offered")
-	}
-	select {
-	case <-result:
-		t.Fatal("OTLP acknowledged before consumer receipt")
-	default:
-	}
-	ack := Acknowledgement{ID: envelope.ID, Accepted: 1}
-	if err := s.Ack("other", r.ChannelID, ack); !errors.Is(err, ErrForbidden) {
-		t.Fatal("cross-owner receipt accepted")
-	}
-	if err := s.Ack("owner", r.ChannelID, ack); err != nil {
+	attributes, ctx := sourceOf(s, op)
+	if err := s.deliver(ctx, "traces", []pcommon.Map{attributes}, 2, []byte("bounded-synthetic")); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Ack("owner", r.ChannelID, ack); err != nil {
-		t.Fatal("identical receipt not reconciled")
+	envelope, err := s.Next("owner", r.ChannelID)
+	if err != nil || envelope == nil || envelope.Records != 2 {
+		t.Fatalf("offered %v, %v", envelope, err)
 	}
-	out := <-result
-	if out.err != nil || out.accepted != 1 {
-		t.Fatal("partial acceptance lost")
+	ack := Acknowledgement{ID: envelope.ID}
+	if err := s.Ack("other", r.ChannelID, ack); !errors.Is(err, ErrForbidden) {
+		t.Fatal("cross-owner ACK accepted")
+	}
+	for range 2 {
+		if err := s.Ack("owner", r.ChannelID, ack); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if next, err := s.Next("owner", r.ChannelID); next != nil || err != nil {
+		t.Fatalf("acknowledged batch offered again: %v, %v", next, err)
 	}
 	m := s.Metrics()
-	if m.Counters["consumer_accepted_traces_records_total"] != 1 || m.Counters["consumer_rejected_traces_records_total"] != 1 || m.Counters["receipt_retries_total"] != 1 || m.Gauges["pending_bytes"] != 0 {
-		t.Fatal("partial/duplicate receipt metrics lost or double counted")
+	if m.Counters["delivered_traces_records_total"] != 2 || m.Counters["acks_total"] != 1 || m.Gauges["pending_bytes"] != 0 {
+		t.Fatalf("metrics %v %v", m.Counters, m.Gauges)
+	}
+	got, err := s.Get(context.Background(), "owner", op.ID)
+	if err != nil || got.Targets[0].Delivery != (TargetDelivery{ReceivedRecords: 2}) {
+		t.Fatalf("delivery %+v, %v", got.Targets[0].Delivery, err)
 	}
 	s.mu.Lock()
 	s.peers[p.info.ID].info.Generation = 2
 	s.mu.Unlock()
-	if _, err := s.deliver(ctx, "traces", []pcommon.Map{attributes}, 1, []byte("x")); status.Code(err) != codes.PermissionDenied {
+	if err := s.deliver(ctx, "traces", []pcommon.Map{attributes}, 1, []byte("x")); status.Code(err) != codes.PermissionDenied {
 		t.Fatal("old-generation samples accepted")
+	}
+}
+
+// What the buffer cannot hold is dropped and counted for its target. The
+// export still succeeds and the capture keeps running.
+func TestDeliveryDropsAndCountsWhatDoesNotFit(t *testing.T) {
+	for name, tc := range map[string]struct {
+		prepare func(s *Server, c *channel, clock *time.Time)
+		dropped int64
+	}{
+		"room":          {func(*Server, *channel, *time.Time) {}, 0},
+		"channel bytes": {func(_ *Server, c *channel, _ *time.Time) { c.bytes = channelBytes }, 3},
+		"channel count": {func(_ *Server, c *channel, clock *time.Time) {
+			for range channelBatches {
+				c.batches = append(c.batches, &batch{received: *clock})
+			}
+		}, 3},
+		"all channels": {func(s *Server, _ *channel, _ *time.Time) { s.pending = pendingBytes }, 3},
+		"consumer gone": {func(_ *Server, c *channel, clock *time.Time) {
+			*clock = clock.Add(6 * time.Second)
+			c.expires = clock.Add(time.Minute)
+		}, 3},
+		"aged in buffer": {nil, 3},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, r, _ := fixture(t)
+			clock := time.Now()
+			s.now = func() time.Time { return clock }
+			op, err := s.Create(context.Background(), "owner", r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.channels[r.ChannelID].lastSeen = clock
+			if tc.prepare != nil {
+				s.mu.Lock()
+				tc.prepare(s, s.channels[r.ChannelID], &clock)
+				s.mu.Unlock()
+			}
+			attributes, ctx := sourceOf(s, op)
+			if err := s.deliver(ctx, "traces", []pcommon.Map{attributes}, 3, []byte("xyz")); err != nil {
+				t.Fatalf("export answered %v", err)
+			}
+			if tc.prepare == nil {
+				clock = clock.Add(batchAge + time.Millisecond)
+				s.channels[r.ChannelID].lastSeen = clock
+				if next, err := s.Next("owner", r.ChannelID); next != nil || err != nil {
+					t.Fatalf("aged batch offered: %v, %v", next, err)
+				}
+			}
+			got, err := s.Get(context.Background(), "owner", op.ID)
+			want := TargetDelivery{ReceivedRecords: 3, DroppedRecords: tc.dropped}
+			if tc.dropped > 0 {
+				want.DroppedBatches = 1
+			}
+			if err != nil || got.Targets[0].Delivery != want {
+				t.Fatalf("delivery %+v, want %+v, %v", got.Targets[0].Delivery, want, err)
+			}
+			if got.State != "starting" && got.State != "active" {
+				t.Fatalf("capture ended as %s (%s)", got.State, got.Reason)
+			}
+			if m := s.Metrics(); m.Counters["dropped_traces_records_total"] != uint64(tc.dropped) {
+				t.Fatalf("dropped metric %d", m.Counters["dropped_traces_records_total"])
+			}
+		})
 	}
 }
 
@@ -347,28 +396,6 @@ func TestStoppingTargetDrainsUntilReleased(t *testing.T) {
 	s.mu.Unlock()
 	if err := bind(); !errors.Is(err, ErrForbidden) {
 		t.Fatal("released target still accepted copies")
-	}
-}
-
-func TestMissingConsumerReceiptStopsAndExposesUncertainty(t *testing.T) {
-	s, r, _ := fixture(t)
-	op, err := s.Create(context.Background(), "owner", r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wire := s.operations[op.ID].op.Targets[0].WireID
-	attributes := pcommon.NewMap()
-	for key, value := range map[string]string{"capture.session.id": wire, "capture.point": "egress", "capture.pipeline": "traces", "capture.collector.pod": "pod", "capture.cluster": "cluster"} {
-		attributes.PutStr(key, value)
-	}
-	ctx, cancel := context.WithTimeout(metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+strings.Repeat("d", 64))), 20*time.Millisecond)
-	defer cancel()
-	if _, err := s.deliver(ctx, "traces", []pcommon.Map{attributes}, 1, []byte("x")); status.Code(err) != codes.Unavailable {
-		t.Fatal("uncertain receipt falsely accepted")
-	}
-	stored, err := s.Get(context.Background(), "owner", op.ID)
-	if err != nil || stored.State != "stopping" || stored.Reason != "receipt_uncertain" {
-		t.Fatal("loss not visible in execution metadata", stored.State, stored.Reason)
 	}
 }
 
@@ -426,27 +453,6 @@ func TestPluginHTTPRoleWrites(t *testing.T) {
 		if got := call(role); (got == 403) != refused || !refused && got != admin {
 			t.Fatalf("role %q answered %d, admin answered %d", role, got, admin)
 		}
-	}
-}
-
-func TestDeliveryCapacityWithdrawsCapture(t *testing.T) {
-	s, r, _ := fixture(t)
-	op, err := s.Create(context.Background(), "owner", r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	attributes := pcommon.NewMap()
-	for key, value := range map[string]string{"capture.session.id": s.operations[op.ID].op.Targets[0].WireID, "capture.point": "egress", "capture.pipeline": "traces", "capture.collector.pod": "pod", "capture.cluster": "cluster"} {
-		attributes.PutStr(key, value)
-	}
-	s.channels[r.ChannelID].bytes = 1 << 20
-	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+strings.Repeat("d", 64)))
-	if _, err := s.deliver(ctx, "traces", []pcommon.Map{attributes}, 1, []byte("x")); status.Code(err) != codes.ResourceExhausted {
-		t.Fatal("bounded channel falsely accepted data")
-	}
-	stored, err := s.Get(context.Background(), "owner", op.ID)
-	if err != nil || stored.State != "stopping" || stored.Reason != "delivery_capacity" {
-		t.Fatal("capacity withdrawal not visible", stored.State, stored.Reason)
 	}
 }
 

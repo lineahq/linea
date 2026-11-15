@@ -9,7 +9,7 @@ The plugin owns everything else about capture.
 | Plugin owns | Capture authorization, schemas, execution, gRPC and OTLP listeners, consumer delivery, its own PostgreSQL database |
 | Collector side | Unchanged components. Collectors authenticate with fleet agent credentials, so one core revocation stops both reporting and capture |
 | Targets | Fleet agents, groups or selectors |
-| Versions | Plugin 0.4.0, API schema 2.3.0, on [host protocol 3](plugins.md) |
+| Versions | Plugin 0.4.0, API schema 3.0.0, on [host protocol 3](plugins.md) |
 | Without it | Fleet reporting stays independently usable |
 
 Related: [operational metrics](operations-metrics.md), [how the plugin works
@@ -53,7 +53,7 @@ docker compose @captureCompose up -d --wait livecapture-plugin
   first. No new bootstrap is needed.
 - **Versions are separate:** core database schema 10; plugin database schema
   3 (own roles, volume and checksummed migrations 001 to 003); plugin 0.4.0;
-  plugin API schema 2.3.0.
+  plugin API schema 3.0.0.
 - **Registration:** grants `agents.read` and `credentials.introspect`.
 - **Combined plugins:** several plugins need one explicit registration file
   and distinct mounted directional credentials for each.
@@ -223,10 +223,10 @@ at `v1/openapi.json` through this authenticated ingress.
 | Rule | Detail |
 | --- | --- |
 | Credential | A fleet admin or operator credential. Readers can discover peers and schemas but cannot create channels or captures |
-| Ownership | Capture and channel reads and receipts are owner-only, even between admins |
+| Ownership | Capture and channel reads and ACKs are owner-only, even between admins |
 | Raw data | Default selection permits only catalog points marked redacted. Operator `raw_principals` is an explicit grant of credential IDs; admin alone never grants raw |
 | Delegating clients | A client acting for its users (a shared team service) may send fleet's `X-Fleet-Acting-ID`, `-Name` and `-Request` headers ([plugins](plugins.md#opaque-public-api)). The plugin records them on the capture as `acting_for` and persists them with the operation (plugin migration 3, API schema 2.2.0) |
-| Attribution only | Ownership, receipts and `raw_principals` still use the credential ID, so per-user raw decisions stay with the delegating client |
+| Attribution only | Ownership, ACKs and `raw_principals` still use the credential ID, so per-user raw decisions stay with the delegating client |
 
 One capture, end to end. The debugger (or any client) is the consumer: it
 opens a channel, admits the capture and polls the channel for batches.
@@ -252,19 +252,19 @@ sequenceDiagram
   L->>X: DesiredState with one Session (control stream)
   X->>L: CollectorReport, session active
   X->>L: OTLP gRPC export to port 4341, copies tagged with the session id
-  Note over L: batch held in bounded memory until the consumer acknowledges
+  L-->>X: export result at once
+  Note over L: batch held in bounded memory until the consumer acknowledges,<br/>dropped and counted when it does not fit or waits 10 s
   D->>L: GET v1/channels/ID/next
   L-->>D: envelope with base64 OTLP protobuf
   D->>L: POST v1/channels/ID/acks
-  L-->>X: export result, partial success if fewer records were accepted
   D->>L: POST v1/captures/ID/stop (If-Match)
   L->>X: DesiredState without sessions
   X->>L: CollectorReport, terminal state
 ```
 
 *A capture request reaches the Collector as a desired state on its open
-control stream. The Collector sends copies to the delivery endpoint and the
-plugin hands each batch to the polling consumer. Telemetry stays in bounded
+control stream. The Collector sends copies to the delivery endpoint and
+forgets them; the plugin hands each batch to the polling consumer. Telemetry stays in bounded
 plugin memory; the plugin database keeps metadata only.*
 
 ### 1. Select a peer and create a channel
@@ -381,6 +381,10 @@ Instead of `targets`, a request may name exactly one of:
 - Outcomes report each target's `agent_id` when linked, and its `stats`: the
   Collector's last reported counters (selected, enqueued records and bytes,
   filter errors, nonzero drops by reason). They are counts, never telemetry.
+- Each target's `delivery` counts what the plugin did with its copies:
+  `received_records`, and the `dropped_records` and `dropped_batches` it
+  dropped before the consumer acknowledged them. Dropped records are part of
+  the received ones; any drop makes the capture incomplete.
 - Counters are read live while the operation runs without advancing its
   revision, and are saved with each state change, so a terminal outcome keeps
   the final report.
@@ -420,9 +424,10 @@ base64 OTLP protobuf.
 | Topic | Behavior |
 | --- | --- |
 | Polling | Renews a five-second consumer heartbeat. Does not acknowledge data |
-| ACK | After accepting a batch, POST `{batch_id,accepted_records}` to the channel's `acks` route. An identical ACK reconciles; changing its count conflicts. Partial acceptance maps to OTLP partial success (the sample consumer's `--accept-ratio` exercises it) |
-| No receipt in 2 s | A retryable OTLP error and capture withdrawn with `receipt_uncertain`. Delivery capacity also withdraws capture |
-| Duplicates | Exporter retries can produce them: consumers must deduplicate batch IDs |
+| Export answer | The plugin answers every valid OTLP export at once. The Collector sends and forgets: it never waits for the consumer and never retries |
+| ACK | After handling a batch, POST `{batch_id}` to the channel's `acks` route. That frees the batch. An ACK for a batch that is not pending is a no-op |
+| Drops | A batch that does not fit the channel's buffer, arrives when the consumer is gone, or waits 10 s without an ACK is dropped. Each drop counts on its target's `delivery` (`dropped_records`, `dropped_batches`) and in the metrics; capture goes on |
+| Repeats | An unacknowledged batch is offered again on the next read. A consumer whose ACK was lost may see it twice; the debugger stores it once |
 | Guarantees | No exactly-once claim, disk spool or durable payload store. Payloads exist only in bounded memory and are never logged |
 | Client control | Clients cannot select delivery endpoints or assert raw permission |
 | Withdrawal | Core loss, drain or disable, epoch replacement, expired or revoked owner credentials, peer loss and consumer loss withdraw desired execution. Epoch changes discard old channels |
@@ -447,9 +452,9 @@ its unchanged wire implementation, and clients may request lower limits.
 | Active operations / retained operation IDs | 32 / 10,000 |
 | Targets / points / signals per operation | 16 / 64 / 3 |
 | Capture and channel absolute lifetime | 5 minutes |
-| Channels / pending bytes / pending batches | 32 / 1 MiB each / 16 each |
-| Receipt history / receipt deadline | 1,024 per channel / 2 seconds |
-| OTLP request / resource groups / concurrent deliveries | 256 KiB / 256 / 16 |
+| Channels / pending bytes / pending batches | 32 / 2 MiB each, 32 MiB in all / 64 each |
+| Pending batch age | 10 seconds |
+| OTLP request / resource groups | 256 KiB / 256 |
 | Per-target requested maximums | 1 MiB/s, 5,000 records/s, 16 MiB total, 10,000 records, 64 KiB/record |
 | Filters admitted | 32 expressions per context, 4,096 bytes per expression, 16 KiB total, and within each target's `filter_limits` |
 | Cached credential introspections | 1,024 hashes, 10 s (rejections 2 s) |
@@ -459,8 +464,8 @@ its unchanged wire implementation, and clients may request lower limits.
 | Peer discovery page | Default 16, maximum 64 peers, encoded JSON at most 512 KiB |
 | Generic ingress | 64 KiB request, 1 MiB response, 2 reads + 2 writes, 2-second deadline |
 
-Admission refuses at metadata caps instead of silently losing deduplication
-or generation history. Rotate channels before their receipt-history cap.
+Admission refuses at metadata caps instead of silently losing generation
+history.
 
 **Filter limits per Collector.** Each Collector reports the largest filter it
 compiles in its identity. Peer discovery shows it as
@@ -540,7 +545,7 @@ After restore:
   leases, reconnects peers with empty desired state and never replays
   capture.
 - Create a new channel and explicitly select fresh targets for a new
-  operation after any reservations expire. Old payloads and receipts cannot
+  operation after any reservations expire. Old payloads and ACKs cannot
   be recovered.
 
 **Upgrade.** Keep prior images and verified backups. Back up core and the
@@ -573,7 +578,7 @@ docker compose @captureCompose up -d --wait livecapture-plugin
 - Migration checks all installed checksums and refuses unknown versions. The
   runtime cannot run DDL or delete operation history.
 - Registration, configuration and image versions must match (API version 2,
-  host protocol 3). The public API schema is 2.3.0.
+  host protocol 3). The public API schema is 3.0.0.
 - Clients must follow peer page cursors; the sample two-peer workflows fit a
   default page.
 - Roll back with matching images and a pre-upgrade backup in a fresh volume.

@@ -147,7 +147,7 @@ func TestCaptureDataRefusesForeignBatchesAndBoundsPages(t *testing.T) {
 		out, _ := p.Proto()
 		return out
 	}
-	for name, e := range map[string]fleetcapture.Envelope{
+	for _, e := range map[string]fleetcapture.Envelope{
 		"unknown peer":     {PeerID: strings.Repeat("e", 64), Generation: 1, Data: raw},
 		"old generation":   {PeerID: peer.ID, Generation: 2, Data: raw},
 		"other capture":    {PeerID: peer.ID, Generation: 1, CaptureID: strings.Repeat("c", 32), Data: raw},
@@ -158,19 +158,19 @@ func TestCaptureDataRefusesForeignBatchesAndBoundsPages(t *testing.T) {
 		"wrong tag type":   {PeerID: peer.ID, Generation: 1, Data: retag(func(a pcommon.Map) { a.PutInt("capture.pipeline", 1) })},
 		"unselected point": {PeerID: peer.ID, Generation: 1, Data: retag(func(a pcommon.Map) { a.PutStr("capture.point", "ingress") })},
 	} {
-		if accepted := f.fleet.acked(t, v.ID, f.fleet.enqueue(v.ID, e)); accepted != 0 {
-			t.Fatalf("%s: accepted %d", name, accepted)
-		}
+		f.fleet.acked(t, v.ID, f.fleet.enqueue(v.ID, e), 1)
 	}
 	view, err := f.s.GetCaptureSession(ctx, testCaller, v.ID)
 	if err != nil || view.Data.ReceivedRecords != 0 || view.Data.RejectedRecords != 9 {
 		t.Fatalf("%+v %v", view.Data, err)
 	}
-	// A redelivered batch is acknowledged again but stored once.
+	// A batch offered again after a lost ACK is acknowledged again but
+	// stored once.
 	batch := f.fleet.enqueue(v.ID, fleetcapture.Envelope{PeerID: peer.ID, Generation: 1, Data: raw})
-	f.fleet.acked(t, v.ID, batch)
-	if again := f.fleet.acked(t, v.ID, f.fleet.enqueue(v.ID, fleetcapture.Envelope{BatchID: batch, PeerID: peer.ID, Generation: 1, Data: raw})); again != 1 {
-		t.Fatalf("redelivery acknowledged %d", again)
+	f.fleet.acked(t, v.ID, batch, 1)
+	f.fleet.acked(t, v.ID, f.fleet.enqueue(v.ID, fleetcapture.Envelope{BatchID: batch, PeerID: peer.ID, Generation: 1, Data: raw}), 2)
+	if view, err := f.s.GetCaptureSession(ctx, testCaller, v.ID); err != nil || view.Data.ReceivedRecords != 1 {
+		t.Fatalf("redelivery stored twice: %+v %v", view.Data, err)
 	}
 	ingestLog(t, f, v.ID, strings.Repeat("x", 64000))
 	f.s.budgets.PageBytes = 1024
@@ -386,9 +386,7 @@ func TestCaptureDataConcurrentDeliveryReadAndStop(t *testing.T) {
 		t.Error(err)
 	}
 	for batch := range batches {
-		if accepted := f.fleet.acked(t, v.ID, batch); accepted != 1 {
-			t.Fatalf("batch accepted %d", accepted)
-		}
+		f.fleet.acked(t, v.ID, batch, 1)
 	}
 	view := f.finish(t, v.ID, "stopped")
 	if view.Data.State != "frozen" || view.Data.ReceivedRecords != 80 {

@@ -45,6 +45,16 @@ the generic plugin mechanisms are in [fleet-plugin-host.md](fleet-plugin-host.md
 
 - Before forwarding, the plugin validates the current credential, session,
   peer generation, pipeline, point, signal and expiry.
+- The plugin answers each valid export at once and never makes the Collector
+  wait for the consumer. It appends the batch to the channel's buffer (2 MiB
+  and 64 batches per channel, 32 MiB in all) or, when it does not fit or the
+  consumer is gone, drops it. A batch still unacknowledged after 10 s is
+  dropped when the consumer next reads or a batch arrives. Every drop counts
+  on the target's `delivery` and in the drop metrics; closing a channel
+  drops and counts what it still holds.
+- `next` offers the oldest pending batch until it is acknowledged; an ACK for
+  a batch that is not pending is a no-op, so the plugin keeps no receipt
+  history.
 - A Collector's reservation releases only after its terminal ACK, or the
   deadline plus a five-second guard. Uncertainty therefore cannot admit
   overlapping captures.
@@ -60,8 +70,8 @@ the generic plugin mechanisms are in [fleet-plugin-host.md](fleet-plugin-host.md
 - The private Prometheus route stays available when core host authority is
   unavailable. The public JSON route still follows normal lifecycle and
   readiness gates.
-- Neither collector queries storage, reads payloads or catalogs, waits for an
-  export receipt or creates execution.
+- Neither collector queries storage, reads payloads or catalogs, waits for a
+  consumer or creates execution.
 - If admission holds the metadata lock, the private scrape uses its last
   immutable aggregate snapshot. `metadata_snapshot_available`,
   `metadata_snapshot_stale` and `metadata_snapshot_age_seconds` tell cached

@@ -2282,6 +2282,11 @@ export interface components {
             point?: string;
             signal?: string;
         };
+        CaptureTargetDelivery: {
+            dropped_batches: number;
+            dropped_records: number;
+            received_records: number;
+        };
         CaptureTargetStats: {
             dropped?: {
                 [key: string]: number;
@@ -2294,6 +2299,7 @@ export interface components {
         CaptureTargetStatus: {
             agent_id?: string;
             collector_id: string;
+            delivery?: components["schemas"]["CaptureTargetDelivery"];
             generation: number;
             /** Format: date-time */
             observed_at?: string;

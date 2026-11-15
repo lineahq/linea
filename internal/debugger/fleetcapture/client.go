@@ -246,8 +246,7 @@ func (c *Client) Next(ctx context.Context, channel string) (*Envelope, error) {
 	return &e, nil
 }
 
-// Acknowledge reports a batch's accepted records. Repeating an identical
-// acknowledgement is safe.
+// Acknowledge frees a handled batch. Repeating it is safe.
 func (c *Client) Acknowledge(ctx context.Context, channel string, ack Ack) error {
 	_, err := c.do(ctx, http.MethodPost, c.pluginURL("v1/channels/"+url.PathEscape(channel)+"/acks", nil), nil, ack, nil)
 	return err

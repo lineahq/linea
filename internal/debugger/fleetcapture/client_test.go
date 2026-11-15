@@ -163,7 +163,7 @@ func TestDeliveryRequests(t *testing.T) {
 		},
 		"POST " + prefix + "v1/channels/ch/acks": func(w http.ResponseWriter, _ *http.Request, body []byte) {
 			var ack Ack
-			if json.Unmarshal(body, &ack) != nil || ack.BatchID != batch || ack.Accepted != 2 {
+			if json.Unmarshal(body, &ack) != nil || ack.BatchID != batch {
 				t.Errorf("ack %s", body)
 			}
 			w.WriteHeader(204)
@@ -177,7 +177,7 @@ func TestDeliveryRequests(t *testing.T) {
 	if err != nil || e.BatchID != batch || len(e.Data) != 2 {
 		t.Fatalf("batch %v %v", e, err)
 	}
-	if err := c.Acknowledge(ctx, "ch", Ack{BatchID: batch, Accepted: 2}); err != nil {
+	if err := c.Acknowledge(ctx, "ch", Ack{BatchID: batch}); err != nil {
 		t.Fatal(err)
 	}
 }

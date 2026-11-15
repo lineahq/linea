@@ -26,7 +26,6 @@ func run() error {
 	tokenFile := flag.String("token-file", "", "management bearer secret file")
 	channel := flag.String("channel", "", "previously opened owner-bound channel")
 	duration := flag.Duration("duration", 10*time.Second, "maximum receive duration")
-	ratio := flag.Float64("accept-ratio", 1, "fraction of offered records explicitly accepted")
 	verify := flag.Bool("verify-redaction", false, "verify standard denied attributes are absent")
 	allowHTTP := flag.Bool("allow-insecure-http", false, "acknowledge protected HTTP transport")
 	flag.Parse()
@@ -48,7 +47,7 @@ func run() error {
 	ctx, cancel := context.WithTimeout(ctx, *duration)
 	defer cancel()
 	_ = json.NewEncoder(os.Stdout).Encode(map[string]string{"state": "consumer_ready", "channel_id": *channel})
-	summary, err := c.Consume(ctx, *channel, *ratio, *verify)
+	summary, err := c.Consume(ctx, *channel, *verify)
 	_ = json.NewEncoder(os.Stdout).Encode(summary)
 	return err
 }

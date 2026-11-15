@@ -35,7 +35,7 @@ type Server struct {
 	ops    map[string]*fleetcapture.Operation
 	last   string
 	queue  []fleetcapture.Envelope
-	acks   map[string]int64
+	acks   map[string]int
 	nextID int
 	// bodies are the versions of Config, oldest first, once ManageConfig
 	// has set them.
@@ -54,7 +54,7 @@ const (
 // stop completes them at once; Deliver hands them records.
 func NewServer(t testing.TB) *Server {
 	t.Helper()
-	f := &Server{ops: map[string]*fleetcapture.Operation{}, acks: map[string]int64{}, manage: newStore()}
+	f := &Server{ops: map[string]*fleetcapture.Operation{}, acks: map[string]int{}, manage: newStore()}
 	mu, ops := &f.mu, f.ops
 	reply := func(w http.ResponseWriter, v any) {
 		w.Header().Set("Content-Type", "application/json")
@@ -88,7 +88,7 @@ func NewServer(t testing.TB) *Server {
 			return
 		}
 		mu.Lock()
-		f.acks[ack.BatchID] = ack.Accepted
+		f.acks[ack.BatchID]++
 		mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -251,9 +251,8 @@ func (f *Server) Deliver(signal string, data []byte, records int64) string {
 	return id
 }
 
-// Acked reports the records the debugger accepted of a batch, once it has
-// acknowledged it.
-func (f *Server) Acked(batch string) (int64, bool) {
+// Acked reports how often the debugger acknowledged a batch.
+func (f *Server) Acked(batch string) (int, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	n, ok := f.acks[batch]

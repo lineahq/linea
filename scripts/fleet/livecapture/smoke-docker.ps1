@@ -37,10 +37,10 @@ function Capture-API([string]$Method,[string]$Path,[string]$Body='',[int]$Expect
     Capture-Request $Method "/api/v1/plugins/livecapture/api/$Path" $Token $Body $Expected $Match
 }
 function Capture-NewChannel([string]$Token=$captureAdmin){Capture-API POST v1/channels (@{expires_at=[DateTime]::UtcNow.AddSeconds(110).ToString('o')}|ConvertTo-Json) 201 $Token}
-function Capture-StartConsumer([string]$Channel,[string]$TokenFile,[double]$Ratio=1){
+function Capture-StartConsumer([string]$Channel,[string]$TokenFile){
     $script:captureConsumerSequence++
     $captureName="$captureProject-consumer-$captureConsumerSequence"
-    $null=& docker run --detach --name $captureName --network "${captureProject}_ingress" --cpus 1 --memory 128m --pids-limit 64 --read-only --cap-drop ALL --security-opt no-new-privileges --mount "type=bind,source=$TokenFile,target=/consumer_token,readonly" "linea-fleet-livecapture-consumer:${ImageTag}" --endpoint http://fleet:8080/api/v1/plugins/livecapture/api --allow-insecure-http --token-file /consumer_token --channel $Channel --duration 100s --accept-ratio $Ratio --verify-redaction
+    $null=& docker run --detach --name $captureName --network "${captureProject}_ingress" --cpus 1 --memory 128m --pids-limit 64 --read-only --cap-drop ALL --security-opt no-new-privileges --mount "type=bind,source=$TokenFile,target=/consumer_token,readonly" "linea-fleet-livecapture-consumer:${ImageTag}" --endpoint http://fleet:8080/api/v1/plugins/livecapture/api --allow-insecure-http --token-file /consumer_token --channel $Channel --duration 100s --verify-redaction
     if($LASTEXITCODE -ne 0){throw 'Independent generic consumer startup failed'}
     $captureChildren.Add($captureName)
     Capture-Wait {return ((& docker logs $captureName 2>&1)-join "`n") -match 'consumer_ready'} 'Generic consumer did not start'
@@ -182,7 +182,7 @@ try{
     Capture-Stop $captureOperation.id
     $null=& docker stop --time 5 $captureConsumer
     $null=Capture-API POST v1/captures ($captureRaw|ConvertTo-Json -Depth 12) 403
-    Write-Output 'PASS public API: real TLS/bearer peers, generic consumer receipts for all signals, OTTL filtering/redaction, fixed roster, overlap denial, raw denial, idempotency and acknowledged stop.'
+    Write-Output 'PASS public API: real TLS/bearer peers, a generic consumer receiving all signals, OTTL filtering/redaction, fixed roster, overlap denial, raw denial, idempotency and acknowledged stop.'
 
     # Restart the same real Collector: its capture identity remains, generation advances.
     $captureOldPeer=@($capturePeers|Where-Object{$_.identity.pod -eq 'collector-a'})[0]
@@ -193,25 +193,22 @@ try{
     $captureFreshChannel=Capture-NewChannel
     $null=Capture-API POST v1/captures (Capture-Body $captureFreshChannel.id @($captureOldPeer)) 409
 
-    # Partial receipts are returned as OTLP partial success, rather than full ACK.
-    $capturePartialConsumer=Capture-StartConsumer $captureFreshChannel.id $captureAdminFile 0.5
+    # A filter the Collector rejects fails the capture; it is never reported active.
+    $captureFilterConsumer=Capture-StartConsumer $captureFreshChannel.id $captureAdminFile
     $captureInvalid=Capture-Body $captureFreshChannel.id @($capturePeers[0]) | ConvertFrom-Json
     $captureInvalid.filter.traces.span=@('invalid OTTL expression (')
     $captureInvalidOperation=Capture-API POST v1/captures ($captureInvalid|ConvertTo-Json -Depth 12) 202
     Capture-Wait {return (Capture-API GET "v1/captures/$($captureInvalidOperation.id)").state -eq 'failed'} 'Collector filter rejection was falsely reported active or lost'
-    $capturePartial=Capture-API POST v1/captures (Capture-Body $captureFreshChannel.id @($capturePeers[0]) 25 $false) 202
-    Capture-Active $capturePartial.id
-    Capture-Generate $capturePeers[0].identity.pod
-    Capture-Wait {$captureCounts=Capture-Counts $capturePartialConsumer;return $captureCounts -and $captureCounts.accepted_records -eq 3 -and $captureCounts.rejected_records -eq 3} 'Consumer partial acceptance was not preserved'
-    Capture-Stop $capturePartial.id
-    $null=& docker stop --time 5 $capturePartialConsumer
+    $null=& docker stop --time 5 $captureFilterConsumer
 
-    # A channel without a polling/acknowledging consumer must never ACK OTLP.
+    # A channel without a polling consumer drops what the Collector sends and counts
+    # it, then withdraws the capture; the Collector never waits.
     $captureLostChannel=Capture-NewChannel
     $captureLost=Capture-API POST v1/captures (Capture-Body $captureLostChannel.id @($capturePeers[0]) 12) 202
     Capture-Active $captureLost.id
     Capture-Generate $capturePeers[0].identity.pod
-    Capture-Wait {$captureOutcome=Capture-API GET "v1/captures/$($captureLost.id)";return $captureOutcome.state -in @('stopped','expired') -and $captureOutcome.reason -in @('receipt_uncertain','consumer_unavailable')} 'Lost consumer did not withdraw capture with visible uncertainty'
+    Capture-Wait {$captureOutcome=Capture-API GET "v1/captures/$($captureLost.id)";return $captureOutcome.state -in @('stopped','expired') -and $captureOutcome.reason -eq 'consumer_unavailable'} 'Lost consumer did not withdraw capture'
+    if((Capture-API GET v1/metrics).counters.dropped_batches_total -lt 1){throw 'Lost consumer batches were not dropped and counted'}
 
     $captureExpiryChannel=Capture-NewChannel
     $captureExpiryConsumer=Capture-StartConsumer $captureExpiryChannel.id $captureAdminFile
@@ -221,9 +218,9 @@ try{
     $null=& docker stop --time 5 $captureExpiryConsumer
     # The service's expiry guard may conservatively retain a lease for five seconds.
     Capture-Wait {return (& docker exec $capturePluginPG psql -U postgres -d livecapture -At -c "SELECT count(*) FROM capture.leases WHERE expires_at>now()") -eq '0'} 'Expiry guard did not elapse'
-    Write-Output 'PASS reconnect generation, partial receipts, lost-consumer backpressure and absolute expiry.'
+    Write-Output 'PASS reconnect generation, rejected filter, lost-consumer drops and absolute expiry.'
     $captureObserved=Capture-API GET v1/metrics
-    if($captureObserved.counters.receipt_uncertain_total -lt 1 -or $captureObserved.counters.consumer_rejected_traces_records_total -lt 1){throw 'Real delivery partial/uncertain outcomes not observable'}
+    if($captureObserved.counters.dropped_batches_total -lt 1 -or $captureObserved.counters.delivered_traces_records_total -lt 1){throw 'Real delivery and drops not observable'}
 
     $captureDrainChannel=Capture-NewChannel
     $captureDrainConsumer=Capture-StartConsumer $captureDrainChannel.id $captureAdminFile

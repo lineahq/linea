@@ -222,15 +222,16 @@ func (r *collectorRegistry) recordsLocked(ctx context.Context, c *captureRecord)
 	return records, nil
 }
 
-// ingest stores a delivered batch within the capture's budgets and returns
-// the records it accepted, which the runner acknowledges. A redelivered
-// batch is acknowledged with its first count and not stored again.
-func (r *collectorRegistry) ingest(ctx context.Context, c *captureRecord, e *fleetcapture.Envelope) int64 {
+// ingest stores a delivered batch within the capture's budgets; the runner
+// then acknowledges it. A batch offered again because its ACK was lost is
+// not stored twice.
+func (r *collectorRegistry) ingest(ctx context.Context, c *captureRecord, e *fleetcapture.Envelope) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if accepted, seen := c.batches[e.BatchID]; seen {
-		return accepted
+	if e.BatchID != "" && e.BatchID == c.lastBatch {
+		return
 	}
+	c.lastBatch = e.BatchID
 	accepted, rejected := r.ingestLocked(ctx, c, e)
 	if rejected > 0 {
 		c.view.Data.RejectedRecords += rejected
@@ -238,16 +239,7 @@ func (r *collectorRegistry) ingest(ctx context.Context, c *captureRecord, e *fle
 			r.requestStopLocked(c, "capture_storage_error")
 		}
 	}
-	if collectorText(e.BatchID, 128, true) {
-		c.batches[e.BatchID] = accepted
-		c.batchOrder = append(c.batchOrder, e.BatchID)
-		if len(c.batchOrder) > batchHistory {
-			delete(c.batches, c.batchOrder[0])
-			c.batchOrder = c.batchOrder[1:]
-		}
-	}
 	c.notify()
-	return accepted
 }
 
 func (r *collectorRegistry) ingestLocked(ctx context.Context, c *captureRecord, e *fleetcapture.Envelope) (int64, int64) {
@@ -383,7 +375,6 @@ func (s *Service) recoverCaptures() error {
 			changed:         make(chan struct{}),
 			sensitivities:   map[string]string{},
 			refused:         map[string]bool{},
-			batches:         map[string]int64{},
 			wake:            make(chan struct{}, 1),
 			storeGeneration: v.Generation,
 		}

@@ -455,33 +455,33 @@ print(json.dumps({"authority_id": peer["authority_id"], "plugin_instance": peer[
     phase=$(now_s)
     docker run --rm --network "${project}_capture-ingress" --cpus 1 --memory 128m --pids-limit 64 --read-only --cap-drop ALL \
         "linea-fleet-livecapture-generator:$image_tag" --endpoint capture-probe:4317 || fail 'Capture fault synthetic input failed'
-    fault_reads=0 pending_peak=0 pending_reads=0 uncertain=0
-    limit=$((SECONDS + 12))
+    fault_reads=0 pending_peak=0 pending_reads=0 dropped=0
+    limit=$((SECONDS + 15))
     while :; do
         capture_api GET "v1/channels/$channel_id/next" '' 0 >/dev/null || fail 'Capture API request failed'
         observed=$(capture_api GET v1/metrics) || fail 'Capture API request failed'
-        read -r pending_bytes pending_ok uncertain <<< "$(printf '%s' "$observed" | "$python" -c '
+        read -r pending_bytes pending_ok dropped <<< "$(printf '%s' "$observed" | "$python" -c '
 import json, sys
 d = json.load(sys.stdin)
 g, c = d.get("gauges", {}), d.get("counters", {})
 pending = g.get("pending_bytes", 0)
 ok = pending > 0 and g.get("metadata_snapshot_available") == 1 and g.get("metadata_snapshot_stale") == 0
-print(pending, 1 if ok else 0, c.get("receipt_uncertain_total", 0))')"
+print(pending, 1 if ok else 0, c.get("dropped_batches_total", 0))')"
         pending_peak=$(awk -v a="$pending_peak" -v b="$pending_bytes" 'BEGIN { printf "%.10g", (b > a ? b : a) }')
         [ "$(req GET /api/v1/summary "$admin" | json 'd["connected"]')" = "$collectors" ] || fail 'Consumer fault disrupted fleet presence'
         [ "$(req GET /readyz "$admin" | json 'd["status"]')" = ready ] || fail 'Consumer fault disrupted core readiness'
         if [ "$pending_ok" = 1 ]; then pending_reads=$((pending_reads + 1)); fi
         fault_reads=$((fault_reads + 1))
-        if awk -v u="$uncertain" 'BEGIN { exit !(u > 0) }'; then break; fi
+        if awk -v u="$dropped" 'BEGIN { exit !(u > 0) }'; then break; fi
         sleep 0.1
         [ "$SECONDS" -lt "$limit" ] || break
     done
-    if ! awk -v u="$uncertain" -v p="$pending_peak" -v r="$pending_reads" 'BEGIN { exit !(u >= 1 && p > 0 && r >= 1) }'; then
-        fail 'Unacknowledged real delivery was not observed as bounded uncertainty'
+    if ! awk -v u="$dropped" -v p="$pending_peak" -v r="$pending_reads" 'BEGIN { exit !(u >= 1 && p > 0 && r >= 1) }'; then
+        fail 'Unacknowledged real delivery was not observed as bounded drops'
     fi
     wait_for 120 'Consumer loss did not withdraw capture' capture_is stopped expired
-    record phases.capture_fault "$(printf '{"elapsed_seconds":%s,"core_read_pairs":%s,"core_read_pairs_while_pending":%s,"peak_observed_pending_bytes":%s,"receipt_uncertain":%s,"payloads_recorded":false}' \
-        "$(elapsed_since "$phase")" "$fault_reads" "$pending_reads" "$pending_peak" "$uncertain")"
+    record phases.capture_fault "$(printf '{"elapsed_seconds":%s,"core_read_pairs":%s,"core_read_pairs_while_pending":%s,"peak_observed_pending_bytes":%s,"dropped_batches":%s,"payloads_recorded":false}' \
+        "$(elapsed_since "$phase")" "$fault_reads" "$pending_reads" "$pending_peak" "$dropped")"
     printf '%s' "$observed" > "$dir/plugin-consumer-fault.json"
     snapshot consumer-fault
 fi

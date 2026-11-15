@@ -189,12 +189,12 @@ try{
             if((Capacity-Request GET /readyz $capacityAdmin).status -ne 'ready'){throw 'Consumer fault disrupted core readiness'}
             if($observed.gauges.pending_bytes -gt 0 -and $observed.gauges.metadata_snapshot_available -eq 1 -and $observed.gauges.metadata_snapshot_stale -eq 0){$capacityPendingReads++}
             $capacityFaultReads++
-            if($observed.counters.receipt_uncertain_total -gt 0){break}
+            if($observed.counters.dropped_batches_total -gt 0){break}
             Start-Sleep -Milliseconds 100
-        }while($capacityPhase.Elapsed.TotalSeconds -lt 12)
-        if($observed.counters.receipt_uncertain_total -lt 1 -or $capacityPendingBytes -le 0 -or $capacityPendingReads -lt 1){throw 'Unacknowledged real delivery was not observed as bounded uncertainty'}
+        }while($capacityPhase.Elapsed.TotalSeconds -lt 15)
+        if($observed.counters.dropped_batches_total -lt 1 -or $capacityPendingBytes -le 0 -or $capacityPendingReads -lt 1){throw 'Unacknowledged real delivery was not observed as bounded drops'}
         Capacity-Wait {return (Capacity-Capture GET "v1/captures/$($captureOp.id)").state -in @('stopped','expired')} 'Consumer loss did not withdraw capture'
-        $capacityResult.phases.capture_fault=@{elapsed_seconds=$capacityPhase.Elapsed.TotalSeconds;core_read_pairs=$capacityFaultReads;core_read_pairs_while_pending=$capacityPendingReads;peak_observed_pending_bytes=$capacityPendingBytes;receipt_uncertain=$observed.counters.receipt_uncertain_total;payloads_recorded=$false}
+        $capacityResult.phases.capture_fault=@{elapsed_seconds=$capacityPhase.Elapsed.TotalSeconds;core_read_pairs=$capacityFaultReads;core_read_pairs_while_pending=$capacityPendingReads;peak_observed_pending_bytes=$capacityPendingBytes;dropped_batches=$observed.counters.dropped_batches_total;payloads_recorded=$false}
         [System.IO.File]::WriteAllText((Join-Path $capacityDir 'plugin-consumer-fault.json'),($observed|ConvertTo-Json -Depth 16))
         $null=Capacity-Snapshot 'consumer-fault'
     }
