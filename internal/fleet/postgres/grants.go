@@ -18,7 +18,9 @@ func GrantRuntime(ctx context.Context, url, role string) error {
 		statements := []string{
 			"GRANT USAGE ON SCHEMA fleet TO " + quoted,
 			"GRANT SELECT ON fleet.schema_version TO " + quoted,
-			"GRANT SELECT,INSERT,UPDATE ON fleet.metadata,fleet.credentials,fleet.groups TO " + quoted,
+			"GRANT SELECT,INSERT,UPDATE ON fleet.metadata,fleet.credentials TO " + quoted,
+			// Groups are deleted through the management API.
+			"GRANT SELECT,INSERT,UPDATE,DELETE ON fleet.groups TO " + quoted,
 			// Agents are deleted by retention and capacity eviction.
 			"GRANT SELECT,INSERT,UPDATE,DELETE ON fleet.agents TO " + quoted,
 			"GRANT SELECT,INSERT,UPDATE ON fleet.plugin_lifecycle TO " + quoted,
