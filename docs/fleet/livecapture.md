@@ -9,7 +9,7 @@ The plugin owns everything else about capture.
 | Plugin owns | Capture authorization, schemas, execution, gRPC and OTLP listeners, consumer delivery, its own PostgreSQL database |
 | Collector side | Unchanged components. Collectors authenticate with fleet agent credentials, so one core revocation stops both reporting and capture |
 | Targets | Fleet agents, groups or selectors |
-| Versions | Plugin 0.4.0, API schema 3.0.0, on [host protocol 3](plugins.md) |
+| Versions | Plugin 0.5.0, API schema 3.0.0, on [host protocol 3](plugins.md) |
 | Without it | Fleet reporting stays independently usable |
 
 Related: [operational metrics](operations-metrics.md), [how the plugin works
@@ -52,7 +52,7 @@ docker compose @captureCompose up -d --wait livecapture-plugin
   `--env-file PATH` after the project name), server ID and secrets. Back up
   first. No new bootstrap is needed.
 - **Versions are separate:** core database schema 10; plugin database schema
-  3 (own roles, volume and checksummed migrations 001 to 003); plugin 0.4.0;
+  3 (own roles, volume and checksummed migrations 001 to 003); plugin 0.5.0;
   plugin API schema 3.0.0.
 - **Registration:** grants `agents.read` and `credentials.introspect`.
 - **Combined plugins:** several plugins need one explicit registration file
@@ -577,7 +577,7 @@ docker compose @captureCompose up -d --wait livecapture-plugin
 
 - Migration checks all installed checksums and refuses unknown versions. The
   runtime cannot run DDL or delete operation history.
-- Registration, configuration and image versions must match (API version 2,
+- Registration, configuration and image versions must match (API version 3,
   host protocol 3). The public API schema is 3.0.0.
 - Clients must follow peer page cursors; the sample two-peer workflows fit a
   default page.

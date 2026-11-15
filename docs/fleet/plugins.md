@@ -132,12 +132,12 @@ Pass `--plugins-config FILE` to fleet.
   "plugins": [
     {
       "id": "livecapture",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "endpoint": "http://livecapture-plugin:8090",
       "allow_insecure_http": true,
       "enabled": true,
       "permissions": ["agents.read", "credentials.introspect"],
-      "api_version": "2",
+      "api_version": "3",
       "host_token_file": "host_token",
       "service_token_file": "service_token"
     }

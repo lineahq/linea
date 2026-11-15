@@ -58,7 +58,7 @@ printf '%s' "postgres://capture_app:$(cat "$p/runtime_password")@capture-postgre
 openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=localhost -keyout "$p/tls_key.pem" -out "$p/tls_cert.pem" \
   -addext "subjectAltName=DNS:localhost,DNS:livecapture-plugin,IP:127.0.0.1" -addext "basicConstraints=critical,CA:TRUE" >/dev/null 2>&1 || fail "tls"
 cat > "$p/config.json" <<'EOF'
-{"id":"livecapture","version":"0.4.0","host_endpoint":"http://fleet:8081","allow_insecure_host":true,
+{"id":"livecapture","version":"0.5.0","host_endpoint":"http://fleet:8081","allow_insecure_host":true,
  "host_token_file":"/run/secrets/capture_host_token","service_token_file":"/run/secrets/capture_service_token",
  "http_listen":"0.0.0.0:8090","control_listen":"0.0.0.0:4340","delivery_listen":"0.0.0.0:4341",
  "tls_cert_file":"/run/secrets/capture_tls_cert","tls_key_file":"/run/secrets/capture_tls_key","test_insecure":false,
@@ -87,7 +87,7 @@ compose up --detach --wait livecapture-plugin >"$run/plugin-up.log" 2>&1 || { ca
 wait_for 20 "plugin not ready" sh -c "curl -s -H 'Authorization: Bearer $admin' $base/api/v1/plugins/livecapture | grep -q '\"state\":\"ready\"'"
 status=$(req GET /api/v1/plugins/livecapture/status "$admin")
 echo "$status" | json "d['data']['host_permissions']" | grep -q True || fail "plugin lacks host permissions: $status"
-pass "plugin 0.4.0 ready with agents.read and credentials.introspect"
+pass "plugin 0.5.0 ready with agents.read and credentials.introspect"
 
 expires=$("$python" -c "import datetime;print((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(days=1)).isoformat())")
 unlabeled_id=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')

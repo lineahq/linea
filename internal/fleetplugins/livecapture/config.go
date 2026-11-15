@@ -11,10 +11,10 @@ import (
 	"github.com/lineahq/linea/pluginsdk"
 )
 
-const Version = "0.4.0"
+const Version = "0.5.0"
 
 // APIVersion is the plugin-owned management API schema version.
-const APIVersion = "2"
+const APIVersion = "3"
 
 // DefaultCaptureLabel names the fleet agent-credential label that lists the
 // collector groups a credential may serve captures for.

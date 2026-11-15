@@ -221,6 +221,21 @@ the first item below.
   `agent.credential_changed`. Collectors that share a UID across credentials
   (cloned identities) now see one of them refused.
 
+- Live capture never makes a Collector wait (plugin 0.5.0, plugin API
+  version 3, API schema 3.0.0). The plugin answers every export at once and
+  buffers at most 2 MiB and 64 batches per channel (32 MiB in all); a batch
+  that does not fit or is not read within 10 s is dropped and counted on its
+  target's new `delivery` counters, and the capture goes on instead of
+  ending with `receipt_uncertain` or `delivery_capacity`. An ACK is
+  `{batch_id}`. The web client marks a capture with lost records as
+  incomplete. A Collector ends a remote session as `control_lost` after 10 s
+  without a desired state (the plugin repeats it every 3 s), drains its
+  queues for at most 2 s, and logs one warning when a capture panic ends a
+  session. **Upgrading:** fetch the new `livecapture.json` and
+  `fleet-plugins.json` (or `registration.json`) with the 0.5.0 image: fleet
+  accepts the plugin only when its registration says version 0.5.0 and
+  `api_version` 3.
+
 - Report schema 0.16: each topology component lists what a run does not show
   of the real component (`not_shown`, a code and a sentence each): export
   outcomes of captured exporters (every export succeeds, so errors, retries,
