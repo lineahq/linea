@@ -13,6 +13,7 @@ import (
 
 	"github.com/lineahq/linea/internal/fleet/auth"
 	"github.com/lineahq/linea/internal/fleet/fleet"
+	"github.com/lineahq/linea/internal/fleet/translog"
 	"github.com/lineahq/linea/pluginsdk"
 )
 
@@ -108,7 +109,7 @@ func TestOpaquePluginAPIIsolationAndBounds(t *testing.T) {
 		defer e.mu.Unlock()
 		e.info.Desired = "disabled"
 		e.info.State = "disabled"
-		r.fenceLocked(e)
+		r.fenceLocked(e, translog.ReasonLifecycleDisable)
 	}}
 	req := httptest.NewRequest("POST", "http://fleet/api/v1/plugins/inventory-example/api/v1/custom", body)
 	w = httptest.NewRecorder()

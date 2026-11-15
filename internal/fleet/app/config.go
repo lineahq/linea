@@ -11,6 +11,7 @@ import (
 	"github.com/lineahq/linea/internal/fleet/auth"
 	"github.com/lineahq/linea/internal/fleet/configmgmt"
 	"github.com/lineahq/linea/internal/fleet/inventory"
+	"github.com/lineahq/linea/internal/fleet/translog"
 )
 
 type Config struct {
@@ -40,6 +41,8 @@ type Config struct {
 	// ConfigAllowedComponents restricts config versions to these
 	// kind:type components; empty allows any.
 	ConfigAllowedComponents []string
+	// Log receives the transition log; nil discards it.
+	Log *translog.Logger
 }
 
 func DefaultConfig() Config {

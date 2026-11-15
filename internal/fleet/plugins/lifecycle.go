@@ -7,6 +7,7 @@ import (
 
 	"github.com/lineahq/linea/internal/fleet/auth"
 	"github.com/lineahq/linea/internal/fleet/fleet"
+	"github.com/lineahq/linea/internal/fleet/translog"
 	"github.com/lineahq/linea/pluginsdk"
 )
 
@@ -28,6 +29,7 @@ func (r *Registry) RestoreLifecycle(ctx context.Context, store fleet.PluginLifec
 			}
 			if e.info.Desired != "enabled" {
 				e.info.State = e.info.Desired
+				r.log.Info(translog.PluginStateChanged, translog.ID(translog.KeyPlugin, e.config.ID), translog.Now(stateOf(e.info.State)), translog.Why(translog.ReasonRestored))
 			}
 			e.mu.Unlock()
 		}
@@ -36,10 +38,11 @@ func (r *Registry) RestoreLifecycle(ctx context.Context, store fleet.PluginLifec
 }
 
 // fenceLocked cancels admitted plugin calls and publishes a new host epoch.
-func (r *Registry) fenceLocked(e *entry) {
+func (r *Registry) fenceLocked(e *entry, why translog.Reason) {
 	e.endLease()
 	e.lease, e.endLease = context.WithCancel(r.ctx)
 	e.info.Epoch = pluginsdk.RandomID()
+	r.log.Info(translog.PluginEpochChanged, translog.ID(translog.KeyPlugin, e.config.ID), translog.Why(why))
 }
 
 func (r *Registry) Lifecycle(ctx context.Context, id, action string, caller auth.Principal, expected int64) (Info, error) {
@@ -74,11 +77,13 @@ func (r *Registry) Lifecycle(ctx context.Context, id, action string, caller auth
 		return Info{}, err
 	}
 	e.mu.Lock()
-	r.fenceLocked(e)
+	why := map[string]translog.Reason{"enabled": translog.ReasonLifecycleEnable, "draining": translog.ReasonLifecycleDrain, "disabled": translog.ReasonLifecycleDisable}[desired]
+	r.fenceLocked(e, why)
 	e.info.Desired, e.info.State, e.info.Revision = desired, desired, item.Revision
 	if desired == "enabled" {
 		e.info.State = "unavailable"
 	}
+	r.log.Info(translog.PluginStateChanged, translog.ID(translog.KeyPlugin, id), translog.Now(stateOf(e.info.State)), translog.Why(why), translog.ID(translog.KeyActor, caller.ID))
 	e.info.CheckedAt = nil
 	e.mu.Unlock()
 	return e.snapshot(), nil

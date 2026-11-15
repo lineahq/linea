@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/lineahq/linea/internal/fleet/app"
 	"github.com/lineahq/linea/internal/fleet/postgres"
+	"github.com/lineahq/linea/internal/fleet/translog"
 )
 
 // version is the release, set at link time with -X main.version=X.Y.Z.
@@ -187,17 +187,36 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// Usage and configuration errors are refused here with their authored
+	// message, before the service starts and before it logs anything.
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	cfg.Log = translog.New(stderr)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	return app.Run(ctx, cfg, version, func(management, agent net.Addr) {
-		fmt.Fprintf(stderr, "linea-fleet %s ready: management=%s agent=%s storage=%s\n", version, management, agent, cfg.Storage)
-	})
+	if err := app.Run(ctx, cfg, version, nil); err != nil {
+		// What went wrong is in the process_stopped line as an enumerated
+		// reason. The error itself can carry driver, file or address text
+		// and is never printed.
+		return errServiceFailed
+	}
+	return nil
 }
+
+// errServiceFailed is all the final line says about a failed service; the
+// transition log has the reason.
+var errServiceFailed = errors.New("service stopped with an error; see the process_stopped line for the reason")
+
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return
 		}
+		// The only direct write to stderr. Every error that reaches it is
+		// authored in this repository: flag, secret, validation and offline
+		// administration messages that name a rule, never a value. The
+		// service's own failures are mapped to errServiceFailed above.
 		fmt.Fprintf(os.Stderr, "linea-fleet: %v\n", err)
 		os.Exit(1)
 	}

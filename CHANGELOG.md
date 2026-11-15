@@ -233,6 +233,21 @@ the first item below.
   failed command no longer prints its error text: it logs one line with an enum
   `cause`. The fields are in `docs/fleet/livecapture.md`.
 
+- `linea-fleet` writes a transition log: one JSON line on stderr per state
+  change and none per request, with `time`, `level`, `msg` (the event name),
+  `component` (`fleet`) and fields from a closed set of IDs, enumerated
+  reasons, counts and durations, so no credential, configuration, attribute
+  value, telemetry or error text can reach it. It covers start and stop with
+  the stop reason, replicas registering, being reaped or fencing themselves,
+  the leader lease, database loss and recovery, plugin state and epoch
+  changes, rollout transitions, withheld configs, credential creation and
+  revocation, and one `auth_failures` summary per listener every 10 s. The
+  events and fields are in `docs/fleet/deployment.md`. The `ready:` line on
+  stderr is replaced by `process_ready`, and a failure of the running
+  service now prints one fixed sentence after its `process_stopped` line
+  instead of the error text. **Upgrading:** nothing to change; a log shipper
+  that matched the `ready:` line matches `"msg":"process_ready"`.
+
 - Live capture never makes a Collector wait (plugin 0.5.0, plugin API
   version 3, API schema 3.0.0). The plugin answers every export at once and
   buffers at most 2 MiB and 64 batches per channel (32 MiB in all); a batch

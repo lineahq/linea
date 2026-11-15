@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/lineahq/linea/internal/fleet/auth"
 	"github.com/lineahq/linea/internal/fleet/fleet"
+	"github.com/lineahq/linea/internal/fleet/translog"
 )
 
 func requireAdmin(ctx context.Context, tx pgx.Tx, id string) error {
@@ -205,7 +206,7 @@ func insertCredential(ctx context.Context, tx pgx.Tx, c auth.Credential) error {
 	return err
 }
 func (s *Store) InsertCredential(ctx context.Context, actor string, c auth.Credential) error {
-	return s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
+	err := s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if err := requireAdmin(ctx, tx, actor); err != nil {
 			return err
 		}
@@ -219,6 +220,10 @@ func (s *Store) InsertCredential(ctx context.Context, actor string, c auth.Crede
 		}
 		return s.event(ctx, tx, "credential.created", c.ID, actor, nil)
 	})
+	if err == nil {
+		s.log.Info(translog.CredentialCreated, translog.ID(translog.KeyCredential, c.ID), translog.ID(translog.KeyActor, actor))
+	}
+	return err
 }
 
 // SetCredentialRemoteConfig changes whether config management may send
@@ -226,7 +231,9 @@ func (s *Store) InsertCredential(ctx context.Context, actor string, c auth.Crede
 // refreshes its policy cache on the fleet_config notification.
 func (s *Store) SetCredentialRemoteConfig(ctx context.Context, actor, id string, enabled bool) (auth.Credential, error) {
 	var c auth.Credential
+	changed := false
 	err := s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		changed = false
 		if err := requireAdmin(ctx, tx, actor); err != nil {
 			return err
 		}
@@ -249,12 +256,22 @@ func (s *Store) SetCredentialRemoteConfig(ctx context.Context, actor, id string,
 			return err
 		}
 		detail, _ := json.Marshal(map[string]bool{"remote_config": enabled})
+		changed = true
 		return s.event(ctx, tx, "credential.updated", id, actor, detail)
 	})
+	if err == nil && changed {
+		why := translog.ReasonRemoteConfigDisabled
+		if enabled {
+			why = translog.ReasonRemoteConfigEnabled
+		}
+		s.log.Info(translog.CredentialUpdated, translog.ID(translog.KeyCredential, id), translog.ID(translog.KeyActor, actor), translog.Why(why))
+	}
 	return c, err
 }
 func (s *Store) RevokeCredential(ctx context.Context, actor, id string) error {
-	return s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
+	revokedNow := false
+	err := s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		revokedNow = false
 		if err := requireAdmin(ctx, tx, actor); err != nil {
 			return err
 		}
@@ -305,8 +322,13 @@ func (s *Store) RevokeCredential(ctx context.Context, actor, id string) error {
 		if _, err := tx.Exec(ctx, "SELECT pg_notify('fleet_credential_revoked', $1)", id); err != nil {
 			return err
 		}
+		revokedNow = true
 		return s.event(ctx, tx, "credential.revoked", id, actor, nil)
 	})
+	if err == nil && revokedNow {
+		s.log.Info(translog.CredentialRevoked, translog.ID(translog.KeyCredential, id), translog.ID(translog.KeyActor, actor))
+	}
+	return err
 }
 func (s *Store) ActiveCredentialIDs(ctx context.Context, ids []string) (map[string]bool, error) {
 	ctx, cancel := bounded(ctx)

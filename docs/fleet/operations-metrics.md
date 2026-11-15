@@ -143,6 +143,8 @@ object.
 
 ## Related
 
+- [Transition log](deployment.md#transition-log): one line per state change
+  with its reason, for what the counters cannot say.
 - [Capacity harness](../../tools/fleet-capacity/README.md): execution modes,
   resource budgets, output interpretation and the dedicated-host profiles.
 - [OpAMP simulator](../../tools/fleet-capacity/simulator.md): exercises

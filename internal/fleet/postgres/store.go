@@ -21,6 +21,7 @@ import (
 	"github.com/lineahq/linea/internal/fleet/auth"
 	"github.com/lineahq/linea/internal/fleet/configmgmt"
 	"github.com/lineahq/linea/internal/fleet/fleet"
+	"github.com/lineahq/linea/internal/fleet/translog"
 	"github.com/lineahq/linea/pluginsdk/metrics"
 )
 
@@ -81,9 +82,12 @@ type Options struct {
 	Heartbeat, Alive, Flush, Rollouts time.Duration
 	// Retention deletes agents disconnected for longer; zero keeps them.
 	Retention time.Duration
+	// Log receives the store's transition lines; nil discards them.
+	Log *translog.Logger
 }
 
 type Store struct {
+	log       *translog.Logger
 	closeOnce sync.Once
 	stopOnce  sync.Once
 	closed    atomic.Bool
@@ -101,6 +105,7 @@ type Store struct {
 	lost      chan struct{}
 	lostOnce  sync.Once
 	lostWhy   string // written once before lost closes
+	lostCause translog.Reason
 
 	seenMu sync.Mutex
 	seen   map[string]seenAt
@@ -340,7 +345,7 @@ func Open(ctx context.Context, url string, options Options) (*Store, error) {
 	}
 	poolConfig.ConnConfig = cfg
 	poolConfig.MaxConns, poolConfig.MinConns = 8, 1
-	s := &Store{options: options, replica: randomID(), lost: make(chan struct{}), seen: map[string]seenAt{}, eventWake: make(chan struct{}), reapBatch: reapBatch,
+	s := &Store{log: options.Log, options: options, replica: randomID(), lost: make(chan struct{}), seen: map[string]seenAt{}, eventWake: make(chan struct{}), reapBatch: reapBatch,
 		uses: configmgmt.NewUsesCache()}
 	cfg.Tracer = s
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
@@ -355,6 +360,7 @@ func Open(ctx context.Context, url string, options Options) (*Store, error) {
 		return nil, err
 	}
 	s.heartbeat.Store(time.Now().UnixNano())
+	s.log.Info(translog.ReplicaRegistered, translog.ID(translog.KeyReplica, s.replica))
 	s.writer = newWriter(s)
 	s.loops.Add(5)
 	go s.writer.run()
@@ -474,12 +480,16 @@ func (s *Store) ReplicaID() string { return s.replica }
 // treat its agents as disconnected by then, so the process must shut down.
 func (s *Store) Lost() <-chan struct{} { return s.lost }
 
-func (s *Store) markLost(why string) {
+func (s *Store) markLost(cause translog.Reason, why string) {
 	s.lostOnce.Do(func() {
-		s.lostWhy = why
+		s.lostWhy, s.lostCause = why, cause
+		s.log.Error(translog.ReplicaFenced, translog.ID(translog.KeyReplica, s.replica), translog.Why(cause))
 		close(s.lost)
 	})
 }
+
+// LostCause is the enumerated form of LostReason, for the transition log.
+func (s *Store) LostCause() translog.Reason { return s.lostCause }
 
 // LostReason says why the replica fenced itself; valid once Lost is closed.
 // It names an error class, never connection details.

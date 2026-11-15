@@ -23,6 +23,7 @@ import (
 	"github.com/lineahq/linea/internal/fleet/configmgmt"
 	"github.com/lineahq/linea/internal/fleet/fleet"
 	"github.com/lineahq/linea/internal/fleet/plugins"
+	"github.com/lineahq/linea/internal/fleet/translog"
 	"github.com/lineahq/linea/pluginsdk"
 	"github.com/lineahq/linea/pluginsdk/metrics"
 )
@@ -67,6 +68,18 @@ type Handler struct {
 	requests, errors  atomic.Uint64
 	duration          metrics.Duration
 	metricWriters     []func(io.Writer)
+	// log is nil until SetLogger; a nil logger discards.
+	log *translog.Logger
+}
+
+// SetLogger binds the transition log before serving requests. The handler
+// only counts failed authentications; the logger writes the summary.
+func (h *Handler) SetLogger(log *translog.Logger) { h.log = log }
+
+// refuse answers an unauthenticated request and counts it for the summary.
+func (h *Handler) refuse(w http.ResponseWriter) {
+	h.log.AuthFailure(translog.ListenerManagement)
+	failure(w, auth.ErrUnauthorized)
 }
 
 func New(store fleet.Repository, credential auth.Bearer, info ServerInfo) *Handler {
@@ -236,12 +249,16 @@ func (h *Handler) ServeHTTP(raw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, err := h.access.Authenticate(ctx, r)
+	if errors.Is(err, auth.ErrUnauthorized) {
+		h.refuse(w)
+		return
+	}
 	if err != nil {
 		failure(w, err)
 		return
 	}
 	if p.Role != "admin" && p.Role != "operator" && p.Role != "reader" {
-		failure(w, auth.ErrUnauthorized)
+		h.refuse(w)
 		return
 	}
 	acting, err := pluginsdk.ReadActing(r.Header)
@@ -440,7 +457,7 @@ func (h *Handler) pluginResource(w http.ResponseWriter, r *http.Request, p auth.
 			return
 		}
 		if !active[p.ID] {
-			failure(w, auth.ErrUnauthorized)
+			h.refuse(w)
 			return
 		}
 		h.plugins.ServeAPI(w, r, parts[0], strings.Join(parts[2:], "/"), p)

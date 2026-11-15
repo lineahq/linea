@@ -21,22 +21,59 @@ import (
 	"github.com/lineahq/linea/internal/fleet/inventory"
 	"github.com/lineahq/linea/internal/fleet/plugins"
 	"github.com/lineahq/linea/internal/fleet/postgres"
+	"github.com/lineahq/linea/internal/fleet/translog"
 	"github.com/lineahq/linea/pluginsdk"
 )
 
 // Run returns only after cancellation or a listener failure and bounded shutdown.
 // notify runs after both listeners are bound and contains no credentials.
+//
+// Run writes the process transitions to cfg.Log: process_started, process_ready
+// and process_stopped with an enumerated reason, which is the only account of
+// why the process stopped. The returned error is for the caller's exit code and
+// tests; it may carry detail that never reaches the log.
 func Run(ctx context.Context, cfg Config, version string, notify func(management, agent net.Addr)) error {
+	log, started := cfg.Log, time.Now()
 	if err := cfg.Validate(); err != nil {
+		log.Error(translog.ProcessStopped, translog.Version(version), translog.Why(translog.ReasonConfigInvalid))
 		return err
 	}
-	return runWithStore(ctx, cfg, version, notify)
+	log.Info(translog.ProcessStarted, translog.Version(version))
+	// The summaries run for the life of the process and flush once more at
+	// the end, so the last window of failed authentications is not lost.
+	summaries, stopSummaries := context.WithCancel(context.Background())
+	ticker := time.NewTicker(translog.SummaryInterval)
+	summarized := make(chan struct{})
+	go func() { defer close(summarized); log.Summarize(summaries, ticker.C) }()
+	reason, err := runWithStore(ctx, cfg, version, notify)
+	stopSummaries()
+	<-summarized
+	ticker.Stop()
+	stopped := []translog.Attr{translog.Version(version), translog.Why(reason), translog.Duration(translog.DurationUptime, time.Since(started))}
+	if err != nil {
+		log.Error(translog.ProcessStopped, stopped...)
+	} else {
+		log.Info(translog.ProcessStopped, stopped...)
+	}
+	return err
 }
 
-func runWithStore(ctx context.Context, cfg Config, version string, notify func(management, agent net.Addr)) error {
+// openReason names why the database could not be opened.
+func openReason(err error) translog.Reason {
+	switch {
+	case errors.Is(err, auth.ErrUnauthorized):
+		return translog.ReasonNoAdminCredential
+	case errors.Is(err, fleet.ErrConflict):
+		return translog.ReasonSchemaConflict
+	}
+	return translog.ReasonDatabaseUnavailable
+}
+
+func runWithStore(ctx context.Context, cfg Config, version string, notify func(management, agent net.Addr)) (translog.Reason, error) {
+	log := cfg.Log
 	registrations, err := plugins.Load(cfg.PluginsConfig, cfg.APIToken, cfg.AgentToken)
 	if err != nil {
-		return err
+		return translog.ReasonPluginsInvalid, err
 	}
 	var store fleet.Repository
 	var control fleet.ControlRepository
@@ -48,10 +85,10 @@ func runWithStore(ctx context.Context, cfg Config, version string, notify func(m
 	var lost <-chan struct{}
 	if cfg.Storage == "postgres" {
 		startupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		durable, err = postgres.Open(startupCtx, cfg.DatabaseURL, postgres.Options{ServerID: cfg.ServerID, MaxAgents: cfg.Limits.MaxAgents, MaxEvents: cfg.Limits.MaxEvents, Retention: cfg.AgentRetention})
+		durable, err = postgres.Open(startupCtx, cfg.DatabaseURL, postgres.Options{ServerID: cfg.ServerID, MaxAgents: cfg.Limits.MaxAgents, MaxEvents: cfg.Limits.MaxEvents, Retention: cfg.AgentRetention, Log: log})
 		cancel()
 		if err != nil {
-			return fmt.Errorf("open fleet database (migrate/bootstrap first): %w", err)
+			return openReason(err), fmt.Errorf("open fleet database (migrate/bootstrap first): %w", err)
 		}
 		defer durable.Close()
 		store, control, lost = durable, durable, durable.Lost()
@@ -70,18 +107,18 @@ func runWithStore(ctx context.Context, cfg Config, version string, notify func(m
 	if cfg.TLSCert != "" {
 		cert, err := tls.LoadX509KeyPair(cfg.TLSCert, cfg.TLSKey)
 		if err != nil {
-			return fmt.Errorf("load TLS identity: %w", err)
+			return translog.ReasonTLSIdentity, fmt.Errorf("load TLS identity: %w", err)
 		}
 		tlsConfig = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}
 	}
 	management, err := net.Listen("tcp", cfg.ManagementAddr)
 	if err != nil {
-		return fmt.Errorf("management listen: %w", err)
+		return translog.ReasonListenFailed, fmt.Errorf("management listen: %w", err)
 	}
 	defer management.Close()
 	agent, err := net.Listen("tcp", cfg.AgentAddr)
 	if err != nil {
-		return fmt.Errorf("agent listen: %w", err)
+		return translog.ReasonListenFailed, fmt.Errorf("agent listen: %w", err)
 	}
 	defer agent.Close()
 	info := api.ServerInfo{ServerID: cfg.ServerID, Version: version, Storage: cfg.Storage, Limits: cfg.Limits}
@@ -89,12 +126,14 @@ func runWithStore(ctx context.Context, cfg Config, version string, notify func(m
 		info.ReplicaID = durable.ReplicaID()
 	}
 	apiHandler := api.NewAuthorized(store, apiAccess, info, control, credentials)
+	apiHandler.SetLogger(log)
 	registry := plugins.New(ctx, registrations, store)
 	defer registry.Close()
+	registry.SetLogger(log)
 	registry.SetHost(control, introspector)
 	if lifecycle, ok := store.(fleet.PluginLifecycleRepository); ok {
 		if err := registry.RestoreLifecycle(ctx, lifecycle); err != nil {
-			return err
+			return translog.ReasonDatabaseUnavailable, err
 		}
 	}
 	apiHandler.SetPlugins(registry)
@@ -105,19 +144,20 @@ func runWithStore(ctx context.Context, cfg Config, version string, notify func(m
 	if len(registrations) > 0 {
 		host, err = net.Listen("tcp", cfg.PluginAddr)
 		if err != nil {
-			return errors.New("plugin host listen failed")
+			return translog.ReasonListenFailed, errors.New("plugin host listen failed")
 		}
 		defer host.Close()
 	}
 	ingest, err := inventory.New(cfg.AgentAttributes, cfg.StoreHealthErrors)
 	if err != nil {
-		return err
+		return translog.ReasonConfigInvalid, err
 	}
 	gw, err := gateway.NewAuthorized(store, agentAccess, ingest, cfg.Limits.MaxConnections, cfg.Limits.MaxMessageBytes)
 	if err != nil {
-		return err
+		return translog.ReasonInternal, err
 	}
 	defer gw.Close()
+	gw.SetLogger(log)
 	gw.SetPendingSessions(cfg.Limits.MaxPendingSessions)
 	if durable != nil {
 		durable.SetSignals(gw.CloseAgent, gw.CloseCredential)
@@ -191,16 +231,20 @@ func runWithStore(ctx context.Context, cfg Config, version string, notify func(m
 		case <-stopHealth:
 		}
 	}()
+	log.Info(translog.ProcessReady)
 	if notify != nil {
 		notify(management.Addr(), agent.Addr())
 	}
 	var runErr error
+	reason := translog.ReasonSignal
 	select {
 	case <-ctx.Done():
 	case runErr = <-healthError:
+		reason = translog.ReasonReplicaFenced
 	case runErr = <-errorsCh:
+		reason = translog.ReasonListenerFailed
 		if errors.Is(runErr, http.ErrServerClosed) {
-			runErr = nil
+			runErr, reason = nil, translog.ReasonShutdown
 		}
 	}
 	apiHandler.SetReady(false)
@@ -216,6 +260,7 @@ func runWithStore(ctx context.Context, cfg Config, version string, notify func(m
 		select {
 		case <-spread:
 		case runErr = <-healthError:
+			reason = translog.ReasonReplicaFenced
 		}
 		stopSpread()
 		<-spread
@@ -236,7 +281,11 @@ func runWithStore(ctx context.Context, cfg Config, version string, notify func(m
 	agentErr := agentServer.Shutdown(shutdownCtx)
 	_ = managementServer.Close()
 	_ = agentServer.Close()
-	return errors.Join(runErr, gatewayErr, managementErr, agentErr, hostErr)
+	err = errors.Join(runErr, gatewayErr, managementErr, agentErr, hostErr)
+	if runErr == nil && err != nil {
+		reason = translog.ReasonShutdownIncomplete
+	}
+	return reason, err
 }
 
 type limitedListener struct {

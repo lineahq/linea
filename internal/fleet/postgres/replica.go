@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/lineahq/linea/internal/fleet/fleet"
+	"github.com/lineahq/linea/internal/fleet/translog"
 )
 
 const leaderLease = "leader"
@@ -26,6 +27,8 @@ func (s *Store) heartbeatLoop() {
 	ticker := time.NewTicker(s.options.Heartbeat)
 	defer ticker.Stop()
 	failure := "none"
+	// down is when heartbeat writes began to fail; zero while they succeed.
+	var down time.Time
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -43,16 +46,25 @@ func (s *Store) heartbeatLoop() {
 			s.heartbeat.Store(time.Now().UnixNano())
 		case err == nil:
 			// The leader reaped this replica; its ownership is already gone.
-			s.markLost("registration reaped")
+			s.markLost(translog.ReasonRegistrationReaped, "registration reaped")
 		default:
-			failure = errorClass(err)
+			var class translog.Reason
+			failure, class = errorClass(err)
+			if down.IsZero() {
+				down = time.Now()
+				s.log.Warn(translog.DatabaseLost, translog.ID(translog.KeyReplica, s.replica), translog.Why(class))
+			}
+		}
+		if err == nil && !down.IsZero() {
+			s.log.Info(translog.DatabaseRecovered, translog.ID(translog.KeyReplica, s.replica), translog.Duration(translog.DurationOutage, time.Since(down)))
+			down = time.Time{}
 		}
 		if age := time.Since(time.Unix(0, s.heartbeat.Load())); age >= s.options.Alive*8/10 {
-			s.markLost("heartbeat not renewed for " + age.Round(time.Second).String() + " (last error: " + failure + ")")
+			s.markLost(translog.ReasonHeartbeatLapsed, "heartbeat not renewed for "+age.Round(time.Second).String()+" (last error: "+failure+")")
 		}
 		select {
 		case <-s.lost:
-			s.leader.Store(false)
+			s.setLeader(false, translog.ReasonReplicaFenced)
 			continue
 		default:
 		}
@@ -63,25 +75,39 @@ func (s *Store) heartbeatLoop() {
 }
 
 // errorClass names a failure without connection details for the fencing
-// reason: a timeout, a SQLSTATE, or a connection error.
-func errorClass(err error) string {
+// reason: a timeout, a SQLSTATE, or a connection error. The text goes into
+// the fencing error; the enumerated class goes into the transition log.
+func errorClass(err error) (string, translog.Reason) {
 	var pgErr *pgconn.PgError
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
-		return "timeout"
+		return "timeout", translog.ReasonTimeout
 	case errors.As(err, &pgErr):
-		return "SQLSTATE " + pgErr.Code
+		return "SQLSTATE " + pgErr.Code, translog.ReasonSQLState
 	default:
-		return "connection"
+		return "connection", translog.ReasonConnection
 	}
+}
+
+// setLeader records the lease state and logs each change once.
+func (s *Store) setLeader(leader bool, why translog.Reason) {
+	if s.leader.Swap(leader) == leader {
+		return
+	}
+	if leader {
+		s.log.Info(translog.LeaderGained, translog.ID(translog.KeyReplica, s.replica))
+		return
+	}
+	s.log.Info(translog.LeaderLost, translog.ID(translog.KeyReplica, s.replica), translog.Why(why))
 }
 
 func (s *Store) lead(ctx context.Context) {
 	tag, err := s.pool.Exec(ctx, `INSERT INTO fleet.leases(name,holder,expires_at) VALUES($1,$2,now() + $3 * interval '1 millisecond')
 		ON CONFLICT(name) DO UPDATE SET holder=EXCLUDED.holder,expires_at=EXCLUDED.expires_at
 		WHERE fleet.leases.holder=EXCLUDED.holder OR fleet.leases.expires_at < now()`, leaderLease, s.replica, s.aliveMillis())
-	s.leader.Store(err == nil && tag.RowsAffected() == 1)
-	if !s.leader.Load() {
+	held := err == nil && tag.RowsAffected() == 1
+	s.setLeader(held, translog.ReasonLeaseUnavailable)
+	if !held {
 		return
 	}
 	// Jobs are idempotent, so a brief overlap during lease handover is safe.
@@ -111,6 +137,7 @@ func (s *Store) reapAll(ctx context.Context, budget time.Duration) (int64, error
 // UID-ordered batches and records one disconnect event per agent.
 func (s *Store) reap(ctx context.Context) (int64, error) {
 	var cleared int64
+	var removed []string
 	err := s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `WITH victims AS (
 				SELECT a.id, o.heartbeat_at FROM fleet.agents a LEFT JOIN fleet.replicas o ON o.id=a.owner_replica
@@ -130,11 +157,23 @@ func (s *Store) reap(ctx context.Context) (int64, error) {
 				return err
 			}
 		}
-		_, err = tx.Exec(ctx, `DELETE FROM fleet.replicas r WHERE r.heartbeat_at < now() - $1 * interval '1 millisecond'
-			AND NOT EXISTS (SELECT 1 FROM fleet.agents a WHERE a.owner_replica=r.id)`, s.aliveMillis())
+		rows, err := tx.Query(ctx, `DELETE FROM fleet.replicas r WHERE r.heartbeat_at < now() - $1 * interval '1 millisecond'
+			AND NOT EXISTS (SELECT 1 FROM fleet.agents a WHERE a.owner_replica=r.id) RETURNING r.id`, s.aliveMillis())
+		if err != nil {
+			return err
+		}
+		removed, err = pgx.CollectRows(rows, pgx.RowTo[string])
 		return err
 	})
 	s.reaped.Add(uint64(cleared))
+	if err == nil {
+		if cleared > 0 {
+			s.log.Warn(translog.AgentsReleased, translog.Count(translog.CountAgents, cleared))
+		}
+		for _, id := range removed {
+			s.log.Warn(translog.ReplicaReaped, translog.ID(translog.KeyReplica, id))
+		}
+	}
 	return cleared, err
 }
 
@@ -400,6 +439,10 @@ func (s *Store) StopAgents(ctx context.Context) error {
 			}
 			return s.event(ctx, tx, "replica.stopped", s.replica, "server", nil)
 		})
+		if result == nil {
+			s.setLeader(false, translog.ReasonShutdown)
+			s.log.Info(translog.ReplicaDeregistered, translog.ID(translog.KeyReplica, s.replica))
+		}
 	})
 	return result
 }

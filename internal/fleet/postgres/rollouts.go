@@ -15,7 +15,34 @@ import (
 	"github.com/lineahq/linea/internal/fleet/auth"
 	"github.com/lineahq/linea/internal/fleet/configmgmt"
 	"github.com/lineahq/linea/internal/fleet/fleet"
+	"github.com/lineahq/linea/internal/fleet/translog"
 )
+
+// logRolloutState writes the transition of a rollout that committed.
+func (s *Store) logRolloutState(id, actor string, state configmgmt.RolloutState, why translog.Reason) {
+	var to translog.State
+	switch state {
+	case configmgmt.Running:
+		to = translog.StateRunning
+	case configmgmt.Paused:
+		to = translog.StatePaused
+	case configmgmt.RollingBack:
+		to = translog.StateRollingBack
+	case configmgmt.Completed:
+		to = translog.StateCompleted
+	case configmgmt.RolledBack:
+		to = translog.StateRolledBack
+	case configmgmt.Cancelled:
+		to = translog.StateCancelled
+	}
+	s.log.Info(translog.RolloutStateChanged, translog.ID(translog.KeyRollout, id), translog.Now(to), translog.Why(why), translog.ID(translog.KeyActor, actor))
+}
+
+// logRolloutCreated writes the admission of a rollout that committed.
+func (s *Store) logRolloutCreated(v configmgmt.RolloutView, actor string) {
+	s.log.Info(translog.RolloutCreated, translog.ID(translog.KeyRollout, v.ID), translog.ID(translog.KeyAssignment, v.AssignmentID), translog.ID(translog.KeyActor, actor),
+		translog.Count(translog.CountTargets, int64(v.Targets)), translog.Count(translog.CountWaves, int64(v.WaveCount)))
+}
 
 // Rollouts (M6 step 6b). Every change to what agents run is a rollout: the
 // API admits it with a snapshot of its targets, and the leader's controller
@@ -111,6 +138,9 @@ func (s *Store) CreateAssignment(ctx context.Context, actor string, a configmgmt
 		changed.Version = target
 		return s.assignmentChanged(ctx, tx, actor, "created", changed)
 	})
+	if err == nil {
+		s.logRolloutCreated(view, actor)
+	}
 	return a, view, err
 }
 
@@ -155,6 +185,9 @@ func (s *Store) CreateRollout(ctx context.Context, actor string, req configmgmt.
 		view, err = s.startRollout(ctx, tx, actor, req, a)
 		return err
 	})
+	if err == nil {
+		s.logRolloutCreated(view, actor)
+	}
 	return view, err
 }
 
@@ -401,6 +434,7 @@ func (s *Store) ControlRollout(ctx context.Context, actor, id string, action con
 	if !fleet.ValidID(id) {
 		return configmgmt.RolloutView{}, fleet.ErrNotFound
 	}
+	var moved configmgmt.RolloutState
 	err := s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if err := requireManager(ctx, tx, actor); err != nil {
 			return err
@@ -413,6 +447,7 @@ func (s *Store) ControlRollout(ctx context.Context, actor, id string, action con
 		if err != nil {
 			return err
 		}
+		moved = next
 		switch next {
 		case configmgmt.Paused:
 			_, err = tx.Exec(ctx, "UPDATE fleet.rollouts SET state='paused',reason='operator',updated_at=now() WHERE id=$1", id)
@@ -434,6 +469,7 @@ func (s *Store) ControlRollout(ctx context.Context, actor, id string, action con
 	if err != nil {
 		return configmgmt.RolloutView{}, err
 	}
+	s.logRolloutState(id, actor, moved, translog.ReasonOperator)
 	return s.GetRollout(ctx, id)
 }
 
@@ -545,7 +581,10 @@ func (s *Store) advanceRollouts(ctx context.Context) error {
 }
 
 func (s *Store) advanceRollout(ctx context.Context, id string, base []configmgmt.Target, credentials map[string]map[string]string) error {
-	return s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
+	// logged is set by the step taken and runs only once it committed.
+	var logged func()
+	err := s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		logged = nil
 		var digest []byte
 		var now time.Time
 		r, phase, err := scanRollout(tx.QueryRow(ctx, "SELECT "+rolloutColumns+`,v.sha256,now() FROM fleet.rollouts r
@@ -575,6 +614,7 @@ func (s *Store) advanceRollout(ctx context.Context, id string, base []configmgmt
 			if err != nil || !configmgmt.Reverted(state, all, now) {
 				return err
 			}
+			logged = func() { s.logRolloutState(id, "server", configmgmt.RolledBack, translog.ReasonController) }
 			return s.finishRollout(ctx, tx, "server", r, configmgmt.RolledBack)
 		}
 		open, err := s.observe(ctx, tx, id, " AND t.outcome IN ('released','baking','offline')", targets, credentials, required)
@@ -615,22 +655,33 @@ func (s *Store) advanceRollout(ctx context.Context, id string, base []configmgmt
 			if _, err := tx.Exec(ctx, "SELECT pg_notify('fleet_config','')"); err != nil {
 				return err
 			}
+			logged = func() {
+				s.log.Info(translog.RolloutWaveReleased, translog.ID(translog.KeyRollout, id), translog.Count(translog.CountWave, int64(next)),
+					translog.Count(translog.CountTargets, releasedCount), translog.Count(translog.CountIncompatible, incompatible))
+			}
 			return s.event(ctx, tx, "rollout.wave_released", id, "server", mustJSON(map[string]int64{"wave": int64(next), "targets": releasedCount, "incompatible": incompatible}))
 		case configmgmt.Complete:
+			logged = func() { s.logRolloutState(id, "server", configmgmt.Completed, translog.ReasonController) }
 			return s.finishRollout(ctx, tx, "server", r, configmgmt.Completed)
 		case configmgmt.PauseAction:
 			if _, err := tx.Exec(ctx, "UPDATE fleet.rollouts SET state='paused',reason='threshold',updated_at=now() WHERE id=$1", id); err != nil {
 				return err
 			}
+			logged = func() { s.logRolloutState(id, "server", configmgmt.Paused, translog.ReasonThreshold) }
 			return s.event(ctx, tx, "rollout.paused", id, "server", mustJSON(map[string]string{"reason": "threshold"}))
 		case configmgmt.Rollback:
 			if err := startRollback(ctx, tx, id, "threshold"); err != nil {
 				return err
 			}
+			logged = func() { s.logRolloutState(id, "server", configmgmt.RollingBack, translog.ReasonThreshold) }
 			return s.event(ctx, tx, "rollout.rolling_back", id, "server", mustJSON(map[string]string{"reason": "threshold"}))
 		}
 		return nil
 	})
+	if err == nil && logged != nil {
+		logged()
+	}
+	return err
 }
 
 // withOverride returns base with this rollout's override rebuilt from the

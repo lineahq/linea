@@ -13,6 +13,7 @@ import (
 
 	"github.com/lineahq/linea/internal/fleet/configmgmt"
 	"github.com/lineahq/linea/internal/fleet/fleet"
+	"github.com/lineahq/linea/internal/fleet/translog"
 	"github.com/open-telemetry/opamp-go/protobufs"
 )
 
@@ -245,6 +246,13 @@ func (g *Gateway) deliver(ctx context.Context, s *session, prev configmgmt.Statu
 	}
 	if len(d.Missing) > 0 {
 		c.withheld.Add(1)
+		// One line per session and withheld plan, not per evaluation.
+		if !bytes.Equal(s.withheld, d.Plan.Hash) {
+			s.withheld = bytes.Clone(d.Plan.Hash)
+			g.log.Limited(translog.ConfigWithheld, translog.ID(translog.KeyAgent, s.id), translog.Why(translog.ReasonIncompatibleComponents))
+		}
+	} else {
+		s.withheld = nil
 	}
 	if d.ClearHold {
 		held = nil
@@ -264,6 +272,7 @@ func (g *Gateway) deliver(ctx context.Context, s *session, prev configmgmt.Statu
 		s.held = stored
 		if next != "" {
 			c.holdsSet.Add(1)
+			g.log.Limited(translog.ConfigWithheld, translog.ID(translog.KeyAgent, s.id), translog.Why(translog.ReasonAgentReportedFailure))
 		}
 	}
 	if !d.Send {

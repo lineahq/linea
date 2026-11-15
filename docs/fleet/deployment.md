@@ -203,6 +203,73 @@ networks:
     ipam: {config: [{subnet: 10.241.14.0/24}]}
 ```
 
+## Transition log
+
+`linea-fleet` writes one JSON line on stderr for each state transition and
+nothing else: no line per request, per agent report or per telemetry batch.
+Metrics (see [operational metrics](operations-metrics.md)) say how much;
+this log says what changed and why. Read it with `docker compose logs fleet`.
+
+```json
+{"time":"2026-11-15T10:02:11.482Z","level":"ERROR","msg":"replica_fenced","component":"fleet","replica":"5f0c...","reason":"heartbeat_lapsed"}
+```
+
+Every line has `time`, `level`, `msg` (the event name) and `component` (always
+`fleet`; the live capture plugin writes `livecapture` in the same shape). The other fields come from a
+closed set, so a line can never carry a credential, a configuration, an
+attribute value, telemetry or an error message:
+
+| Field | Value |
+| --- | --- |
+| `replica`, `plugin`, `credential`, `actor`, `rollout`, `assignment`, `agent` | An ID: at most 128 characters of letters, digits and `. _ : @ -`. Anything else is written as `invalid` |
+| `version` | The release |
+| `reason`, `state`, `listener`, `of` | A fixed name from the tables below |
+| `agents`, `replicas`, `targets`, `waves`, `wave`, `incompatible`, `suppressed`, `count` | A count |
+| `uptime_ms`, `outage_ms`, `duration_ms` | A duration in whole milliseconds |
+
+| Event | Level | Fields | When |
+| --- | --- | --- | --- |
+| `process_started` | info | `version` | Configuration accepted, before the database opens |
+| `process_ready` | info | | Both listeners are bound. This replaces the old `ready:` line, which also named the listener addresses; they are the flags you passed |
+| `process_stopped` | info or error | `version`, `reason`, `uptime_ms` | The process finished stopping. Error level when it stopped because of a failure. The only account of why a failed process exited |
+| `replica_registered` | info | `replica` | This process registered in `fleet.replicas` |
+| `replica_deregistered` | info | `replica` | A graceful stop removed the registration |
+| `replica_reaped` | warn | `replica` | This replica, as leader, removed another replica that stopped heartbeating |
+| `agents_released` | warn | `agents` | The leader released agents that dead replicas held |
+| `replica_fenced` | error | `replica`, `reason` | This replica can no longer prove liveness and stops. Reasons: `heartbeat_lapsed`, `registration_reaped` |
+| `leader_gained`, `leader_lost` | info | `replica`, `reason` (lost only) | The leader lease changed. Reasons: `lease_unavailable`, `replica_fenced`, `shutdown` |
+| `database_lost` | warn | `replica`, `reason` | Heartbeat writes began to fail. Reasons: `timeout`, `sqlstate`, `connection`. Written once per outage |
+| `database_recovered` | info | `replica`, `outage_ms` | Heartbeat writes succeeded again |
+| `plugin_state_changed` | info | `plugin`, `state`, `reason`, `actor` (lifecycle only) | A plugin's state changed. States: `ready`, `unavailable`, `incompatible`, `enabled`, `draining`, `disabled`. Reasons: `probe_ok`, `probe_failed`, `probe_incompatible`, `lifecycle_enable`, `lifecycle_drain`, `lifecycle_disable`, `restored` (at start, from the stored desired state) |
+| `plugin_epoch_changed` | info | `plugin`, `reason` | The plugin's host epoch rotated and its admitted calls were cancelled. Reasons: `instance_changed`, `probe_lost`, `lifecycle_enable`, `lifecycle_drain`, `lifecycle_disable` |
+| `rollout_created` | info | `rollout`, `assignment`, `actor`, `targets`, `waves` | A rollout was admitted |
+| `rollout_state_changed` | info | `rollout`, `state`, `reason`, `actor` | A rollout moved to `running`, `paused`, `rolling_back`, `completed`, `rolled_back` or `cancelled`. Reasons: `operator`, `threshold`, `controller` |
+| `rollout_wave_released` | info | `rollout`, `wave`, `targets`, `incompatible` | The controller released a wave |
+| `config_withheld` | warn | `agent`, `reason` | A config the server would send was held back. Reasons: `incompatible_components` (the agent's build lacks a component the config uses), `agent_reported_failure` (the agent reported the config failed, so the server holds it). One line per session and plan; at most 20 per 10 s |
+| `credential_created`, `credential_revoked` | info | `credential`, `actor` | An admin created or revoked a credential, by ID |
+| `credential_updated` | info | `credential`, `actor`, `reason` | A credential's remote config permission changed (`remote_config_enabled`, `remote_config_disabled`) |
+| `auth_failures` | warn | `listener`, `count`, `duration_ms` | Failed authentications in the last 10 s on one listener (`management`, `agent`, `plugin_host`). One line per listener and only when the count is above zero, so a scan or a bad token is one line every 10 s, not one per request. Also written when the process stops |
+| `lines_suppressed` | warn | `of`, `suppressed` | Lines of a rate-limited event (`config_withheld`) dropped in the last 10 s |
+
+Reasons of `process_stopped`: `signal` (SIGINT or SIGTERM, graceful),
+`shutdown`, `config_invalid`, `database_unavailable`,
+`schema_or_identity_conflict` (the schema is not current or the database
+belongs to another server ID: run `migrate`), `no_admin_credential` (run
+`bootstrap`), `tls_identity_failed`, `listen_failed`, `plugins_invalid`,
+`listener_failed`, `replica_fenced`, `shutdown_incomplete`, `internal`.
+
+Lines for a rollout, a credential or a plugin lifecycle change are written
+after the database committed it. A replica logs only its own view: the leader
+writes `rollout_wave_released` and the reaper lines, and the replica that
+served an API request writes that request's `credential_*` line. Join the
+replicas' logs by `time` and ID.
+
+The log never contains the error behind a failure. Usage and configuration
+mistakes (an unknown flag, a missing secret, a value out of range) are
+refused before the service starts with one plain message on stderr and exit
+status 1. When the service itself fails, the last line of output is the
+`process_stopped` line, followed by one fixed sentence.
+
 ## Restart and database failure
 
 ```sh

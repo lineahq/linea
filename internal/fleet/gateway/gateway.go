@@ -21,6 +21,7 @@ import (
 	"github.com/lineahq/linea/internal/fleet/configmgmt"
 	"github.com/lineahq/linea/internal/fleet/fleet"
 	"github.com/lineahq/linea/internal/fleet/inventory"
+	"github.com/lineahq/linea/internal/fleet/translog"
 	"github.com/lineahq/linea/pluginsdk/metrics"
 	"github.com/open-telemetry/opamp-go/protobufs"
 	"github.com/open-telemetry/opamp-go/server"
@@ -65,6 +66,9 @@ type session struct {
 	// config management only: since when delivery waits for the full state
 	// asked for after a reconnect's first message
 	stateAwaited time.Time
+	// config management only: the plan hash whose withholding was logged,
+	// so a session writes one line per withheld plan
+	withheld []byte
 }
 
 // agentEntry records which local socket holds an agent identity.
@@ -119,7 +123,12 @@ type Gateway struct {
 	credentialRefused atomic.Uint64
 	// config is nil unless config management is enabled.
 	config *configState
+	// log is nil until SetLogger; a nil logger discards.
+	log *translog.Logger
 }
+
+// SetLogger binds the transition log. It must be called before serving.
+func (g *Gateway) SetLogger(log *translog.Logger) { g.log = log }
 
 func New(store fleet.Repository, credential auth.Bearer, maxConnections int, maxMessageBytes int64) (*Gateway, error) {
 	return NewAuthorized(store, auth.Static{Bearer: credential, Role: "agent"}, nil, maxConnections, maxMessageBytes)
@@ -205,6 +214,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "fleet storage unavailable", http.StatusServiceUnavailable)
 			return
 		}
+		g.log.AuthFailure(translog.ListenerAgent)
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		http.Error(w, "valid agent credential required", http.StatusUnauthorized)
 		return

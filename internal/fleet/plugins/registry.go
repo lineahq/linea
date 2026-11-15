@@ -12,6 +12,7 @@ import (
 
 	"github.com/lineahq/linea/internal/fleet/auth"
 	"github.com/lineahq/linea/internal/fleet/fleet"
+	"github.com/lineahq/linea/internal/fleet/translog"
 	"github.com/lineahq/linea/pluginsdk"
 	"github.com/lineahq/linea/pluginsdk/metrics"
 )
@@ -65,6 +66,30 @@ type Registry struct {
 	apiDuration  metrics.Duration
 	apiRefused   atomic.Uint64
 	apiErrors    atomic.Uint64
+	// log is nil until SetLogger; a nil logger discards.
+	log *translog.Logger
+}
+
+// SetLogger binds the transition log before the registry starts.
+func (r *Registry) SetLogger(log *translog.Logger) { r.log = log }
+
+// stateOf names a plugin state for the transition log.
+func stateOf(state string) translog.State {
+	switch state {
+	case "ready":
+		return translog.StateReady
+	case "unavailable":
+		return translog.StateUnavailable
+	case "incompatible":
+		return translog.StateIncompatible
+	case "enabled":
+		return translog.StateEnabled
+	case "draining":
+		return translog.StateDraining
+	case "disabled":
+		return translog.StateDisabled
+	}
+	return translog.StateUnavailable
 }
 
 func New(ctx context.Context, configs []Config, store fleet.Repository) *Registry {
@@ -174,11 +199,24 @@ func (r *Registry) probe(e *entry) {
 	if e.info.Epoch != before.Epoch || e.info.Desired != "enabled" {
 		return
 	}
-	if (e.info.InstanceID != "" && e.info.InstanceID != m.InstanceID && err == nil) || (e.info.State == "ready" && state != "ready") {
-		r.fenceLocked(e)
+	switch {
+	case e.info.InstanceID != "" && e.info.InstanceID != m.InstanceID && err == nil:
+		r.fenceLocked(e, translog.ReasonInstanceChanged)
+	case e.info.State == "ready" && state != "ready":
+		r.fenceLocked(e, translog.ReasonProbeLost)
 	}
 	if state == "ready" {
 		e.info.InstanceID = m.InstanceID
+	}
+	if state != e.info.State {
+		why := translog.ReasonProbeOK
+		switch state {
+		case "unavailable":
+			why = translog.ReasonProbeFailed
+		case "incompatible":
+			why = translog.ReasonProbeIncompatible
+		}
+		r.log.Info(translog.PluginStateChanged, translog.ID(translog.KeyPlugin, e.config.ID), translog.Now(stateOf(state)), translog.Why(why))
 	}
 	e.info.State, e.info.CheckedAt = state, &now
 }
@@ -309,6 +347,7 @@ func (r *Registry) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 	if owner == nil {
+		r.log.AuthFailure(translog.ListenerPluginHost)
 		hostError(w, 401)
 		return
 	}
