@@ -1276,7 +1276,11 @@ requests inherit setup only from the debugger scenario. `CaptureDialog` uses a
 native modal for draft replacement and consequential actions. Preserve
 session-only raw drafts, bounded paging and honest stop status: `phase.ts` maps
 fleet's states and reason codes to text, and a stopping capture waits for the
-Collectors to release it. The product UI splits the destination into pages
+Collectors to release it. Records lost on the way make a capture incomplete in
+the headline and the Receiving step: Collector drops other than `sampling`,
+`budget` and `stopping`, plus fleet's `delivery.dropped_records`
+(`lostRecords`). Diagnostics label every drop reason (`targetDrops`); the
+detail page's per-target table shows the loss with the reasons on hover. The product UI splits the destination into pages
 (`capture/pages/`): Captures (`/captures`), capture detail (records, targets,
 stop and "Use records" with `UseRecordsDrawer.tsx`) and New capture
 (`/captures/new`, search `collectors`, `group` or `from`, parsed by

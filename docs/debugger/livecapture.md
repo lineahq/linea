@@ -255,8 +255,10 @@ linea capture stop --session <id> --server http://127.0.0.1:7070
 | `reason` | Fleet's code (`absolute_expiry`, `collector_rejected`, `peer_disconnected`, `consumer_unavailable`), or the debugger's loss reason: `capture_channel_lost`, `fleet_no_longer_reports_capture`, `no_terminal_state_from_fleet_after_expiry`, `platform_restarted; capture_not_resumed` |
 | `stop_reason` | Why the debugger asked fleet to stop: `stop_requested`, `capture_storage_error`, `capture_storage_limit`, `capture_processing_limit`, `capture_catalog_changed` |
 
-The web client turns these codes into sentences and marks a capture with failed
-or unknown targets as incomplete.
+The web client turns these codes into sentences and marks a capture as
+incomplete when a target failed or is unknown, or when the Collectors or fleet
+lost records on the way. Sampling, the record limit and records arriving
+while stopping are not losses.
 
 - Stop asks fleet to stop and waits for its terminal report; terminal status does
   not prove that every record was delivered.

@@ -20,6 +20,8 @@ export interface PhaseInput {
   failed_count: number;
   /** Why the capture ended, when known (full sessions only). */
   reason?: string;
+  /** Records the Collectors or fleet lost on the way (full sessions only); see lostRecords. */
+  dropped_records?: number;
 }
 
 export type CapturePhaseId = 'starting' | 'receiving' | 'stopping' | 'closed' | 'partial' | 'failed' | 'unknown';
@@ -53,7 +55,50 @@ const reasons: Record<string, string> = {
   capture_channel_lost: 'The connection to fleet for this capture was lost.',
   fleet_no_longer_reports_capture: 'Fleet no longer reports this capture.',
   no_terminal_state_from_fleet_after_expiry: 'Fleet did not report an end after the capture window.',
+  consumer_unavailable: 'The debugger stopped reading this capture from fleet.',
 };
+
+/** What each drop reason means. Collector reasons are the session's `dropped` stats; `fleet` is fleet's delivery buffer. */
+const dropLabels: Record<string, string> = {
+  queue_full: 'Collector queue full',
+  delivery: 'export to fleet failed',
+  rate_records: 'record rate limit',
+  rate_bytes: 'byte rate limit',
+  record_size: 'record too large',
+  time: 'Collector time budget',
+  budget: 'capture limit reached',
+  sampling: 'sampled out',
+  stopping: 'arrived while stopping',
+  fleet: 'fleet buffer full or not read in time',
+};
+
+/** Drop reasons the capture's own settings ask for; they do not make it incomplete. */
+const chosenDrops = new Set(['sampling', 'budget', 'stopping']);
+
+/** The per-target counters the drop helpers read. */
+export interface TargetCounters {
+  stats?: { dropped?: Record<string, number> };
+  delivery?: { dropped_records: number };
+}
+
+/** targetDrops lists a target's nonzero drops with their meaning, largest first. */
+export function targetDrops(t: TargetCounters): { reason: string; label: string; count: number }[] {
+  const all: [string, number][] = Object.entries(t.stats?.dropped ?? {});
+  if (t.delivery?.dropped_records) all.push(['fleet', t.delivery.dropped_records]);
+  return all
+    .filter(([, count]) => count > 0)
+    .map(([reason, count]) => ({ reason, label: dropLabels[reason] ?? reason.replace(/_/g, ' '), count }))
+    .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason));
+}
+
+/**
+ * lostRecords counts a target's records lost on the way: Collector drops other
+ * than sampling, the record limit and the stop, plus fleet's delivery drops.
+ * Any loss makes the capture incomplete.
+ */
+export function lostRecords(t: TargetCounters): number {
+  return targetDrops(t).reduce((sum, d) => sum + (chosenDrops.has(d.reason) ? 0 : d.count), 0);
+}
 
 /** reasonText turns a fleet or debugger reason code into a sentence. */
 export function reasonText(code?: string): string | undefined {
@@ -73,7 +118,17 @@ export function capturePhase(s: PhaseInput): CapturePhase {
       case 'starting':
         return { id: 'starting', label: 'Starting', tone: 'running', icon: 'loader-circle', live: true };
       case 'active':
-        return { id: 'receiving', label: 'Receiving', tone: 'running', icon: 'loader-circle', live: true };
+        return s.dropped_records
+          ? {
+              id: 'receiving',
+              label: 'Receiving',
+              tone: 'running',
+              icon: 'loader-circle',
+              live: true,
+              headline: `Receiving · ${plural(s.dropped_records, 'record')} dropped so far`,
+              detail: 'The Collectors or fleet dropped them to stay within their limits; the capture will be incomplete.',
+            }
+          : { id: 'receiving', label: 'Receiving', tone: 'running', icon: 'loader-circle', live: true };
       case 'stopping':
         return {
           id: 'stopping',
@@ -125,6 +180,17 @@ export function capturePhase(s: PhaseInput): CapturePhase {
       detail: 'Their records may be incomplete.',
     };
   }
+  if (s.dropped_records) {
+    return {
+      id: 'partial',
+      label: 'Closed · incomplete',
+      tone: 'warn',
+      icon: 'triangle-alert',
+      live: false,
+      headline: `Closed · ${plural(s.dropped_records, 'record')} dropped`,
+      detail: `${why ? `${why} ` : ''}The Collectors or fleet dropped them to stay within their limits; the stored records are incomplete.`,
+    };
+  }
   if (s.state === 'stopped' || s.state === 'completed' || s.state === 'expired') {
     return { id: 'closed', label: 'Closed', tone: 'pass', icon: 'circle-check', live: false, detail: why };
   }
@@ -156,7 +222,8 @@ export interface LifecycleInput extends PhaseInput {
 export function captureLifecycle(s: LifecycleInput): LifecycleStep[] {
   const phase = capturePhase(s);
   const accepted = s.accepted_count ?? (phase.id === 'starting' ? 0 : s.target_count - s.failed_count);
-  const records = `${formatCount(s.received_records)} record${s.received_records === 1 ? '' : 's'}`;
+  const dropped = s.dropped_records ? ` · ${formatCount(s.dropped_records)} dropped` : '';
+  const records = `${formatCount(s.received_records)} record${s.received_records === 1 ? '' : 's'}${dropped}`;
   const started = phase.id !== 'starting';
   const ended = !phase.live;
   const stoppedOrBeyond = phase.id === 'stopping' || ended;
@@ -174,7 +241,7 @@ export function captureLifecycle(s: LifecycleInput): LifecycleStep[] {
       id: 'receiving',
       title: 'Receiving',
       detail: records,
-      status: !started ? 'pending' : stoppedOrBeyond ? 'done' : 'current',
+      status: !started ? 'pending' : s.dropped_records ? 'warn' : stoppedOrBeyond ? 'done' : 'current',
     },
     {
       id: 'stopping',
@@ -280,7 +347,7 @@ export function sessionCounts(s: {
   created_at: string;
   expires_at: string;
   data: { received_records: number };
-  targets?: { state: string; terminal: boolean }[];
+  targets?: ({ state: string; terminal: boolean } & TargetCounters)[];
 }): LifecycleInput {
   const targets = s.targets ?? [];
   return {
@@ -296,5 +363,6 @@ export function sessionCounts(s: {
     failed_count: targets.filter((t) => t.state === 'failed').length,
     accepted_count: targets.filter((t) => t.state !== 'pending' && t.state !== 'failed').length,
     open_count: targets.filter((t) => !t.terminal).length,
+    dropped_records: targets.reduce((sum, t) => sum + lostRecords(t), 0),
   };
 }

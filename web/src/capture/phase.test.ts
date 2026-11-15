@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { capturePhase, captureLifecycle, elapsedView, formatClock, reasonText, sessionCounts, targetChip, type PhaseInput } from './phase';
+import { capturePhase, captureLifecycle, elapsedView, formatClock, lostRecords, reasonText, sessionCounts, targetChip, targetDrops, type PhaseInput } from './phase';
 
 const base: PhaseInput = { state: 'active', terminal: false, target_count: 3, active_count: 3, uncertain_count: 0, failed_count: 0 };
 
@@ -15,6 +15,8 @@ describe('capturePhase', () => {
     ['interrupted by fleet', { state: 'interrupted', terminal: true }, 'partial', 'Closed · interrupted'],
     ['lost by the debugger', { state: 'uncertain', terminal: true, uncertain_count: 3 }, 'partial', 'Closed · uncertain'],
     ['completed with a failed target', { state: 'completed', terminal: true, failed_count: 1 }, 'partial', 'Closed · incomplete'],
+    ['completed with dropped records', { state: 'completed', terminal: true, dropped_records: 4 }, 'partial', 'Closed · incomplete'],
+    ['receiving with dropped records', { dropped_records: 4 }, 'receiving', 'Receiving'],
     ['an unknown state keeps its text', { state: 'mystery' }, 'unknown', 'mystery'],
   ];
   it.each(cases)('%s', (_name, patch, id, label) => {
@@ -38,6 +40,14 @@ describe('capturePhase', () => {
   it('explains an incomplete close', () => {
     const phase = capturePhase({ ...base, state: 'stopped', terminal: true, uncertain_count: 2 });
     expect(phase.headline).toBe('Closed · 2 Collectors did not finish cleanly');
+  });
+
+  it('says how many records were dropped, while receiving and once closed', () => {
+    expect(capturePhase({ ...base, dropped_records: 1 }).headline).toBe('Receiving · 1 record dropped so far');
+    const closed = capturePhase({ ...base, state: 'stopped', terminal: true, dropped_records: 12, reason: 'stop_requested' });
+    expect(closed.headline).toBe('Closed · 12 records dropped');
+    expect(closed.detail).toMatch(/^Stopped on request\. .*incomplete\.$/);
+    expect(capturePhase({ ...base, state: 'stopped', terminal: true, dropped_records: 0 }).id).toBe('closed');
   });
 
   it('gives the reason of a failure or a lost capture', () => {
@@ -77,6 +87,11 @@ describe('captureLifecycle', () => {
   });
   it('names why the capture ended', () => {
     expect(captureLifecycle({ ...base, state: 'expired', terminal: true, reason: 'absolute_expiry', ...times })[3].detail).toBe('The capture window ended.');
+  });
+  it('warns at receiving when records were dropped', () => {
+    const steps = captureLifecycle({ ...base, state: 'completed', terminal: true, dropped_records: 30, ...times });
+    expect(steps[2]).toMatchObject({ detail: '1,204 records · 30 dropped', status: 'warn' });
+    expect(steps[4].status).toBe('warn');
   });
   it('reports how many targets were accepted and the received records', () => {
     const steps = captureLifecycle({ ...base, accepted_count: 2, ...times });
@@ -123,6 +138,23 @@ describe('targetChip', () => {
   });
 });
 
+describe('targetDrops and lostRecords', () => {
+  const target = { stats: { dropped: { sampling: 50, queue_full: 3, budget: 9, rate_records: 0 } }, delivery: { dropped_records: 5 } };
+  it('labels every nonzero drop, largest first', () => {
+    expect(targetDrops(target)).toEqual([
+      { reason: 'sampling', label: 'sampled out', count: 50 },
+      { reason: 'budget', label: 'capture limit reached', count: 9 },
+      { reason: 'fleet', label: 'fleet buffer full or not read in time', count: 5 },
+      { reason: 'queue_full', label: 'Collector queue full', count: 3 },
+    ]);
+    expect(targetDrops({ stats: { dropped: { new_reason: 1 } } })[0].label).toBe('new reason');
+  });
+  it('counts only losses, not what the capture settings chose', () => {
+    expect(lostRecords(target)).toBe(8);
+    expect(lostRecords({})).toBe(0);
+  });
+});
+
 describe('sessionCounts', () => {
   it('reduces targets to the counters a summary carries', () => {
     const counts = sessionCounts({
@@ -133,13 +165,13 @@ describe('sessionCounts', () => {
       expires_at: 'b',
       data: { received_records: 7 },
       targets: [
-        { state: 'completed', terminal: true },
-        { state: 'stopping', terminal: false },
+        { state: 'completed', terminal: true, delivery: { dropped_records: 2 } },
+        { state: 'stopping', terminal: false, stats: { dropped: { queue_full: 1, sampling: 4 } } },
         { state: 'unknown', terminal: true },
         { state: 'pending', terminal: false },
       ],
     });
-    expect(counts).toMatchObject({ target_count: 4, uncertain_count: 1, failed_count: 0, active_count: 0, accepted_count: 3, open_count: 2, received_records: 7, reason: 'stop_requested' });
+    expect(counts).toMatchObject({ target_count: 4, uncertain_count: 1, failed_count: 0, active_count: 0, accepted_count: 3, open_count: 2, received_records: 7, reason: 'stop_requested', dropped_records: 3 });
   });
   it('tolerates a session without targets', () => {
     expect(sessionCounts({ state: 'starting', terminal: false, created_at: '', expires_at: '', data: { received_records: 0 } }).target_count).toBe(0);

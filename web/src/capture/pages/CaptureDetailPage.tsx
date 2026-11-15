@@ -23,7 +23,7 @@ import {
   targetLabel,
 } from '../detailView';
 import { clockTime, formatCount } from '../format';
-import { capturePhase, captureLifecycle, chipClass, sessionCounts, stepClass, targetChip } from '../phase';
+import { capturePhase, captureLifecycle, chipClass, lostRecords, sessionCounts, stepClass, targetChip, targetDrops } from '../phase';
 import { groupSelection, selectionBarText, selectionProblem } from '../recordView';
 import { CaptureRecords } from './CaptureRecords';
 import { InlineConfirm } from './InlineConfirm';
@@ -244,21 +244,23 @@ export function CaptureDetailPage() {
           <section aria-label="Per target">
             <h2 className="od-card__title">Per target</h2>
             <table className="od-table capture-aside__table">
-              <thead><tr><th>Collector</th><th className="num">Reported</th><th>State</th></tr></thead>
+              <thead><tr><th>Collector</th><th className="num">Reported</th><th className="num">Dropped</th><th>State</th></tr></thead>
               <tbody>
                 {(s.targets ?? []).map((t) => {
                   const chip = targetChip(t);
+                  const drops = targetDrops(t);
                   return (
                     <tr key={t.collector_id}>
                       <td className="mono capture-aside__clip" title={t.agent_id ? `${targetLabel(t)} · agent ${t.agent_id}` : targetLabel(t)}>{targetLabel(t)}</td>
                       <td className="num" title={t.stats?.filter_errors ? `${formatCount(t.stats.filter_errors)} filter errors` : undefined}>{t.stats ? formatCount(t.stats.enqueued_records) : '—'}</td>
+                      <td className="num" title={drops.map((d) => `${d.label}: ${formatCount(d.count)}`).join(', ') || undefined}>{drops.length ? formatCount(lostRecords(t)) : '—'}</td>
                       <td><span className={chipClass(chip.tone)}><Icon name={chip.icon} size={12} />{chip.label}</span></td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
-            <p className="capture-aside__note">Reported by the Collectors; sampling and transport can make the received count differ.</p>
+            <p className="capture-aside__note">Reported by the Collectors; sampling and transport can make the received count differ. Dropped counts records the Collectors or fleet lost on the way; hover it for the reasons.</p>
           </section>
 
           <Provenance session={s} filters={filters} />

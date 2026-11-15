@@ -7,7 +7,7 @@ import { CaptureDialog } from './CaptureDialog';
 import { CaptureDataPane } from './CaptureDataPane';
 import type { GroupCaptureTargets } from './groupCapture';
 import { CaptureSelectionForm } from './CaptureSelectionForm';
-import { capturePhase, reasonText, sessionCounts, targetChip } from './phase';
+import { capturePhase, reasonText, sessionCounts, targetChip, targetDrops } from './phase';
 
 export type CaptureView = 'new' | 'history';
 export function CaptureControls({ inputOnly = false, onInputsAdded, draft, groupTargets, collector, points = [], view: controlledView, onViewChange, pointPaging, pointsLoading, pointsError, onKeepDraft }: {
@@ -93,7 +93,7 @@ export function CaptureControls({ inputOnly = false, onInputsAdded, draft, group
 function CaptureDiagnostics({ session }: { session: CaptureSession }) {
   return <details className="capture-disclosure capture-diagnostics"><summary>Session diagnostics <span>Collector status, provenance & request</span></summary><p className="capture-help">Session ID: <code>{session.id}</code>. Enqueued counters do not prove telemetry was received.{(session.reason || session.stop_reason) && <> Reason: {reasonText(session.reason || session.stop_reason)}</>}</p>
     <div className="collectors-table"><table><thead><tr><th>Collector</th><th>State</th><th>Selected</th><th>Enqueued</th><th>Filter errors</th></tr></thead><tbody>{(session.targets ?? []).map(target => <tr key={target.collector_id}><td>{target.source?.pod || target.collector_id}</td><td>{target.state}</td><td>{target.stats?.selected ?? '—'}</td><td>{target.stats?.enqueued_records ?? '—'}</td><td>{target.stats?.filter_errors ?? '—'}</td></tr>)}</tbody></table></div>
-    {(session.targets ?? []).map(target => <div key={target.collector_id}><p>{target.source && <>Admission source: {[target.source.cluster, target.source.namespace, target.source.pod].filter(Boolean).join('/')} · group {target.source.collector_group} · transport {target.source.transport_security || 'unknown'} · authentication {target.source.authentication || 'unknown'} · reported Collector {target.source.collector_version}, distribution {target.source.distribution_version || 'unknown'}.</>}{target.agent_id && <> Agent {target.agent_id}, generation {target.generation}.</>}</p><p>Dropped: {Object.entries(target.stats?.dropped ?? {}).map(([reason, count]) => `${reason}: ${count}`).join(', ') || '0'}.</p></div>)}
+    {(session.targets ?? []).map(target => <div key={target.collector_id}><p>{target.source && <>Admission source: {[target.source.cluster, target.source.namespace, target.source.pod].filter(Boolean).join('/')} · group {target.source.collector_group} · transport {target.source.transport_security || 'unknown'} · authentication {target.source.authentication || 'unknown'} · reported Collector {target.source.collector_version}, distribution {target.source.distribution_version || 'unknown'}.</>}{target.agent_id && <> Agent {target.agent_id}, generation {target.generation}.</>}</p><p>Dropped: {targetDrops(target).map(d => `${d.label}: ${d.count}`).join(', ') || '0'}.</p></div>)}
     <pre className="capture-json">{JSON.stringify({ selection: session.selection, requested_limits: session.requested_limits }, null, 2)}</pre>
   </details>;
 }
