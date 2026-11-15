@@ -490,37 +490,47 @@ func (g *Gateway) watch() {
 			return
 		case <-ticker.C:
 		}
-		g.mu.Lock()
-		principals := make([]auth.Principal, 0, len(g.connections))
-		peers := make(map[types.Connection]string, len(g.connections))
-		for c, s := range g.connections {
-			principals = append(principals, s.principal)
-			peers[c] = s.principal.ID
+		verified = g.sweepCredentials(verified)
+	}
+}
+
+// sweepCredentials checks the credentials of every session and closes the revoked or,
+// past the grace period, unverifiable ones. It returns when the credentials
+// were last verified; with no sessions nothing is unverified, so that moves
+// on, and a session that connects after a long idle spell gets the full grace
+// period.
+func (g *Gateway) sweepCredentials(verified time.Time) time.Time {
+	g.mu.Lock()
+	principals := make([]auth.Principal, 0, len(g.connections))
+	peers := make(map[types.Connection]string, len(g.connections))
+	for c, s := range g.connections {
+		principals = append(principals, s.principal)
+		peers[c] = s.principal.ID
+	}
+	g.mu.Unlock()
+	if len(principals) == 0 {
+		return time.Now()
+	}
+	ctx, cancel := context.WithTimeout(g.ctx, 3*time.Second)
+	active, err := g.access.Active(ctx, principals)
+	cancel()
+	if err != nil {
+		// A database blip must not drop every session (architecture
+		// §5.7); a longer outage fences the replica, which closes them.
+		// Unverified sessions are closed after the grace period anyway.
+		if time.Since(verified) < time.Duration(g.verifyGrace.Load()) {
+			return verified
 		}
-		g.mu.Unlock()
-		if len(principals) == 0 {
-			continue
-		}
-		ctx, cancel := context.WithTimeout(g.ctx, 3*time.Second)
-		active, err := g.access.Active(ctx, principals)
-		cancel()
-		if err != nil {
-			// A database blip must not drop every session (architecture
-			// §5.7); a longer outage fences the replica, which closes them.
-			// Unverified sessions are closed after the grace period anyway.
-			if time.Since(verified) < time.Duration(g.verifyGrace.Load()) {
-				continue
-			}
-			active = nil
-		} else {
-			verified = time.Now()
-		}
-		for c, id := range peers {
-			if !active[id] {
-				disconnect(c)
-			}
+		active = nil
+	} else {
+		verified = time.Now()
+	}
+	for c, id := range peers {
+		if !active[id] {
+			disconnect(c)
 		}
 	}
+	return verified
 }
 
 // Close fences admission, cancels publication, closes hijacked sockets and

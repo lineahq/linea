@@ -599,3 +599,35 @@ func TestIdleTimeoutSpansSeveralHeartbeats(t *testing.T) {
 		t.Fatalf("idle timeout %v closes an agent that misses one heartbeat", idleTimeout)
 	}
 }
+
+func TestSweepRefreshesVerificationWhileIdle(t *testing.T) {
+	token := strings.Repeat("a", 32)
+	a, _ := auth.New(token)
+	access := &flaky{Authorizer: auth.Static{Bearer: a, Role: "agent"}}
+	g, err := NewAuthorized(fleet.NewStore(2), access, nil, 2, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := httptest.NewServer(g)
+	t.Cleanup(func() { g.Close(); h.Close() })
+
+	// With no sessions the verification time moves on.
+	stale := time.Now().Add(-time.Hour)
+	verified := g.sweepCredentials(stale)
+	if time.Since(verified) > time.Minute {
+		t.Fatalf("idle sweep kept verification at %v", verified)
+	}
+
+	// A session that connects after the idle spell survives a database blip.
+	c := dial(t, "ws"+strings.TrimPrefix(h.URL, "http")+"/v1/opamp", token)
+	m := &protobufs.AgentToServer{InstanceUid: bytes.Repeat([]byte{7}, 16), SequenceNum: 1}
+	exchange(t, c, m)
+	access.down.Store(true)
+	g.sweepCredentials(verified)
+	m.SequenceNum++
+	exchange(t, c, m)
+
+	// Without the refresh, the stale time closes it at once.
+	g.sweepCredentials(stale)
+	expectClosedWithin(t, c, 3*time.Second)
+}
