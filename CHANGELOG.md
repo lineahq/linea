@@ -236,6 +236,15 @@ the first item below.
   accepts the plugin only when its registration says version 0.5.0 and
   `api_version` 3.
 
+- The live capture plugin deletes unused peers (plugin 0.5.0, plugin
+  database schema 4). A peer with no connected Collector, no lease and no
+  retained operation is deleted 24 h after it was last seen, so rolling pods
+  can no longer fill the 10,000-peer table and block new Collectors. A peer
+  that returns starts above every generation ever deleted. **Upgrading:**
+  run the plugin's migration step (`migrate`), which adds migration 004 and
+  grants the runtime role `DELETE` on `capture.peers`; the plugin refuses to
+  start on schema 3.
+
 - Report schema 0.16: each topology component lists what a run does not show
   of the real component (`not_shown`, a code and a sentence each): export
   outcomes of captured exporters (every export succeeds, so errors, retries,

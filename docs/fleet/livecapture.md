@@ -52,7 +52,7 @@ docker compose @captureCompose up -d --wait livecapture-plugin
   `--env-file PATH` after the project name), server ID and secrets. Back up
   first. No new bootstrap is needed.
 - **Versions are separate:** core database schema 10; plugin database schema
-  3 (own roles, volume and checksummed migrations 001 to 003); plugin 0.5.0;
+  4 (own roles, volume and checksummed migrations 001 to 004); plugin 0.5.0;
   plugin API schema 3.0.0.
 - **Registration:** grants `agents.read` and `credentials.introspect`.
 - **Combined plugins:** several plugins need one explicit registration file
@@ -448,7 +448,7 @@ its unchanged wire implementation, and clients may request lower limits.
 
 | Resource | Bound |
 | --- | --- |
-| Connected peers / durable peer generation identities | Default 256 (operator `max_peers` 1 to 4,096; restart required) / 10,000 |
+| Connected peers / durable peer generation identities | Default 256 (operator `max_peers` 1 to 4,096; restart required) / 10,000, of which the plugin deletes unused ones after 24 hours |
 | Active operations / retained operation IDs | 32 / 10,000 |
 | Targets / points / signals per operation | 16 / 64 / 3 |
 | Capture and channel absolute lifetime | 5 minutes |
@@ -576,12 +576,25 @@ docker compose @captureCompose up -d --wait livecapture-plugin
 ```
 
 - Migration checks all installed checksums and refuses unknown versions. The
-  runtime cannot run DDL or delete operation history.
+  runtime cannot run DDL or delete operation history; it deletes only unused
+  peers (see Retention).
 - Registration, configuration and image versions must match (API version 3,
   host protocol 3). The public API schema is 3.0.0.
 - Clients must follow peer page cursors; the sample two-peer workflows fit a
   default page.
 - Roll back with matching images and a pre-upgrade backup in a fresh volume.
+
+**Peer retention.** A peer is the durable identity of one Collector (credential,
+cluster, namespace, pod and group). Every new pod name is a new peer, and the
+database keeps at most 10,000. The running plugin deletes a peer once it has
+been unused for 24 hours: no Collector is connected for it (connected peers
+are marked seen once a minute), no lease holds it and no retained operation
+names it. At most 500 peers are deleted per pass, and a failed pass is retried
+without affecting captures. A peer that comes back after deletion gets a
+generation above every generation ever deleted, so it never repeats one an
+old operation or lease could refer to. A peer named by a retained operation
+stays until the purge below removes that operation. No operator action is
+needed: the grant is part of the plugin's migration step.
 
 **Retention.** Offline purge, with the plugin stopped, uses the migration
 role (in PowerShell, use `docker compose @captureCompose`):

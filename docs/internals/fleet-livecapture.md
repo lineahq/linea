@@ -65,6 +65,41 @@ the generic plugin mechanisms are in [fleet-plugin-host.md](fleet-plugin-host.md
   purge removes only operations past absolute expiry plus the guard and
   eligible expired leases, and keeps generation counters.
 
+## Peer retention
+
+`capture.peers` holds one row per peer ID (a hash of credential, cluster,
+namespace, pod and group) and caps at 10,000 rows. Without retention every
+new pod name would be a permanent row and the cap would end the feature for
+everyone.
+
+- `maintain` runs `Repository.MaintainPeers` once a minute (again on the next
+  tick when a pass deleted a full batch of 500). One call, through the store's
+  single connection, first sets `seen_at=now()` for the peers connected in
+  this process, then deletes up to 500 peers that are idle for more than 24 h
+  (`peerRetention`), not connected, hold no lease and appear in no
+  operation's `targets`.
+- `seen_at` is also set when a peer connects (`NextGeneration`). A peer
+  that connects between the plugin's snapshot of connected peers and the
+  delete has a fresh `seen_at`, so it is kept. Plugin calls to the database
+  are serialized, so no other writer in the process races the delete.
+- Generations. A row's generation increments on every connect, so while the
+  row exists its numbers never repeat. A delete would restart a returning peer
+  at 1, so the same statement raises `metadata.generation_floor` to the
+  highest deleted generation, and a new row starts at `generation_floor+1`.
+  Every generation issued after a delete is therefore above every generation
+  that was ever issued for a deleted peer, even though nothing durable can
+  still refer to one (no lease, no retained operation by the delete rule).
+- A failed pass is counted as a storage error, does not end the plugin and is
+  retried; only the liveness ping is fatal.
+- Migration 004 adds `peers.seen_at` (existing rows start at the migration
+  time, so they are kept for at least 24 h), `peers_seen_idx` and
+  `metadata.generation_floor`. The runtime role gets `DELETE` on
+  `capture.peers` and `UPDATE (generation_floor)` on `capture.metadata`
+  (`runtimeGrants` in `store.go`); the grants are applied by `migrate`, not by
+  the checksummed migration files.
+- Peers named by a retained operation stay until the operation purge removes
+  the operation; the operation cap of 10,000 is separate.
+
 ## Metrics snapshots
 
 - The private Prometheus route stays available when core host authority is

@@ -24,6 +24,9 @@ type Repository interface {
 	AuthorityID() string
 	Ready(context.Context) error
 	NextGeneration(context.Context, string) (uint64, error)
+	// MaintainPeers marks the connected peers as seen and deletes at most limit
+	// peers unused for idle (see Store.MaintainPeers).
+	MaintainPeers(ctx context.Context, connected []string, idle time.Duration, limit int) (int, error)
 	Get(context.Context, string) (Operation, error)
 	Insert(context.Context, Operation) error
 	Save(context.Context, Operation, int64) error
@@ -52,6 +55,8 @@ type Server struct {
 	credentials     map[[32]byte]cachedCredential
 	linkWake        chan struct{}
 	revalidateEvery time.Duration
+	// peerIdle is how long a peer may go unused before the database row is deleted.
+	peerIdle time.Duration
 	// pending is the bytes buffered across all channels.
 	pending int
 	// now is the clock of the delivery buffer; tests replace it.
@@ -67,7 +72,7 @@ func New(ctx context.Context, c Config, repo Repository) (*Server, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	s := &Server{config: c, repo: repo, ctx: ctx, cancel: cancel, instance: pluginsdk.RandomID(), dbOK: true, peers: map[string]*peer{}, operations: map[string]*activeOperation{}, channels: map[string]*channel{}, credentials: map[[32]byte]cachedCredential{}, linkWake: make(chan struct{}, 1), revalidateEvery: credentialTTL, now: time.Now, fatal: make(chan error, 1)}
+	s := &Server{config: c, repo: repo, ctx: ctx, cancel: cancel, instance: pluginsdk.RandomID(), dbOK: true, peers: map[string]*peer{}, operations: map[string]*activeOperation{}, channels: map[string]*channel{}, credentials: map[[32]byte]cachedCredential{}, linkWake: make(chan struct{}, 1), revalidateEvery: credentialTTL, peerIdle: peerRetention, now: time.Now, fatal: make(chan error, 1)}
 	s.host = pluginsdk.HostClient{Endpoint: c.HostEndpoint, Token: c.hostToken, InstanceID: s.instance, HTTP: pluginsdk.NewHTTPClient()}
 	for i, limit := range []int{c.peerLimit() + 16, 64, 64} {
 		s.budgets[i] = &connectionBudget{slots: make(chan struct{}, limit)}
@@ -204,7 +209,7 @@ func (s *Server) maintain() {
 	defer s.wg.Done()
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
-	lastDB := time.Time{}
+	lastDB, lastPeers := time.Time{}, time.Time{}
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -257,8 +262,33 @@ func (s *Server) maintain() {
 				}
 			}
 			s.mu.Unlock()
+			if now.Sub(lastPeers) >= peerMaintenanceEvery {
+				lastPeers = now
+				// A full batch means more peers wait: run again on the next tick.
+				if s.retirePeers() >= peerPruneBatch {
+					lastPeers = time.Time{}
+				}
+			}
 		}
 	}
+}
+
+// retirePeers refreshes the connected peers' last-seen time and deletes unused
+// peers in the database. A failure is counted by the store and retried at the
+// next pass; it never ends the plugin, because the peer table only matters
+// when it is full.
+func (s *Server) retirePeers() int {
+	s.mu.Lock()
+	connected := make([]string, 0, len(s.peers))
+	for id := range s.peers {
+		connected = append(connected, id)
+	}
+	s.mu.Unlock()
+	deleted, err := s.repo.MaintainPeers(s.ctx, connected, s.peerIdle, peerPruneBatch)
+	if err != nil {
+		return 0
+	}
+	return deleted
 }
 
 func (s *Server) Peers() []PeerInfo {
@@ -738,3 +768,13 @@ func validIdentity(i Identity, c credential) bool {
 	}
 	return !strings.ContainsAny(i.Cluster+i.Namespace, "\r\n\x00")
 }
+
+const (
+	// peerRetention is how long a peer with no lease and no retained operation
+	// may go unused before the plugin deletes its database row.
+	peerRetention = 24 * time.Hour
+	// peerMaintenanceEvery is the period of the last-seen refresh and the delete.
+	peerMaintenanceEvery = time.Minute
+	// peerPruneBatch bounds the peers deleted in one pass.
+	peerPruneBatch = 500
+)

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -19,23 +20,74 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+type memoryPeer struct {
+	generation uint64
+	seen       time.Time
+}
+
+// memoryRepo applies the same peer rules as Store: a new peer starts above the
+// generation floor, and MaintainPeers deletes only unused peers.
 type memoryRepo struct {
 	mu     sync.Mutex
 	ops    map[string]Operation
 	leases map[string]string
-	gen    uint64
+	peers  map[string]*memoryPeer
+	floor  uint64
+	now    func() time.Time
 }
 
 func newMemoryRepo() *memoryRepo {
-	return &memoryRepo{ops: map[string]Operation{}, leases: map[string]string{}}
+	return &memoryRepo{ops: map[string]Operation{}, leases: map[string]string{}, peers: map[string]*memoryPeer{}, now: time.Now}
 }
 func (r *memoryRepo) AuthorityID() string         { return strings.Repeat("f", 32) }
 func (r *memoryRepo) Ready(context.Context) error { return nil }
-func (r *memoryRepo) NextGeneration(context.Context, string) (uint64, error) {
+func (r *memoryRepo) NextGeneration(_ context.Context, id string) (uint64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.gen++
-	return r.gen, nil
+	p := r.peers[id]
+	if p == nil {
+		if len(r.peers) >= 10000 {
+			return 0, ErrCapacity
+		}
+		p = &memoryPeer{generation: r.floor}
+		r.peers[id] = p
+	}
+	p.generation++
+	p.seen = r.now()
+	return p.generation, nil
+}
+func (r *memoryRepo) MaintainPeers(_ context.Context, connected []string, idle time.Duration, limit int) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := r.now()
+	live := map[string]bool{}
+	for _, id := range connected {
+		live[id] = true
+		if p := r.peers[id]; p != nil {
+			p.seen = now
+		}
+	}
+	referenced := map[string]bool{}
+	for _, op := range r.ops {
+		for _, t := range op.Targets {
+			referenced[t.PeerID] = true
+		}
+	}
+	var candidates []string
+	for id, p := range r.peers {
+		if now.Sub(p.seen) > idle && !live[id] && r.leases[id] == "" && !referenced[id] {
+			candidates = append(candidates, id)
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool { return r.peers[candidates[i]].seen.Before(r.peers[candidates[j]].seen) })
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	for _, id := range candidates {
+		r.floor = max(r.floor, r.peers[id].generation)
+		delete(r.peers, id)
+	}
+	return len(candidates), nil
 }
 func (r *memoryRepo) Get(_ context.Context, id string) (Operation, error) {
 	r.mu.Lock()

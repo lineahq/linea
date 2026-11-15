@@ -25,8 +25,11 @@ var coreCredentials string
 //go:embed migrations/003_acting_for.sql
 var actingFor string
 
+//go:embed migrations/004_peer_retention.sql
+var peerRetentionMigration string
+
 // migrations are applied in order; version N is migrations[N-1].
-var migrations = []string{schema, coreCredentials, actingFor}
+var migrations = []string{schema, coreCredentials, actingFor, peerRetentionMigration}
 
 func checksum(migration string) string {
 	sum := sha256.Sum256([]byte(migration))
@@ -47,7 +50,9 @@ type Store struct {
 
 func (s *Store) AuthorityID() string { return s.authority }
 
-func connect(ctx context.Context, url string) (*Store, error) {
+// dial opens a session with the plugin's timeouts and without the authority
+// lock. Only the online purge uses it on its own.
+func dial(ctx context.Context, url string) (*pgx.Conn, error) {
 	cfg, err := pgx.ParseConfig(url)
 	if err != nil {
 		return nil, ErrUnavailable
@@ -65,6 +70,13 @@ func connect(ctx context.Context, url string) (*Store, error) {
 	conn, err := pgx.ConnectConfig(ctx, cfg)
 	if err != nil {
 		return nil, ErrUnavailable
+	}
+	return conn, nil
+}
+func connect(ctx context.Context, url string) (*Store, error) {
+	conn, err := dial(ctx, url)
+	if err != nil {
+		return nil, err
 	}
 	var locked bool
 	if err = conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", ownerLock).Scan(&locked); err != nil || !locked {
@@ -199,12 +211,24 @@ func Migrate(ctx context.Context, url, runtimeRole string) error {
 		}
 	}
 	if runtimeRole != "" {
-		role := pgx.Identifier{runtimeRole}.Sanitize()
-		if _, err = s.conn.Exec(ctx, "GRANT USAGE ON SCHEMA capture TO "+role+"; GRANT SELECT ON capture.schema_version TO "+role+"; GRANT SELECT,INSERT ON capture.metadata TO "+role+"; GRANT SELECT,INSERT,UPDATE ON capture.peers,capture.operations TO "+role+"; GRANT SELECT,INSERT,DELETE ON capture.leases TO "+role); err != nil {
+		if _, err = s.conn.Exec(ctx, runtimeGrants(pgx.Identifier{runtimeRole}.Sanitize())); err != nil {
 			return ErrUnavailable
 		}
 	}
 	return nil
+}
+
+// runtimeGrants is what the restricted runtime role may do. role is already
+// quoted. Operations are never deleted by the runtime role (the purge uses the
+// migration role); peers are, by the plugin's own retention.
+func runtimeGrants(role string) string {
+	return "GRANT USAGE ON SCHEMA capture TO " + role +
+		"; GRANT SELECT ON capture.schema_version TO " + role +
+		"; GRANT SELECT,INSERT ON capture.metadata TO " + role +
+		"; GRANT UPDATE (generation_floor) ON capture.metadata TO " + role +
+		"; GRANT SELECT,INSERT,UPDATE ON capture.operations TO " + role +
+		"; GRANT SELECT,INSERT,UPDATE,DELETE ON capture.peers TO " + role +
+		"; GRANT SELECT,INSERT,DELETE ON capture.leases TO " + role
 }
 func Open(ctx context.Context, url, pluginID string) (*Store, error) {
 	s, err := connect(ctx, url)
@@ -249,9 +273,48 @@ func (s *Store) NextGeneration(ctx context.Context, id string) (uint64, error) {
 		if !exists && count >= 10000 {
 			return ErrCapacity
 		}
-		return s.conn.QueryRow(ctx, "INSERT INTO capture.peers(id,generation) VALUES($1,1) ON CONFLICT(id) DO UPDATE SET generation=capture.peers.generation+1 RETURNING generation", id).Scan(&gen)
+		// A new row starts above every generation ever deleted (the floor), so a
+		// peer that comes back after retention never repeats a generation.
+		return s.conn.QueryRow(ctx, `INSERT INTO capture.peers(id,generation)
+VALUES($1,(SELECT generation_floor FROM capture.metadata WHERE singleton)+1)
+ON CONFLICT(id) DO UPDATE SET generation=capture.peers.generation+1,seen_at=now()
+RETURNING generation`, id).Scan(&gen)
 	})
 	return gen, err
+}
+
+// MaintainPeers refreshes the connected peers and deletes at most limit peers
+// that have been unused for idle: not connected, not seen since the cutoff, no
+// lease and no retained operation refers to them. The highest deleted
+// generation is recorded in generation_floor in the same statement. It returns
+// how many peers were deleted.
+func (s *Store) MaintainPeers(ctx context.Context, connected []string, idle time.Duration, limit int) (int, error) {
+	var deleted int
+	err := s.access(ctx, func(ctx context.Context) error {
+		if len(connected) > 0 {
+			if _, err := s.conn.Exec(ctx, "UPDATE capture.peers SET seen_at=now() WHERE id=ANY($1)", connected); err != nil {
+				return err
+			}
+		}
+		if connected == nil {
+			connected = []string{}
+		}
+		return s.conn.QueryRow(ctx, `WITH gone AS (
+ DELETE FROM capture.peers WHERE id IN (
+  SELECT p.id FROM capture.peers p
+  WHERE p.seen_at < now()-make_interval(secs=>$1)
+   AND NOT p.id=ANY($2)
+   AND NOT EXISTS(SELECT 1 FROM capture.leases l WHERE l.peer_id=p.id)
+   AND p.id NOT IN (SELECT t->>'peer_id' FROM capture.operations o, jsonb_array_elements(o.targets) t WHERE t->>'peer_id' IS NOT NULL)
+  ORDER BY p.seen_at LIMIT $3)
+ RETURNING generation
+), bump AS (
+ UPDATE capture.metadata SET generation_floor=GREATEST(generation_floor,(SELECT max(generation) FROM gone))
+ WHERE singleton AND EXISTS(SELECT 1 FROM gone)
+)
+SELECT count(*) FROM gone`, idle.Seconds(), connected, limit).Scan(&deleted)
+	})
+	return deleted, err
 }
 func scanOperation(row pgx.Row) (Operation, error) {
 	var op Operation

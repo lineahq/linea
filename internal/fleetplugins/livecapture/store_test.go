@@ -181,6 +181,42 @@ func TestPostgresReservationRecoveryAndGrants(t *testing.T) {
 	if admin.QueryRow(ctx, "SELECT count(*) FROM capture.peers").Scan(&count) != nil || count != 2 {
 		t.Fatal("purge erased generation fences")
 	}
+	// Peer retention: the running plugin deletes a peer only when no lease and
+	// no retained operation refers to it, never one that is connected, and a
+	// peer created afterwards starts above every deleted generation.
+	store, err = Open(ctx, runtimeURL, "test-plugin")
+	if err != nil {
+		t.Fatal("reopen for peer retention failed", err)
+	}
+	if _, err := admin.Exec(ctx, "UPDATE capture.peers SET seen_at=now()-interval '48 hours'"); err != nil {
+		t.Fatal("fixture age setup failed")
+	}
+	if n, err := store.MaintainPeers(ctx, nil, peerRetention, 10); err != nil || n != 0 {
+		t.Fatal("peers with a lease were deleted", n, err)
+	}
+	if _, err := admin.Exec(ctx, "DELETE FROM capture.leases"); err != nil {
+		t.Fatal("fixture lease removal failed")
+	}
+	if n, err := store.MaintainPeers(ctx, nil, peerRetention, 10); err != nil || n != 0 {
+		t.Fatal("peers named by a retained operation were deleted", n, err)
+	}
+	if _, err := admin.Exec(ctx, "DELETE FROM capture.operations"); err != nil {
+		t.Fatal("fixture operation removal failed")
+	}
+	if n, err := store.MaintainPeers(ctx, []string{one}, peerRetention, 10); err != nil || n != 1 {
+		t.Fatal("expected the one unconnected unused peer to be deleted", n, err)
+	}
+	var floor int64
+	if admin.QueryRow(ctx, "SELECT count(*) FROM capture.peers").Scan(&count) != nil || count != 1 || admin.QueryRow(ctx, "SELECT generation_floor FROM capture.metadata").Scan(&floor) != nil || floor != 1 {
+		t.Fatal("deleted peer or generation floor wrong", count, floor)
+	}
+	if generation, err := store.NextGeneration(ctx, two); err != nil || generation != 2 {
+		t.Fatal("a deleted peer reused a generation", generation, err)
+	}
+	if generation, err := store.NextGeneration(ctx, one); err != nil || generation != 3 {
+		t.Fatal("a kept peer lost its counter", generation, err)
+	}
+	store.Close()
 	if _, err := admin.Exec(ctx, "UPDATE capture.schema_version SET checksum=repeat('0',64)"); err != nil {
 		t.Fatal("fixture checksum mutation failed")
 	}
