@@ -40,6 +40,12 @@ the generic plugin mechanisms are in [fleet-plugin-host.md](fleet-plugin-host.md
   link wakeups and early timers neither skip a round nor delay the next.
 - While core is unreachable, new streams are refused and capture stops with
   host authority.
+- On the delivery listener a gRPC tap checks the credential before the OTLP
+  request is read or decoded. gRPC runs the tap under the connection's
+  transport lock (verified for grpc-go 1.83.2), so it never introspects: it
+  refuses a missing or malformed credential, a credential cached as refused
+  and any request while the plugin is not ready. A cache miss passes on and
+  the export introspects after decoding, as before.
 - Peer links resolve at most 64 per pass, through `agents/resolve` with
   the introspected `credential_id` and the identity attributes. Only a
   unique match is linked. Each peer keeps its last attempt and next due

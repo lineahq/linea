@@ -472,6 +472,8 @@ its unchanged wire implementation, and clients may request lower limits.
 | Group or selector members resolved / peers admitted | 1,000 / 16 |
 | Peer links resolved per pass (passes at least 1 s apart) | 64 |
 | Control TCP / HTTP and data TCP | `max_peers` + 16 handshake reserve / 64 each |
+| gRPC connections (control and data) | Keepalive ping after 30 s quiet, closed when unanswered for 10 s; closed after 30 s without a stream; request headers 16 KiB |
+| Data connection age | 5 minutes, then 5 s to finish exports; the exporter redials. Control connections do not age out, since closing one ends the peer's sessions |
 | Peer discovery page | Default 16, maximum 64 peers, encoded JSON at most 512 KiB |
 | Generic ingress | 64 KiB request, 1 MiB response, 2 reads + 2 writes, 2-second deadline |
 

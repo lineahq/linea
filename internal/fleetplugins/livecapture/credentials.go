@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/tap"
 )
 
 // Collectors present their fleet agent credential, unchanged, on the control
@@ -105,12 +106,45 @@ func (s *Server) introspect(ctx context.Context, session pluginsdk.Session, hash
 	return entry, nil
 }
 
-func (s *Server) authenticate(ctx context.Context) (credential, error) {
-	values := metadata.ValueFromIncomingContext(ctx, "authorization")
+// bearerHash hashes the one bearer credential in an authorization header.
+func bearerHash(values []string) ([32]byte, bool) {
 	if len(values) != 1 || !strings.HasPrefix(values[0], "Bearer ") || len(values[0]) > 1024 {
+		return [32]byte{}, false
+	}
+	return sha256.Sum256([]byte(strings.TrimPrefix(values[0], "Bearer "))), true
+}
+
+// preauthenticate runs in the gRPC transport before an OTLP request is read
+// or decoded. gRPC calls it under the connection's transport lock, so it never
+// asks the host: it refuses what needs no introspection (a missing or
+// malformed credential, an authority that is not ready, a credential cached as
+// refused) and leaves a cache miss to deliver, which introspects as before.
+func (s *Server) preauthenticate(ctx context.Context, info *tap.Info) (context.Context, error) {
+	hash, ok := bearerHash(info.Header.Get("authorization"))
+	if !ok {
+		s.authFailures.Record(translog.ListenerOTLP)
+		return ctx, status.Error(codes.Unauthenticated, "fleet agent credential required")
+	}
+	now := time.Now()
+	s.mu.Lock()
+	entry, cached := s.credentials[hash]
+	ready := s.hostOK && s.dbOK
+	s.mu.Unlock()
+	if !ready {
+		return ctx, status.Error(codes.Unavailable, "capture authority unavailable")
+	}
+	if cached && now.Before(entry.until) && !entry.admitted {
+		s.authFailures.Record(translog.ListenerOTLP)
+		return ctx, status.Error(codes.Unauthenticated, "fleet agent credential inactive or not allowed to capture")
+	}
+	return ctx, nil
+}
+
+func (s *Server) authenticate(ctx context.Context) (credential, error) {
+	hash, ok := bearerHash(metadata.ValueFromIncomingContext(ctx, "authorization"))
+	if !ok {
 		return credential{}, status.Error(codes.Unauthenticated, "fleet agent credential required")
 	}
-	hash := sha256.Sum256([]byte(strings.TrimPrefix(values[0], "Bearer ")))
 	s.mu.Lock()
 	entry, cached := s.credentials[hash]
 	session, ready := s.session, s.hostOK && s.dbOK

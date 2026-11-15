@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/tap"
 )
 
 // fakeHost serves the fleet host services the plugin uses.
@@ -163,6 +164,58 @@ func TestAuthenticateIntrospectsAndCaches(t *testing.T) {
 	s.mu.Unlock()
 	if _, err := s.authenticate(bearer(allowed)); status.Code(err) != codes.Unavailable {
 		t.Fatal("cached credential admitted without host authority", err)
+	}
+}
+
+func TestPreauthenticateRefusesBeforeDecoding(t *testing.T) {
+	s, _, _ := fixture(t)
+	allowed, unlabeled := strings.Repeat("1", 64), strings.Repeat("2", 64)
+	h := &fakeHost{introspect: func(in pluginsdk.IntrospectRequest) pluginsdk.Introspection {
+		sum := sha256.Sum256([]byte(allowed))
+		if in.TokenSHA256 == hex.EncodeToString(sum[:]) {
+			return pluginsdk.Introspection{Active: true, CredentialID: "allowed", Role: "agent", Labels: map[string]string{"capture": "test"}}
+		}
+		return pluginsdk.Introspection{Active: true, CredentialID: "unlabeled", Role: "agent"}
+	}}
+	withHost(t, s, h)
+	info := func(values ...string) *tap.Info {
+		md := metadata.MD{}
+		for _, v := range values {
+			md.Append("authorization", v)
+		}
+		return &tap.Info{FullMethodName: "/opentelemetry.proto.collector.trace.v1.TraceService/Export", Header: md}
+	}
+	tapCode := func(i *tap.Info) codes.Code {
+		_, err := s.preauthenticate(context.Background(), i)
+		return status.Code(err)
+	}
+	for name, i := range map[string]*tap.Info{"missing": info(), "not bearer": info("Basic x"), "two": info("Bearer a", "Bearer b"), "long": info("Bearer " + strings.Repeat("x", 1024))} {
+		if code := tapCode(i); code != codes.Unauthenticated {
+			t.Fatalf("%s credential: %v, want Unauthenticated", name, code)
+		}
+	}
+	// A miss is left to deliver: the tap holds the transport lock and never
+	// introspects.
+	if code := tapCode(info("Bearer " + unlabeled)); code != codes.OK || h.introspects != 0 {
+		t.Fatalf("cache miss: %v after %d introspections, want passed on without one", code, h.introspects)
+	}
+	if _, err := s.authenticate(bearer(unlabeled)); status.Code(err) != codes.Unauthenticated {
+		t.Fatal("credential without capture label admitted", err)
+	}
+	if _, err := s.authenticate(bearer(allowed)); err != nil {
+		t.Fatal(err)
+	}
+	if code := tapCode(info("Bearer " + unlabeled)); code != codes.Unauthenticated {
+		t.Fatalf("cached refusal: %v, want Unauthenticated before decoding", code)
+	}
+	if code := tapCode(info("Bearer " + allowed)); code != codes.OK {
+		t.Fatalf("cached admission: %v", code)
+	}
+	s.mu.Lock()
+	s.hostOK = false
+	s.mu.Unlock()
+	if code := tapCode(info("Bearer " + allowed)); code != codes.Unavailable {
+		t.Fatalf("not ready: %v, want Unavailable", code)
 	}
 }
 

@@ -296,6 +296,13 @@ the first item below.
   `peer_link_no_match_total`, `peer_link_ambiguous_total` and
   `peer_link_error_total`.
 
+- The live capture plugin bounds its gRPC connections (plugin 0.5.0). Both
+  listeners ping a quiet connection after 30 s and close it when the ping goes
+  unanswered for 10 s, close a connection without streams after 30 s and cap
+  request headers at 16 KiB; delivery connections are replaced after 5
+  minutes. A delivery request with a missing, malformed or recently refused
+  credential is refused before its OTLP body is read.
+
 - Report schema 0.16: each topology component lists what a run does not show
   of the real component (`not_shown`, a code and a sentence each): export
   outcomes of captured exporters (every export succeeds, so errors, retries,

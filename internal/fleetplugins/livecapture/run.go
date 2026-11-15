@@ -12,11 +12,35 @@ import (
 	"go.opentelemetry.io/collector/pdata/ptrace/ptraceotlp"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/keepalive"
 
 	"github.com/lineahq/linea/collector/livecapture/controlpb"
 	"github.com/lineahq/linea/internal/fleetplugins/livecapture/translog"
 	_ "google.golang.org/grpc/encoding/gzip"
 )
+
+// gRPC connection bounds. grpc-go's defaults keep a silent connection for two
+// hours and an idle or old one forever. Both listeners ping a quiet peer
+// every keepaliveTime and close it when the ping goes unanswered, close a
+// connection without streams after maxConnectionIdle, and cap request headers.
+// Only delivery connections age out: an exporter redials transparently, while
+// ending a control connection would end the peer's sessions.
+const (
+	keepaliveTime     = 30 * time.Second
+	keepaliveTimeout  = 10 * time.Second
+	maxConnectionIdle = 30 * time.Second
+	dataConnectionAge = 5 * time.Minute
+	dataAgeGrace      = 5 * time.Second
+	maxHeaderList     = 16 << 10
+)
+
+func connectionBounds(age time.Duration) []grpc.ServerOption {
+	params := keepalive.ServerParameters{Time: keepaliveTime, Timeout: keepaliveTimeout, MaxConnectionIdle: maxConnectionIdle}
+	if age > 0 {
+		params.MaxConnectionAge, params.MaxConnectionAgeGrace = age, dataAgeGrace
+	}
+	return []grpc.ServerOption{grpc.KeepaliveParams(params), grpc.MaxHeaderListSize(maxHeaderList), grpc.ConnectionTimeout(2 * time.Second)}
+}
 
 // Run serves until ctx ends or a fatal cause arises. Every error it returns
 // carries an enum cause (CauseOf); log receives the transition log.
@@ -35,8 +59,8 @@ func Run(ctx context.Context, config Config, repo Repository, log *translog.Logg
 	}()
 	defer s.cancel()
 	defer s.host.HTTP.CloseIdleConnections()
-	controlOptions := []grpc.ServerOption{grpc.MaxRecvMsgSize(1 << 20), grpc.MaxSendMsgSize(64 << 10), grpc.MaxConcurrentStreams(1), grpc.ConnectionTimeout(2 * time.Second)}
-	dataOptions := []grpc.ServerOption{grpc.MaxRecvMsgSize(256 << 10), grpc.MaxConcurrentStreams(8), grpc.ConnectionTimeout(2 * time.Second)}
+	controlOptions := append(connectionBounds(0), grpc.MaxRecvMsgSize(1<<20), grpc.MaxSendMsgSize(64<<10), grpc.MaxConcurrentStreams(1))
+	dataOptions := append(connectionBounds(dataConnectionAge), grpc.MaxRecvMsgSize(256<<10), grpc.MaxConcurrentStreams(8), grpc.InTapHandle(s.preauthenticate))
 	if !config.TestInsecure {
 		cert, err := tls.LoadX509KeyPair(config.CertFile, config.KeyFile)
 		if err != nil {
