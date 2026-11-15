@@ -651,3 +651,35 @@ func TestRawPointCopiesAreNotRedacted(t *testing.T) {
 		t.Fatal("raw trace copy was modified")
 	}
 }
+
+// A raw point refuses an oversized original before copying it, and the copy
+// keeps no group for it.
+func TestRawPointRefusesOversizedRecordBeforeCopy(t *testing.T) {
+	m, sink := testManager(t)
+	p := CapturePoint{Point: Point{Pipeline: "traces", Point: "raw"}, Signal: Traces, Sensitivity: "raw"}
+	if err := m.Register(p); err != nil {
+		t.Fatal(err)
+	}
+	r := traceRequest("raw-size")
+	r.CapturePoints = []Point{p.Point}
+	r.Limits.RecordBytes = 256
+	if _, err := m.StartSession(context.Background(), r, Access{AllowRaw: true}); err != nil {
+		t.Fatal(err)
+	}
+	s := m.active.Load()
+	data := ptrace.NewTraces()
+	large := data.ResourceSpans().AppendEmpty()
+	span := large.ScopeSpans().AppendEmpty().Spans().AppendEmpty()
+	span.SetName("large")
+	span.Attributes().PutStr("payload", strings.Repeat("x", 1024))
+	small := data.ResourceSpans().AppendEmpty()
+	small.ScopeSpans().AppendEmpty().Spans().AppendEmpty().SetName("small")
+	m.CaptureTraces(context.Background(), p.Point, data)
+	stats := s.stats()
+	if stats.Dropped["record_size"] != 1 || stats.EnqueuedRecords != 1 || len(sink.trace) != 1 {
+		t.Fatalf("stats %+v", stats)
+	}
+	if copy := sink.trace[0]; copy.ResourceSpans().Len() != 1 || copy.ResourceSpans().At(0).ScopeSpans().At(0).Spans().At(0).Name() != "small" {
+		t.Fatal("oversized raw record left a group in the copy")
+	}
+}

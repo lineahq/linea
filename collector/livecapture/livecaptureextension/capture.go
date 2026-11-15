@@ -216,6 +216,17 @@ func (c *capture) precheck() bool {
 	return true
 }
 
+// oversized refuses a record of n encoded bytes above the record size limit.
+// Raw points call it on the original before copying: their copy is the
+// original, so an oversized one is never copied.
+func (c *capture) oversized(n int) bool {
+	if fieldSize(n) > c.session.request.Limits.RecordBytes {
+		c.drops[dropRecordSize]++
+		return true
+	}
+	return false
+}
+
 // stage accounts a redacted record of n encoded bytes. It returns false and
 // counts the drop when the record cannot be admitted.
 func (c *capture) stage(n int) bool {
@@ -354,6 +365,12 @@ records:
 				if !c.sampled(func() uint64 { return traceHash(span.TraceID()) }) || !c.precheck() {
 					continue
 				}
+				n := 0
+				if redact == nil {
+					if n = sizer.SpanSize(span); c.oversized(n) {
+						continue
+					}
+				}
 				if !created {
 					out, scratch, created = ptrace.NewTraces(), ptrace.NewSpan(), true
 				}
@@ -374,7 +391,10 @@ records:
 					redact.scope(scope.Scope())
 					c.pending += envelopeTag + int64(sizer.ScopeSpansSize(scope))
 				}
-				if c.stage(sizer.SpanSize(scratch)) {
+				if redact != nil {
+					n = sizer.SpanSize(scratch)
+				}
+				if c.stage(n) {
 					scratch.MoveTo(scope.Spans().AppendEmpty())
 				}
 			}
@@ -432,6 +452,12 @@ records:
 				if !c.sampled(func() uint64 { return logHash(log) }) || !c.precheck() {
 					continue
 				}
+				n := 0
+				if redact == nil {
+					if n = sizer.LogRecordSize(log); c.oversized(n) {
+						continue
+					}
+				}
 				if !created {
 					out, scratch, created = plog.NewLogs(), plog.NewLogRecord(), true
 				}
@@ -452,7 +478,10 @@ records:
 					redact.scope(scope.Scope())
 					c.pending += envelopeTag + int64(sizer.ScopeLogsSize(scope))
 				}
-				if c.stage(sizer.LogRecordSize(scratch)) {
+				if redact != nil {
+					n = sizer.LogRecordSize(scratch)
+				}
+				if c.stage(n) {
 					scratch.MoveTo(scope.LogRecords().AppendEmpty())
 				}
 			}
@@ -598,13 +627,22 @@ records:
 						if !selects(mc, p) {
 							continue
 						}
+						n := 0
+						if redact == nil {
+							if n = sizer.NumberDataPointSize(p); c.oversized(n) {
+								continue
+							}
+						}
 						if number == (pmetric.NumberDataPoint{}) {
 							number = pmetric.NewNumberDataPoint()
 						}
 						p.CopyTo(number)
 						redact.numberDataPoint(number)
 						target := mc.target()
-						if c.stage(sizer.NumberDataPointSize(number)) {
+						if redact != nil {
+							n = sizer.NumberDataPointSize(number)
+						}
+						if c.stage(n) {
 							if target.Type() == pmetric.MetricTypeSum {
 								number.MoveTo(target.Sum().DataPoints().AppendEmpty())
 							} else {
@@ -620,13 +658,22 @@ records:
 						if !selects(mc, p) {
 							continue
 						}
+						n := 0
+						if redact == nil {
+							if n = sizer.HistogramDataPointSize(p); c.oversized(n) {
+								continue
+							}
+						}
 						if histogram == (pmetric.HistogramDataPoint{}) {
 							histogram = pmetric.NewHistogramDataPoint()
 						}
 						p.CopyTo(histogram)
 						redact.histogramDataPoint(histogram)
 						target := mc.target()
-						if c.stage(sizer.HistogramDataPointSize(histogram)) {
+						if redact != nil {
+							n = sizer.HistogramDataPointSize(histogram)
+						}
+						if c.stage(n) {
 							histogram.MoveTo(target.Histogram().DataPoints().AppendEmpty())
 						}
 					}
@@ -638,13 +685,22 @@ records:
 						if !selects(mc, p) {
 							continue
 						}
+						n := 0
+						if redact == nil {
+							if n = sizer.ExponentialHistogramDataPointSize(p); c.oversized(n) {
+								continue
+							}
+						}
 						if exponential == (pmetric.ExponentialHistogramDataPoint{}) {
 							exponential = pmetric.NewExponentialHistogramDataPoint()
 						}
 						p.CopyTo(exponential)
 						redact.exponentialHistogramDataPoint(exponential)
 						target := mc.target()
-						if c.stage(sizer.ExponentialHistogramDataPointSize(exponential)) {
+						if redact != nil {
+							n = sizer.ExponentialHistogramDataPointSize(exponential)
+						}
+						if c.stage(n) {
 							exponential.MoveTo(target.ExponentialHistogram().DataPoints().AppendEmpty())
 						}
 					}
@@ -656,13 +712,22 @@ records:
 						if !selects(mc, p) {
 							continue
 						}
+						n := 0
+						if redact == nil {
+							if n = sizer.SummaryDataPointSize(p); c.oversized(n) {
+								continue
+							}
+						}
 						if summary == (pmetric.SummaryDataPoint{}) {
 							summary = pmetric.NewSummaryDataPoint()
 						}
 						p.CopyTo(summary)
 						redact.summaryDataPoint(summary)
 						target := mc.target()
-						if c.stage(sizer.SummaryDataPointSize(summary)) {
+						if redact != nil {
+							n = sizer.SummaryDataPointSize(summary)
+						}
+						if c.stage(n) {
 							summary.MoveTo(target.Summary().DataPoints().AppendEmpty())
 						}
 					}

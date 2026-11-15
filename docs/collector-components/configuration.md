@@ -181,7 +181,9 @@ flowchart TD
 
 - Records that fail a filter are not selected and are not drops. An
   evaluation error counts as no match and is reported under `filter_errors`.
-- Redaction applies to redacted points only.
+- Redaction applies to redacted points only. A raw point's copy is the
+  original, so it checks the record size before copying and never copies
+  an oversized record.
 - A drop is counted under its reason in the session's `dropped` stats.
 - The first refusal by the pre-check or admission ends the walk over the
   batch: the records after it are not examined, selected or counted.
