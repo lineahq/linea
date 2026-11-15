@@ -58,6 +58,7 @@ type run struct {
 	manager  *Manager
 	id       string
 	remote   bool         // Started by the control service, so it ends when control is lost.
+	panicked atomic.Bool  // Set by the first recovered capture panic, which alone is logged.
 	deadline atomic.Int64 // Unix nanoseconds; only ever moves earlier.
 	expiry   *time.Timer
 	// ended closes when admission is over; done when the run is terminal.

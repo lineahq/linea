@@ -18,6 +18,8 @@ import (
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/ptrace"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 type testHost map[component.ID]component.Component
@@ -447,6 +449,32 @@ func TestLimitsQueueFailuresPanicAndKillSwitch(t *testing.T) {
 		<-s.done
 		if m.Statuses()[0].State != "failed" || m.Statuses()[0].Reason != "capture_panic" {
 			t.Fatal(m.Statuses())
+		}
+	})
+	t.Run("panic is logged once without its value", func(t *testing.T) {
+		m, sink := testManager(t)
+		core, logs := observer.New(zap.WarnLevel)
+		m.settings.Logger = zap.New(core)
+		sink.panics = true
+		r := traceRequest("panic-log")
+		s := start(t, m, r)
+		// A second concurrent call may panic too; only the first is logged.
+		var wg sync.WaitGroup
+		for range 2 {
+			wg.Go(func() { m.CaptureTraces(context.Background(), r.CapturePoints[0], testTraces()) })
+		}
+		wg.Wait()
+		<-s.done
+		entries := logs.All()
+		if len(entries) != 1 {
+			t.Fatalf("%d warnings", len(entries))
+		}
+		fields := entries[0].ContextMap()
+		if fields["session_id"] != "panic-log" || fields["signal"] != "traces" || fields["point"] != r.CapturePoints[0].Point || len(fields) != 4 {
+			t.Fatal(fields)
+		}
+		if strings.Contains(fmt.Sprint(entries[0]), "private payload") {
+			t.Fatal("panic value logged")
 		}
 	})
 	t.Run("kill switch", func(t *testing.T) {

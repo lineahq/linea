@@ -18,6 +18,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 	"go.opentelemetry.io/otel/metric"
+	"go.uber.org/zap"
 )
 
 // envelopeTag over-estimates a nested message's field tag and length prefix,
@@ -86,6 +87,10 @@ func (m *Manager) begin(signal Signal, point Point) *capture {
 
 func (c *capture) finish() {
 	if recover() != nil {
+		// The panic value can hold telemetry, so it is never logged.
+		if c.session.run.panicked.CompareAndSwap(false, true) {
+			c.manager.settings.Logger.Warn("capture panicked; session ends", zap.String("session_id", c.session.run.id), zap.String("signal", string(c.signal)), zap.String("pipeline", c.point.Pipeline), zap.String("point", c.point.Point))
+		}
 		c.session.requestStop("failed", "capture_panic")
 	}
 	r, t := c.session.run, &c.manager.telemetry

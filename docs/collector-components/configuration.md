@@ -151,7 +151,9 @@ Sensitivity describes the point's position in your pipeline.
 - Original pdata is forwarded synchronously and unchanged. Only downstream
   errors are returned to the pipeline.
 - Capture failures are counted or terminate the session. A capture panic is
-  recovered without exposing its value.
+  recovered and ends the session as `capture_panic`. The first one per
+  session logs one warning with the session ID, signal, pipeline and point,
+  never the panic value or payload.
 
 ### Capture data path
 
