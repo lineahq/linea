@@ -497,6 +497,59 @@ compiles in its identity. Peer discovery shows it as
 - The Collector checks pattern length itself, so a pattern over its limit
   still ends the target failed with `collector_rejected`.
 
+## Transition log
+
+The plugin writes one JSON line on stderr per state transition, never per
+request, with Go's `log/slog` fields `time`, `level` and `msg` (the event
+name), plus `component` (always `livecapture`). With Docker Compose, read it
+with `docker compose logs livecapture-plugin`. A line holds only IDs, enum
+reasons, counts, durations and the version: no token, credential, filter,
+capture point, attribute value, payload, pod or cluster name, owner or error
+text ever reaches it. The IDs are those the plugin and API already show
+(operation, peer, credential and agent IDs, authority, instance, epoch).
+
+| `msg` | Level | Fields | Written when |
+| --- | --- | --- | --- |
+| `plugin_started` | info | `version` | `serve` begins |
+| `plugin_stopped` | info | `version`, `reason` | `serve` ends; `reason` is `shutdown` or the cause |
+| `command_failed` | error | `cause` | `migrate`, `purge`, `probe` or an unknown command fails |
+| `authority_acquired` | info | `authority`, `instance` | This process holds the database authority and starts serving |
+| `authority_standby` | warn | `reason` | Active/standby only: the first failed attempt to take the authority, such as `owner_busy`; not repeated until it is taken |
+| `authority_released` | info | `authority`, `reason` | Serving ended, with `shutdown` or the fatal cause |
+| `host_session_established` | info | `instance`, `epoch` | The fleet host session is usable, including after a new epoch |
+| `host_session_lost` | warn | `reason` | `host_unreachable`, `permissions_missing` or `epoch_changed`; captures stop with `host_authority_lost` |
+| `drain_started` | info | none | Drain began on shutdown |
+| `database_degraded` | warn | none | The first failed ping after good ones |
+| `database_recovered` | info | `count` | A good ping after `count` failed ones |
+| `database_lost` | error | `reason` | `storage_failures` (three failed pings in a row) or `storage_lost` (connection closed) |
+| `plugin_fatal` | error | `cause` | Every fatal exit, once, with its cause |
+| `operation_state` | info | `operation`, `from`, `to`, `reason` | A capture operation changed state; `from` is `none` at admission; `reason` is absent when there is none |
+| `peer_connected` | info | `peer`, `credential`, `link` | A Collector's control stream was accepted (`link` is `pending`) |
+| `peer_disconnected` | info | `peer`, `reason`, `duration_ms` | A control stream ended |
+| `peer_link` | info | `peer`, `link`, `agent` | A peer's link state changed (`agent` only when `linked`) |
+| `auth_failures` | warn | `listener`, `count`, `duration_ms` | Rejected credentials on one listener (`http_api`, `control_grpc`, `otlp_grpc`): one line per listener every 10 s, only when the count is above zero |
+
+`plugin_fatal` causes are `storage_lost`, `storage_failures`, `save_failed`
+(an operation could not be saved), `listener_stopped` and, before serving
+starts, `storage_unavailable`, `tls_invalid`, `listen_failed`, `config_invalid`,
+`invalid_input`, `owner_busy` and `supervisor_failed`. A plugin started with
+`--ha-listen` releases the authority on a fatal cause and tries to take it
+again; one without exits, and Compose restarts it. `peer_disconnected` reasons
+are `credential_rejected` (the credential was revoked or lost its `capture`
+label), `peer_stale`, `peer_retired`, `stream_closed`, `stream_error` and
+`shutdown`. The `reason` of `operation_state` is the operation's `reason` field
+in the API.
+
+`auth_failures` counts a credential the plugin refused: a wrong service or
+metrics token on the HTTP API, and a missing, inactive or not-allowed Collector
+credential on the control and OTLP gRPC listeners. A fleet host that cannot
+answer is no rejected credential; it shows as `host_session_lost`.
+
+Logging never delays the plugin or a Collector. Lines go through a bounded
+queue to the writer; when stderr is blocked and the queue is full, the line is
+dropped. Errors in command-line flags are printed by Go's `flag` package before
+the log starts.
+
 ## Rotation, backup, restore and upgrade
 
 Plugin configuration, token and certificate changes need a plugin restart.

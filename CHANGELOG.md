@@ -221,6 +221,18 @@ the first item below.
   `agent.credential_changed`. Collectors that share a UID across credentials
   (cloned identities) now see one of them refused.
 
+- The live capture plugin logs its state transitions (plugin 0.5.0). It
+  writes one JSON line on stderr per transition, never per request: start and
+  stop with the version, the database authority, the host session and its
+  epoch changes with a reason, a degraded, recovered or lost database, the
+  cause of every fatal exit, each capture operation's state change, each
+  Collector connection and link change, and one summary line per listener
+  every 10 s for rejected credentials. A line holds only IDs, enum reasons,
+  counts and durations; a token, filter, attribute value, payload or error text
+  cannot reach it, and a test checks that no other logging call exists. A
+  failed command no longer prints its error text: it logs one line with an enum
+  `cause`. The fields are in `docs/fleet/livecapture.md`.
+
 - Live capture never makes a Collector wait (plugin 0.5.0, plugin API
   version 3, API schema 3.0.0). The plugin answers every export at once and
   buffers at most 2 MiB and 64 batches per channel (32 MiB in all); a batch

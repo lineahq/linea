@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/lineahq/linea/collector/livecapture/controlpb"
+	"github.com/lineahq/linea/internal/fleetplugins/livecapture/translog"
 	"github.com/lineahq/linea/pluginsdk"
 )
 
@@ -114,7 +115,7 @@ func TestRequestsReadStorageFlagWithoutPinging(t *testing.T) {
 
 	// Once maintain declares the database fatal, the flag stops all three.
 	s.mu.Lock()
-	s.fatalLocked()
+	s.fatalLocked(translog.ReasonStorageFailures)
 	s.mu.Unlock()
 	if code := call(pluginsdk.APIPath + "v1/peers"); code != 503 {
 		t.Fatalf("request after a fatal database answered %d", code)

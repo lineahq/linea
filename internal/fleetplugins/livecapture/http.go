@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lineahq/linea/internal/fleetplugins/livecapture/translog"
 	"github.com/lineahq/linea/pluginsdk"
 )
 
@@ -92,6 +93,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if r.URL.Path == "/metrics" {
 		if s.config.metricsToken == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+s.config.metricsToken)) != 1 {
+			s.authFailures.Record(translog.ListenerHTTP)
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			writeJSON(w, 401, map[string]string{"error": "metrics credential required"})
 			return
@@ -105,6 +107,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+s.config.serviceToken)) != 1 {
+		s.authFailures.Record(translog.ListenerHTTP)
 		writeJSON(w, 401, map[string]string{"error": "service credential required"})
 		return
 	}

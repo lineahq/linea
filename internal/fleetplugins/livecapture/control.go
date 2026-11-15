@@ -11,6 +11,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/lineahq/linea/collector/livecapture/controlpb"
+	"github.com/lineahq/linea/internal/fleetplugins/livecapture/translog"
 )
 
 type peer struct {
@@ -25,9 +26,12 @@ type peer struct {
 	stream       grpc.ServerStream
 	lastSeen     time.Time
 	operation    string
-	wake         chan struct{}
-	done         chan struct{}
-	once         sync.Once
+	// closeReason is why the plugin retired the connection (Server.retirePeerLocked);
+	// none when the Collector or the stream ended it. Guarded by Server.mu.
+	closeReason translog.Reason
+	wake        chan struct{}
+	done        chan struct{}
+	once        sync.Once
 }
 
 func (p *peer) close() { p.once.Do(func() { close(p.done) }) }
@@ -130,6 +134,9 @@ func (c captureControl) WatchCaptures(stream controlpb.CaptureControl_WatchCaptu
 func (s *Server) Watch(stream grpc.ServerStream) error {
 	credential, err := s.authenticate(stream.Context())
 	if err != nil {
+		if status.Code(err) == codes.Unauthenticated {
+			s.authFailures.Record(translog.ListenerControl)
+		}
 		return err
 	}
 	first := &controlpb.CollectorReport{}
@@ -167,7 +174,11 @@ func (s *Server) Watch(stream grpc.ServerStream) error {
 	p := &peer{info: PeerInfo{AuthorityID: s.repo.AuthorityID(), PluginInstance: s.instance, ID: id, Generation: gen, CredentialID: credential.id, Link: PeerLink{State: linkPending}, Identity: r.Identity}, credential: credential.hash, stream: stream, lastSeen: time.Now(), wake: make(chan struct{}, 1), done: make(chan struct{})}
 	s.peers[id] = p
 	s.mu.Unlock()
+	connected := time.Now()
+	s.log.Log(translog.EventPeerConnected, translog.Peer(id), translog.Credential(credential.id), translog.LinkState(translog.LinkPending))
 	s.wakeLinker()
+	// exit is why the stream ended; the final select below sets it.
+	exit := translog.ReasonStreamError
 	defer func() {
 		p.close()
 		s.mu.Lock()
@@ -176,6 +187,10 @@ func (s *Server) Watch(stream grpc.ServerStream) error {
 			return
 		}
 		delete(s.peers, id)
+		if p.closeReason != translog.ReasonNone {
+			exit = p.closeReason
+		}
+		s.log.Log(translog.EventPeerDisconnected, translog.Peer(id), translog.Why(exit), translog.Elapsed(time.Since(connected)))
 		for _, a := range s.operations {
 			for i, t := range a.op.Targets {
 				if t.PeerID == id && t.Generation == gen && !t.Released {
@@ -257,10 +272,13 @@ func (s *Server) Watch(stream grpc.ServerStream) error {
 	}()
 	select {
 	case <-s.ctx.Done():
+		exit = translog.ReasonShutdown
 		return status.Error(codes.Unavailable, "capture authority stopping")
 	case <-p.done:
+		exit = translog.ReasonPeerRetired
 		return status.Error(codes.Unavailable, "capture connection retired")
 	case <-stream.Context().Done():
+		exit = translog.ReasonStreamClosed
 		return stream.Context().Err()
 	case <-failures:
 		return status.Error(codes.Unavailable, "capture control disconnected")

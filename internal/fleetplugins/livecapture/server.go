@@ -17,6 +17,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/lineahq/linea/internal/fleetplugins/livecapture/translog"
 	"github.com/lineahq/linea/pluginsdk"
 )
 
@@ -35,6 +36,8 @@ type activeOperation struct {
 	op      Operation
 	request CreateRequest
 	raw     bool
+	// logged is the state the transition log last reported.
+	logged translog.State
 }
 type Server struct {
 	mu           sync.Mutex
@@ -67,14 +70,20 @@ type Server struct {
 	wg       sync.WaitGroup
 	observed pluginMetrics
 	budgets  [3]*connectionBudget
+	// log is the transition log (nil logs nothing) and authFailures counts
+	// rejected credentials per listener for its summary lines.
+	log          *translog.Logger
+	authFailures *translog.FailureSummary
 }
 
-func New(ctx context.Context, c Config, repo Repository) (*Server, error) {
+// New returns a server over repo. log receives the transition log; nil logs
+// nothing.
+func New(ctx context.Context, c Config, repo Repository, log *translog.Logger) (*Server, error) {
 	if err := repo.Ready(ctx); err != nil {
-		return nil, err
+		return nil, WithCause(translog.ReasonStorageUnavailable, err)
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	s := &Server{config: c, repo: repo, ctx: ctx, cancel: cancel, instance: pluginsdk.RandomID(), dbOK: true, peers: map[string]*peer{}, operations: map[string]*activeOperation{}, channels: map[string]*channel{}, credentials: map[[32]byte]cachedCredential{}, linkWake: make(chan struct{}, 1), revalidateEvery: credentialTTL, peerIdle: peerRetention, now: time.Now, fatal: make(chan error, 1)}
+	s := &Server{config: c, repo: repo, ctx: ctx, cancel: cancel, instance: pluginsdk.RandomID(), dbOK: true, peers: map[string]*peer{}, operations: map[string]*activeOperation{}, channels: map[string]*channel{}, credentials: map[[32]byte]cachedCredential{}, linkWake: make(chan struct{}, 1), revalidateEvery: credentialTTL, peerIdle: peerRetention, now: time.Now, fatal: make(chan error, 1), log: log, authFailures: translog.NewFailureSummary(log, translog.SummaryEvery, time.Now())}
 	s.host = pluginsdk.HostClient{Endpoint: c.HostEndpoint, Token: c.hostToken, InstanceID: s.instance, HTTP: pluginsdk.NewHTTPClient()}
 	for i, limit := range []int{c.peerLimit() + 16, 64, 64} {
 		s.budgets[i] = &connectionBudget{slots: make(chan struct{}, limit)}
@@ -85,6 +94,9 @@ func (s *Server) Start() { s.wg.Add(3); go s.monitorHost(); go s.maintain(); go 
 func (s *Server) Drain() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.draining {
+		s.log.Log(translog.EventDrainStarted)
+	}
 	s.draining = true
 	s.hostOK = false
 	s.stopAllLocked("stopping")
@@ -102,29 +114,51 @@ func (s *Server) Close() {
 	s.cancel()
 	s.mu.Lock()
 	for _, p := range s.peers {
-		p.close()
+		s.retirePeerLocked(p, translog.ReasonShutdown)
 	}
 	for _, c := range s.channels {
 		s.closeChannelLocked(c)
 	}
 	s.mu.Unlock()
 	s.wg.Wait()
+	s.authFailures.Flush(time.Now())
 	s.host.HTTP.CloseIdleConnections()
 }
 func (s *Server) Fatal() <-chan error { return s.fatal }
-func (s *Server) fatalLocked() {
+
+// fatalLocked ends the plugin: it withdraws the database flag and sends the
+// cause, once, to Run. Only the first cause is logged.
+func (s *Server) fatalLocked(cause translog.Reason) {
 	s.dbOK = false
 	select {
-	case s.fatal <- ErrUnavailable:
+	case s.fatal <- WithCause(cause, ErrUnavailable):
+		s.log.Log(translog.EventPluginFatal, translog.Cause(cause))
 	default:
 	}
+}
+
+// retirePeerLocked closes p and remembers why, unless it was closed before.
+func (s *Server) retirePeerLocked(p *peer, reason translog.Reason) {
+	if p.closeReason == translog.ReasonNone {
+		p.closeReason = reason
+	}
+	p.close()
+}
+
+// logOperation reports one operation state transition.
+func (s *Server) logOperation(id string, from, to translog.State, reason string) {
+	s.log.Log(translog.EventOperationState, translog.Operation(id), translog.From(from), translog.To(to), translog.Why(translog.ParseReason(reason)))
 }
 func (s *Server) saveLocked(a *activeOperation) error {
 	previous := a.op.Revision
 	a.op.Revision++
 	if err := s.repo.Save(s.ctx, a.op, previous); err != nil {
-		s.fatalLocked()
+		s.fatalLocked(translog.ReasonSaveFailed)
 		return err
+	}
+	if to := translog.ParseState(a.op.State); to != a.logged {
+		s.logOperation(a.op.ID, a.logged, to, a.op.Reason)
+		a.logged = to
 	}
 	return nil
 }
@@ -171,40 +205,66 @@ func (s *Server) stopAllLocked(state string) {
 func (s *Server) monitorHost() {
 	defer s.wg.Done()
 	for {
-		session, err := s.host.Session(s.ctx)
-		s.mu.Lock()
-		// Without both host permissions Collectors cannot be authenticated or linked.
-		s.permissionsOK = err == nil && hasPermissions(session)
-		if err == nil && !s.permissionsOK {
-			err = ErrUnavailable
-		}
-		if err != nil || s.epoch != "" && s.epoch != session.Epoch {
-			if s.hostOK {
-				s.hostOK = false
-				for _, a := range s.operations {
-					if a.op.Reason == "" {
-						a.op.Reason = "host_authority_lost"
-					}
-				}
-				s.stopAllLocked("stopping")
-				for id, c := range s.channels {
-					s.closeChannelLocked(c)
-					delete(s.channels, id)
-				}
-			}
-			// A new host epoch may follow credential changes; forget cached answers.
-			clear(s.credentials)
-		}
-		if err == nil && !s.draining {
-			s.epoch, s.session = session.Epoch, session
-			s.hostOK = true
-		}
-		s.mu.Unlock()
+		s.checkHost()
 		select {
 		case <-s.ctx.Done():
 			return
 		case <-time.After(500 * time.Millisecond):
 		}
+	}
+}
+
+// checkHost reads the host session once and applies it: it ends host-bound work
+// when the session is lost or its epoch changed, and adopts a usable session.
+// The transitions are logged after the lock is released.
+func (s *Server) checkHost() {
+	session, err := s.host.Session(s.ctx)
+	s.mu.Lock()
+	// unusable is why the session cannot serve, none when it can.
+	unusable := translog.ReasonNone
+	if err != nil {
+		unusable = translog.ReasonHostUnreachable
+	}
+	// Without both host permissions Collectors cannot be authenticated or linked.
+	s.permissionsOK = err == nil && hasPermissions(session)
+	if err == nil && !s.permissionsOK {
+		err = ErrUnavailable
+		unusable = translog.ReasonPermissionsMissing
+	}
+	if err == nil && s.epoch != "" && s.epoch != session.Epoch {
+		unusable = translog.ReasonEpochChanged
+	}
+	lost, established := translog.ReasonNone, false
+	if unusable != translog.ReasonNone {
+		if s.hostOK {
+			lost = unusable
+			s.hostOK = false
+			for _, a := range s.operations {
+				if a.op.Reason == "" {
+					a.op.Reason = "host_authority_lost"
+				}
+			}
+			s.stopAllLocked("stopping")
+			for id, c := range s.channels {
+				s.closeChannelLocked(c)
+				delete(s.channels, id)
+			}
+		}
+		// A new host epoch may follow credential changes; forget cached answers.
+		clear(s.credentials)
+	}
+	if err == nil && !s.draining {
+		established = !s.hostOK
+		s.epoch, s.session = session.Epoch, session
+		s.hostOK = true
+	}
+	instance, epoch := s.instance, s.epoch
+	s.mu.Unlock()
+	if lost != translog.ReasonNone {
+		s.log.Log(translog.EventHostSessionLost, translog.Why(lost))
+	}
+	if established {
+		s.log.Log(translog.EventHostSessionEstablished, translog.Instance(instance), translog.Epoch(epoch))
 	}
 }
 
@@ -220,12 +280,18 @@ const storageFailureLimit = 3
 func (s *Server) observeStorageLocked(err error) bool {
 	switch {
 	case err == nil:
+		if s.storageFailures > 0 {
+			s.log.Log(translog.EventDatabaseRecovered, translog.Count(s.storageFailures))
+		}
 		s.storageFailures = 0
 	case errors.Is(err, ErrStorageBusy):
 	case errors.Is(err, ErrStorageLost):
 		return true
 	default:
 		s.storageFailures++
+		if s.storageFailures == 1 {
+			s.log.Log(translog.EventDatabaseDegraded)
+		}
 		return s.storageFailures >= storageFailureLimit
 	}
 	return false
@@ -243,11 +309,17 @@ func (s *Server) maintain() {
 		case <-s.ctx.Done():
 			return
 		case now := <-tick.C:
+			s.authFailures.Tick(now)
 			if now.Sub(lastDB) >= time.Second {
 				err := s.repo.Ready(s.ctx)
 				s.mu.Lock()
 				if s.observeStorageLocked(err) {
-					s.fatalLocked()
+					cause := translog.ReasonStorageFailures
+					if errors.Is(err, ErrStorageLost) {
+						cause = translog.ReasonStorageLost
+					}
+					s.log.Log(translog.EventDatabaseLost, translog.Why(cause))
+					s.fatalLocked(cause)
 					s.mu.Unlock()
 					return
 				}
@@ -268,7 +340,7 @@ func (s *Server) maintain() {
 			}
 			for _, p := range s.peers {
 				if now.Sub(p.lastSeen) > 6*time.Second {
-					p.close()
+					s.retirePeerLocked(p, translog.ReasonPeerStale)
 				}
 			}
 			for id, a := range s.operations {
@@ -499,7 +571,8 @@ func (s *Server) Create(ctx context.Context, owner string, request CreateRequest
 		return Operation{}, err
 	}
 	s.observed.admitted.Add(1)
-	a := &activeOperation{op: op, request: request, raw: raw}
+	a := &activeOperation{op: op, request: request, raw: raw, logged: translog.StateStarting}
+	s.logOperation(op.ID, translog.StateNone, translog.StateStarting, "")
 	s.operations[op.ID] = a
 	if ctx.Err() != nil {
 		a.op.State = "interrupted"
@@ -700,7 +773,7 @@ func (s *Server) Get(ctx context.Context, owner, id string) (Operation, error) {
 		}
 		// Unlocked before liveStats below, which takes s.mu again.
 		s.mu.Unlock()
-		previous := op.Revision
+		previous, was := op.Revision, translog.ParseState(op.State)
 		op.State = "expired"
 		op.Reason = "absolute_expiry"
 		expireTargets(op.Targets)
@@ -708,6 +781,7 @@ func (s *Server) Get(ctx context.Context, owner, id string) (Operation, error) {
 		if err := s.repo.Save(ctx, op, previous); err != nil {
 			return s.repo.Get(ctx, id)
 		}
+		s.logOperation(op.ID, was, translog.StateExpired, op.Reason)
 	}
 	if err == nil {
 		s.liveStats(&op)
@@ -747,11 +821,13 @@ func (s *Server) Stop(ctx context.Context, owner, id string, revision int64) (Op
 			return Operation{}, ErrPrecondition
 		}
 		if err == nil && (op.State == "starting" || op.State == "active" || op.State == "stopping") {
-			previous := op.Revision
+			previous, was := op.Revision, translog.ParseState(op.State)
 			op.State = "interrupted"
 			op.Reason = "stop_unconfirmed"
 			op.Revision++
-			err = s.repo.Save(ctx, op, previous)
+			if err = s.repo.Save(ctx, op, previous); err == nil {
+				s.logOperation(op.ID, was, translog.StateInterrupted, op.Reason)
+			}
 		}
 		return op, err
 	}

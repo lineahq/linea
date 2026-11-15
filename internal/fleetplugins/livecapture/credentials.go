@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lineahq/linea/internal/fleetplugins/livecapture/translog"
 	"github.com/lineahq/linea/pluginsdk"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -225,7 +226,7 @@ func (s *Server) recheckCredentials(session pluginsdk.Session) {
 	for _, p := range s.peers {
 		if entry, ok := results[p.credential]; ok && (!entry.admitted || !entry.credential.allows(p.info.Identity.Group)) {
 			s.observed.credentialClosed.Add(1)
-			p.close()
+			s.retirePeerLocked(p, translog.ReasonCredentialRejected)
 		}
 	}
 }
@@ -311,13 +312,20 @@ func (s *Server) recordLink(c linkCandidate, agent, outcome string, now time.Tim
 		return
 	}
 	p.linkTried = now
+	before, agentBefore := p.info.Link.State, p.info.AgentID
 	if outcome == linkLinked {
 		p.info.AgentID, p.info.Link.State = agent, linkLinked
 		p.linkFailures, p.linkNext = 0, now.Add(linkedRefresh)
+		if before != linkLinked || agentBefore != agent {
+			s.log.Log(translog.EventPeerLink, translog.Peer(c.id), translog.LinkState(translog.LinkLinked), translog.Agent(agent))
+		}
 		return
 	}
 	if outcome == linkNoMatch || outcome == linkAmbiguous {
 		p.info.AgentID, p.info.Link.State = "", outcome
+		if before != outcome {
+			s.log.Log(translog.EventPeerLink, translog.Peer(c.id), translog.LinkState(translog.ParseLink(outcome)))
+		}
 	}
 	p.linkFailures++
 	p.linkNext = now.Add(linkBackoff(p.linkFailures))

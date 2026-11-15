@@ -150,6 +150,57 @@ everyone.
 - Peers named by a retained operation stay until the operation purge removes
   the operation; the operation cap of 10,000 is separate.
 
+## Transition log
+
+The plugin's own `translog` package (`internal/fleetplugins/livecapture/translog`,
+standard library only; it is a copy apart from fleet core's and is not in
+`pluginsdk`) is the only place that writes a log line. The events and fields
+are in the operator guide, [Transition log](../fleet/livecapture.md#transition-log).
+
+- Closed by construction. An event is an `Event` constant and an attribute
+  comes from a typed constructor: IDs (`Operation`, `Peer`, `Credential`,
+  `Agent`, `Authority`, `Instance`, `Epoch`, each refused unless 1 to 128
+  characters of letters, digits and `._-`, otherwise logged as `invalid`),
+  enums (`Why` and `Cause` take a `Reason`, `From` and `To` a `State`,
+  `LinkState` a `Link`, `OnListener` a `Listener`), `Count`, `Elapsed` and
+  `Version`. No function takes an error, a free message, a map or an
+  interface. A string from outside an enum maps through a closed lookup
+  (`ParseReason`, `ParseState`, `ParseLink`) that answers `unknown`; the stored
+  operation reason and state go through it.
+- Causes without text. `causeError` (`cause.go`) carries a `Reason` beside an
+  error and unwraps to it, so `errors.Is` still sees the sentinel. `WithCause`
+  attaches one and `CauseOf` reads it, else maps the sentinels, else `failed`;
+  it never reads error text. `Server.fatalLocked(cause)` is the only way to end
+  the plugin, so every fatal exit has a cause, and `Run` returns the error it
+  sent.
+- Where the lines come from. `checkHost` (called by `monitorHost`) logs the
+  host session after it releases the lock; `observeStorageLocked` the degraded
+  and recovered database and `maintain` its loss; `saveLocked` every operation
+  transition once it has saved (the last logged state is
+  `activeOperation.logged`; the two paths that update the database directly, in
+  `Get` and `Stop`, log themselves); `Watch` the peer connect and disconnect;
+  `recordLink` link changes; `Run` the authority; `main` the process, standby
+  and command failures. A peer the plugin closes records why
+  (`peer.closeReason`, set once by `retirePeerLocked`).
+- Authentication failures. `FailureSummary` counts rejections per listener with
+  an atomic increment. `maintain` calls `Tick` with its ticker's time every
+  250 ms, and a window of 10 s writes one line per listener with a count;
+  `Server.Close` flushes the open window. The clock is the caller's, so tests
+  pass times instead of sleeping.
+- Never waits. `New` puts the JSON handler behind a 256-line queue and one
+  writer goroutine. A full queue drops the line (`Logger.Dropped`) instead of
+  blocking, because lines are written under the server lock and a stuck stderr
+  must not stall a Collector. `main` closes the logger with a 2 s bound so the
+  last lines get out.
+- Structural test. `translog/audit_test.go` parses the plugin tree and
+  `cmd/linea-fleet-livecapture`: no `log` or `slog` import, no `os.Stderr`
+  except as the writer of `translog.New`, no print builtin; every `.Log` call
+  names a `translog.Event*` constant and only `translog` constructor
+  attributes; nothing converts into the helper's types; the helper's exported
+  functions take no error, map or interface, and a string only where it is
+  checked. A second test feeds it code that breaks each rule, to prove it
+  fails.
+
 ## Metrics snapshots
 
 - The private Prometheus route stays available when core host authority is

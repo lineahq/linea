@@ -14,18 +14,25 @@ import (
 	"google.golang.org/grpc/credentials"
 
 	"github.com/lineahq/linea/collector/livecapture/controlpb"
+	"github.com/lineahq/linea/internal/fleetplugins/livecapture/translog"
 	_ "google.golang.org/grpc/encoding/gzip"
 )
 
-func Run(ctx context.Context, config Config, repo Repository) error {
+// Run serves until ctx ends or a fatal cause arises. Every error it returns
+// carries an enum cause (CauseOf); log receives the transition log.
+func Run(ctx context.Context, config Config, repo Repository, log *translog.Logger) (result error) {
 	// Signal cancellation starts drain; monitoring/stop publication keeps its own
 	// context until the bounded shutdown has actually retired this authority.
 	active, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
-	s, err := New(active, config, repo)
+	s, err := New(active, config, repo, log)
 	if err != nil {
 		return err
 	}
+	log.Log(translog.EventAuthorityAcquired, translog.Authority(repo.AuthorityID()), translog.Instance(s.instance))
+	defer func() {
+		log.Log(translog.EventAuthorityReleased, translog.Authority(repo.AuthorityID()), translog.Why(CauseOf(result)))
+	}()
 	defer s.cancel()
 	defer s.host.HTTP.CloseIdleConnections()
 	controlOptions := []grpc.ServerOption{grpc.MaxRecvMsgSize(1 << 20), grpc.MaxSendMsgSize(64 << 10), grpc.MaxConcurrentStreams(1), grpc.ConnectionTimeout(2 * time.Second)}
@@ -33,7 +40,7 @@ func Run(ctx context.Context, config Config, repo Repository) error {
 	if !config.TestInsecure {
 		cert, err := tls.LoadX509KeyPair(config.CertFile, config.KeyFile)
 		if err != nil {
-			return ErrInvalid
+			return WithCause(translog.ReasonTLSInvalid, ErrInvalid)
 		}
 		tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}
 		controlOptions = append(controlOptions, grpc.Creds(credentials.NewTLS(tlsConfig)))
@@ -53,7 +60,7 @@ func Run(ctx context.Context, config Config, repo Repository) error {
 	}{{config.ControlListen, control}, {config.DeliveryListen, data}} {
 		listener, err := net.Listen("tcp", entry.address)
 		if err != nil {
-			return ErrUnavailable
+			return WithCause(translog.ReasonListenFailed, ErrUnavailable)
 		}
 		defer listener.Close()
 		go func(server *grpc.Server, l net.Listener, budget *connectionBudget) {
@@ -62,7 +69,7 @@ func Run(ctx context.Context, config Config, repo Repository) error {
 	}
 	listener, err := net.Listen("tcp", config.HTTPListen)
 	if err != nil {
-		return ErrUnavailable
+		return WithCause(translog.ReasonListenFailed, ErrUnavailable)
 	}
 	defer listener.Close()
 	httpServer := &http.Server{Handler: s, ReadHeaderTimeout: time.Second, ReadTimeout: 2 * time.Second, WriteTimeout: 3 * time.Second, IdleTimeout: 10 * time.Second, MaxHeaderBytes: 16 << 10}
@@ -81,13 +88,13 @@ func Run(ctx context.Context, config Config, repo Repository) error {
 		defer timer.Stop()
 		select {
 		case <-timer.C:
-		case <-s.Fatal():
-			return ErrUnavailable
+		case err := <-s.Fatal():
+			return err
 		}
 		return nil
-	case <-s.Fatal():
-		return ErrUnavailable
+	case err := <-s.Fatal():
+		return err
 	case <-failures:
-		return ErrUnavailable
+		return WithCause(translog.ReasonListenerStopped, ErrUnavailable)
 	}
 }

@@ -138,7 +138,7 @@ func fixture(t *testing.T) (*Server, CreateRequest, *peer) {
 	t.Helper()
 	token := strings.Repeat("d", 64)
 	c := Config{ID: "test", Version: "1", serviceToken: strings.Repeat("b", 64), HostEndpoint: "http://127.0.0.1:1"}
-	s, err := New(context.Background(), c, newMemoryRepo())
+	s, err := New(context.Background(), c, newMemoryRepo(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

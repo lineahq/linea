@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/lineahq/linea/internal/fleetplugins/livecapture/translog"
 	"github.com/lineahq/linea/pluginsdk"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog/plogotlp"
@@ -264,6 +265,9 @@ func (s *Server) deliver(ctx context.Context, signal string, resources []pcommon
 	defer func() { s.observeDelivery(signal, started, resultErr) }()
 	credential, err := s.authenticate(ctx)
 	if err != nil {
+		if status.Code(err) == codes.Unauthenticated {
+			s.authFailures.Record(translog.ListenerOTLP)
+		}
 		return err
 	}
 	if len(data) > 256<<10 || count <= 0 || len(resources) > 256 {
