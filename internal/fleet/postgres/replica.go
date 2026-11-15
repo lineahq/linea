@@ -221,9 +221,17 @@ func (s *Store) flushSeen(ctx context.Context) error {
 	for i, id := range ids {
 		generations[i], times[i] = int64(pending[id].generation), pending[id].at
 	}
-	_, err := s.pool.Exec(ctx, `UPDATE fleet.agents a SET last_seen_at=v.seen
+	tag, err := s.pool.Exec(ctx, `UPDATE fleet.agents a SET last_seen_at=v.seen
 		FROM unnest($1::text[], $2::bigint[], $3::timestamptz[]) AS v(id, gen, seen)
 		WHERE a.id=v.id AND a.generation=v.gen AND a.owner_replica=$4 AND (a.last_seen_at IS NULL OR a.last_seen_at < v.seen)`, ids, generations, times, s.replica)
+	if err == nil && tag.RowsAffected() < int64(len(ids)) {
+		// A row is also skipped when a newer time is stored, so only the
+		// ownership check tells a lost session from a stale observation.
+		var owned map[string]bool
+		if owned, err = s.ownedAgents(ctx, ids, generations); err == nil {
+			s.closeLost(lostSessions(ids, generations, owned))
+		}
+	}
 	if err != nil {
 		s.flushErrors.Add(1)
 		// Keep the newest unsaved observations for the next attempt.
@@ -237,6 +245,60 @@ func (s *Store) flushSeen(ctx context.Context) error {
 		return fleet.ErrUnavailable
 	}
 	return nil
+}
+
+// ownedAgents reports which of the agents at those generations this replica
+// still owns.
+func (s *Store) ownedAgents(ctx context.Context, ids []string, generations []int64) (map[string]bool, error) {
+	rows, err := s.pool.Query(ctx, `SELECT a.id FROM fleet.agents a
+		JOIN unnest($1::text[], $2::bigint[]) AS v(id, gen) ON a.id=v.id AND a.generation=v.gen
+		WHERE a.owner_replica=$3`, ids, generations, s.replica)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	owned := make(map[string]bool, len(ids))
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		owned[id] = true
+	}
+	return owned, rows.Err()
+}
+
+// lostSession is a local session whose agent another replica now owns, or
+// whose row is gone.
+type lostSession struct {
+	id         string
+	generation uint64
+}
+
+// lostSessions lists the sessions in ids that owned does not contain, in ids order.
+func lostSessions(ids []string, generations []int64, owned map[string]bool) []lostSession {
+	var lost []lostSession
+	for i, id := range ids {
+		if !owned[id] {
+			lost = append(lost, lostSession{id: id, generation: uint64(generations[i])})
+		}
+	}
+	return lost
+}
+
+// closeLost closes the local sockets of sessions this replica no longer owns,
+// the same way a takeover hint does: a session at the lost generation or older
+// is superseded, and a newer local session is kept.
+func (s *Store) closeLost(lost []lostSession) {
+	s.signalMu.Lock()
+	takeover := s.onTakeover
+	s.signalMu.Unlock()
+	if takeover == nil {
+		return
+	}
+	for _, l := range lost {
+		takeover(l.id, l.generation+1)
+	}
 }
 
 // listen holds one dedicated session for cross-replica hints and reconnects
