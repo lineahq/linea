@@ -1,9 +1,10 @@
 // Command agent-summary is a minimal, complete fleet plugin built only on
 // pluginsdk and the standard library. It is a template, not a product:
 //
-//   - it serves host protocol 3 (manifest, status, opaque API) behind the
+//   - it serves host protocol 4 (manifest, status, opaque API) behind the
 //     service token,
-//   - it keeps a host session and fences its work on every epoch change,
+//   - it keeps a host session, on a client of its own, and fences its work on
+//     every epoch change or refusal, and after two silent polls in a row,
 //   - it reads the agent directory and resolves groups through HostClient,
 //   - it owns its API schema and authorization (readers read, admins write).
 //
@@ -64,6 +65,7 @@ type plugin struct {
 	endEpoch    context.CancelFunc
 	lastSummary *summary      // computed under the current epoch only
 	newSession  chan struct{} // wakes the refresher when a session starts
+	misses      int           // consecutive session polls that got no answer
 }
 
 func main() {
@@ -94,7 +96,8 @@ func main() {
 	defer stop()
 	instance := pluginsdk.RandomID() // new per process start
 	p := &plugin{instance: instance, serviceToken: serviceToken,
-		host:       pluginsdk.HostClient{Endpoint: endpoint, Token: hostToken, InstanceID: instance, HTTP: pluginsdk.NewHTTPClient()},
+		host: pluginsdk.HostClient{Endpoint: endpoint, Token: hostToken, InstanceID: instance,
+			HTTP: pluginsdk.NewHTTPClient(), SessionHTTP: pluginsdk.NewHTTPClient()}, // the poll never shares connections
 		newSession: make(chan struct{}, 1)}
 	p.epochCtx, p.endEpoch = context.WithCancel(ctx)
 	go p.watchSession(ctx)
@@ -128,33 +131,49 @@ func readToken(path string) (string, error) {
 }
 
 // watchSession polls the host session. Fleet answers only after its manifest
-// probe has seen this instance and the plugin is enabled and ready, so 409
+// probe has seen this instance and the plugin is enabled and ready, so 421
 // and 403 are normal while starting, draining or disabled.
+//
+// An answer that refuses (421 included) or a different epoch ends the session
+// at once. A poll that gets no answer, a timeout or a transport error, ends it
+// only when the next one gets none either.
 func (p *plugin) watchSession(ctx context.Context) {
 	for {
-		session, err := p.host.Session(ctx)
-		p.mu.Lock()
-		if p.current && (err != nil || session.Epoch != p.session.Epoch) {
-			// A lifecycle change, a restart or lost readiness fenced the old
-			// epoch: stop its work and forget what it computed.
-			p.endEpoch()
-			p.epochCtx, p.endEpoch = context.WithCancel(ctx)
-			p.current, p.lastSummary = false, nil
-			log.Print("host epoch ended")
-		}
-		if err == nil && !p.current {
-			p.session, p.current = session, true
-			log.Printf("host session ready, permissions %v", session.Permissions)
-			select {
-			case p.newSession <- struct{}{}:
-			default:
-			}
-		}
-		p.mu.Unlock()
+		p.pollSession(ctx)
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+// pollSession is one poll of watchSession.
+func (p *plugin) pollSession(ctx context.Context) {
+	session, err := p.host.Session(ctx)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if pluginsdk.Unreachable(err) {
+		p.misses++
+	} else {
+		p.misses = 0
+	}
+	// Only the first silent poll in a row is tolerated.
+	refused := err != nil && p.misses != 1
+	if p.current && (refused || err == nil && session.Epoch != p.session.Epoch) {
+		// A lifecycle change, a restart or lost readiness fenced the old
+		// epoch: stop its work and forget what it computed.
+		p.endEpoch()
+		p.epochCtx, p.endEpoch = context.WithCancel(ctx)
+		p.current, p.lastSummary = false, nil
+		log.Print("host epoch ended")
+	}
+	if err == nil && !p.current {
+		p.session, p.current = session, true
+		log.Printf("host session ready, permissions %v", session.Permissions)
+		select {
+		case p.newSession <- struct{}{}:
+		default:
 		}
 	}
 }
@@ -228,7 +247,7 @@ func (p *plugin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Path == pluginsdk.ManifestPath && r.Method == "GET" {
-		// Fleet decodes the manifest strictly: no extra fields.
+		// Fleet ignores fields it does not know, so the manifest may grow.
 		reply(w, 200, pluginsdk.Manifest{ID: pluginID, Version: version, ProtocolVersion: pluginsdk.ProtocolVersion, InstanceID: p.instance, APIVersion: apiVersion})
 		return
 	}
@@ -253,8 +272,10 @@ func (p *plugin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// API calls name the instance and epoch fleet authorized them under.
 	session, epochCtx, ok := p.admitted()
-	if !ok || r.Header.Get(pluginsdk.InstanceHeader) != p.instance || r.Header.Get(pluginsdk.EpochHeader) != session.Epoch {
-		fail(w, 409, "stale_epoch")
+	// A mismatch is 421, never 409: 409 is for conflicts in this plugin's own
+	// domain, and fleet never forwards 421 to the caller.
+	if !ok || !pluginsdk.AuthorityMatches(r.Header, p.instance, session.Epoch) {
+		fail(w, pluginsdk.StatusMisdirected, "stale_epoch")
 		return
 	}
 	ctx, cancel := context.WithCancel(r.Context())

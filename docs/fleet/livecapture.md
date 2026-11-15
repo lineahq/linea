@@ -9,7 +9,7 @@ The plugin owns everything else about capture.
 | Plugin owns | Capture authorization, schemas, execution, gRPC and OTLP listeners, consumer delivery, its own PostgreSQL database |
 | Collector side | Unchanged components. Collectors authenticate with fleet agent credentials, so one core revocation stops both reporting and capture |
 | Targets | Fleet agents, groups or selectors |
-| Versions | Plugin 0.5.0, API schema 3.0.0, on [host protocol 3](plugins.md) |
+| Versions | Plugin 0.5.0, API schema 3.0.0, on [host protocol 4](plugins.md) |
 | Without it | Fleet reporting stays independently usable |
 
 Related: [operational metrics](operations-metrics.md), [how the plugin works
@@ -520,7 +520,7 @@ text ever reaches it. The IDs are those the plugin and API already show
 | `authority_standby` | warn | `reason` | Active/standby only: the first failed attempt to take the authority, such as `owner_busy`; not repeated until it is taken |
 | `authority_released` | info | `authority`, `reason` | Serving ended, with `shutdown` or the fatal cause |
 | `host_session_established` | info | `instance`, `epoch` | The fleet host session is usable, including after a new epoch |
-| `host_session_lost` | warn | `reason` | `host_unreachable`, `permissions_missing` or `epoch_changed`; captures stop with `host_authority_lost` |
+| `host_session_lost` | warn | `reason` | `host_unreachable` (the host refused the session, 421 included, or two polls in a row got no answer), `permissions_missing` or `epoch_changed`; captures stop with `host_authority_lost` |
 | `drain_started` | info | none | Drain began on shutdown |
 | `database_degraded` | warn | none | The first failed ping after good ones |
 | `database_recovered` | info | `count` | A good ping after `count` failed ones |
@@ -649,7 +649,7 @@ docker compose @captureCompose up -d --wait livecapture-plugin
   runtime cannot run DDL or delete operation history; it deletes only unused
   peers (see Retention).
 - Registration, configuration and image versions must match (API version 3,
-  host protocol 3). The public API schema is 3.0.0.
+  host protocol 4). The public API schema is 3.0.0.
 - Clients must follow peer page cursors; the sample two-peer workflows fit a
   default page.
 - Roll back with matching images and a pre-upgrade backup in a fresh volume.

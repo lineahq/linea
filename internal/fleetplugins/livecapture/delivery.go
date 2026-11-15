@@ -51,7 +51,7 @@ func (s *Server) NewChannel(ctx context.Context, owner string, expiry time.Time)
 		return ChannelInfo{}, ErrUnavailable
 	}
 	if expected, ok := ctx.Value(authorityContextKey{}).(string); ok && expected != s.epoch {
-		return ChannelInfo{}, ErrConflict
+		return ChannelInfo{}, ErrStaleAuthority
 	}
 	now := s.now()
 	if !expiry.After(now) || expiry.After(now.Add(5*time.Minute)) {

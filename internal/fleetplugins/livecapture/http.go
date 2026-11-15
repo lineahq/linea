@@ -45,6 +45,8 @@ func fail(w http.ResponseWriter, err error) {
 		code = 403
 	case errors.Is(err, ErrNotFound):
 		code = 404
+	case errors.Is(err, ErrStaleAuthority):
+		code = pluginsdk.StatusMisdirected
 	case errors.Is(err, ErrConflict):
 		code = 409
 	case errors.Is(err, ErrPrecondition):
@@ -160,8 +162,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(w, ErrNotFound)
 		return
 	}
-	if r.Header.Get(pluginsdk.InstanceHeader) != s.instance || r.Header.Get(pluginsdk.EpochHeader) != epoch {
-		fail(w, ErrConflict)
+	if !pluginsdk.AuthorityMatches(r.Header, s.instance, epoch) {
+		fail(w, ErrStaleAuthority)
 		return
 	}
 	r = r.WithContext(context.WithValue(r.Context(), authorityContextKey{}, epoch))

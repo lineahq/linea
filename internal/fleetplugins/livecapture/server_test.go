@@ -468,7 +468,7 @@ func TestPluginHTTPAuthorizesOwnerAndEpoch(t *testing.T) {
 		s.ServeHTTP(w, req)
 		return w
 	}
-	if call("reader", "owner", s.epoch).Code != 403 || call("admin", "owner", strings.Repeat("e", 32)).Code != 409 {
+	if call("reader", "owner", s.epoch).Code != 403 || call("admin", "owner", strings.Repeat("e", 32)).Code != pluginsdk.StatusMisdirected {
 		t.Fatal("role/epoch not enforced")
 	}
 	if _, err := s.Create(context.Background(), "owner", r); err != nil {
@@ -515,10 +515,10 @@ func TestPluginHTTPRoleWrites(t *testing.T) {
 func TestLateAuthorityContextCannotAdmit(t *testing.T) {
 	s, r, _ := fixture(t)
 	ctx := context.WithValue(context.Background(), authorityContextKey{}, pluginsdk.RandomID())
-	if _, err := s.Create(ctx, "owner", r); !errors.Is(err, ErrConflict) {
+	if _, err := s.Create(ctx, "owner", r); !errors.Is(err, ErrStaleAuthority) {
 		t.Fatal("stale host epoch admitted capture")
 	}
-	if _, err := s.NewChannel(ctx, "owner", time.Now().Add(time.Minute)); !errors.Is(err, ErrConflict) {
+	if _, err := s.NewChannel(ctx, "owner", time.Now().Add(time.Minute)); !errors.Is(err, ErrStaleAuthority) {
 		t.Fatal("stale host epoch opened a channel")
 	}
 	if len(s.operations) != 0 {

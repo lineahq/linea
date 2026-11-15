@@ -54,6 +54,8 @@ type Server struct {
 	epoch        string
 	session      pluginsdk.Session
 	hostOK, dbOK bool
+	// hostMisses counts consecutive session polls that got no answer.
+	hostMisses int
 	// storageFailures counts consecutive failed pings; only maintain changes it.
 	storageFailures int
 	permissionsOK   bool
@@ -94,7 +96,7 @@ func New(ctx context.Context, c Config, repo Repository, log *translog.Logger) (
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	s := &Server{config: c, repo: repo, ctx: ctx, cancel: cancel, instance: pluginsdk.RandomID(), dbOK: true, peers: map[string]*peer{}, joining: map[string]bool{}, operations: map[string]*activeOperation{}, channels: map[string]*channel{}, credentials: map[[32]byte]cachedCredential{}, linkWake: make(chan struct{}, 1), revalidateEvery: credentialTTL, peerIdle: peerRetention, now: time.Now, fatal: make(chan error, 1), log: log, authFailures: translog.NewFailureSummary(log, translog.SummaryEvery, time.Now())}
-	s.host = pluginsdk.HostClient{Endpoint: c.HostEndpoint, Token: c.hostToken, InstanceID: s.instance, HTTP: pluginsdk.NewHTTPClient()}
+	s.host = pluginsdk.HostClient{Endpoint: c.HostEndpoint, Token: c.hostToken, InstanceID: s.instance, HTTP: pluginsdk.NewHTTPClient(), SessionHTTP: pluginsdk.NewHTTPClient()}
 	for i, limit := range []int{c.peerLimit() + 16, 64, 64} {
 		s.budgets[i] = &connectionBudget{slots: make(chan struct{}, limit)}
 	}
@@ -136,6 +138,7 @@ func (s *Server) Close() {
 	s.wg.Wait()
 	s.authFailures.Flush(time.Now())
 	s.host.HTTP.CloseIdleConnections()
+	s.host.SessionHTTP.CloseIdleConnections()
 }
 func (s *Server) Fatal() <-chan error { return s.fatal }
 
@@ -210,12 +213,29 @@ func (s *Server) monitorHost() {
 	}
 }
 
+// hostMissLimit is how many session polls in a row may get no answer (timeout,
+// refused or broken connection) before the session is lost. An answer ends it
+// at once, a refusal such as 421 or a changed epoch included: the host has
+// spoken, and waiting cannot help. A silent host may only be one busy moment,
+// and a lost capture, though cheap, is not worth one.
+const hostMissLimit = 2
+
 // checkHost reads the host session once and applies it: it ends host-bound work
 // when the session is lost or its epoch changed, and adopts a usable session.
-// The transitions are logged after the lock is released.
+// The poll has its own HTTP client, so nothing else the plugin asks of the
+// host can make it time out. The transitions are logged after the lock is
+// released.
 func (s *Server) checkHost() {
 	session, err := s.host.Session(s.ctx)
 	s.mu.Lock()
+	if pluginsdk.Unreachable(err) && s.hostOK && s.ctx.Err() == nil {
+		s.hostMisses++
+		if s.hostMisses < hostMissLimit {
+			s.mu.Unlock()
+			return
+		}
+	}
+	s.hostMisses = 0
 	// unusable is why the session cannot serve, none when it can.
 	unusable := translog.ReasonNone
 	if err != nil {
@@ -539,7 +559,7 @@ func (s *Server) Create(ctx context.Context, owner string, request CreateRequest
 		return Operation{}, ErrUnavailable
 	}
 	if expected, ok := ctx.Value(authorityContextKey{}).(string); ok && expected != s.epoch {
-		return Operation{}, ErrConflict
+		return Operation{}, ErrStaleAuthority
 	}
 	if request.AuthorityID != s.repo.AuthorityID() || request.PluginInstance != s.instance {
 		return Operation{}, ErrConflict

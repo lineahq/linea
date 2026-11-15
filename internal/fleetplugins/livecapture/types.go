@@ -12,6 +12,11 @@ import (
 var ErrInvalid = errors.New("invalid capture request")
 var ErrConflict = errors.New("capture state conflicts")
 
+// ErrStaleAuthority means the request was admitted under an instance or epoch
+// that is no longer current. It is HTTP 421 (pluginsdk.StatusMisdirected), never
+// 409, which is reserved for conflicts in the capture domain.
+var ErrStaleAuthority = errors.New("plugin authority is not current")
+
 // ErrPeerBusy refuses a named target that serves another capture.
 var ErrPeerBusy = fmt.Errorf("collector is serving another capture: %w", ErrConflict)
 var ErrForbidden = errors.New("capture access denied")

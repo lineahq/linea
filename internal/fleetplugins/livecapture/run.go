@@ -59,6 +59,7 @@ func Run(ctx context.Context, config Config, repo Repository, log *translog.Logg
 	}()
 	defer s.cancel()
 	defer s.host.HTTP.CloseIdleConnections()
+	defer s.host.SessionHTTP.CloseIdleConnections()
 	controlOptions := append(connectionBounds(0), grpc.MaxRecvMsgSize(1<<20), grpc.MaxSendMsgSize(64<<10), grpc.MaxConcurrentStreams(1))
 	dataOptions := append(connectionBounds(dataConnectionAge), grpc.MaxRecvMsgSize(256<<10), grpc.MaxConcurrentStreams(8), grpc.InTapHandle(s.preauthenticate))
 	if !config.TestInsecure {
