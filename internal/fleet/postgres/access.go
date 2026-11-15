@@ -266,17 +266,40 @@ func (s *Store) RevokeCredential(ctx context.Context, actor, id string) error {
 			return nil
 		}
 		if c.Role == "admin" {
-			var count int
-			var targetActive bool
-			if err := tx.QueryRow(ctx, "SELECT count(*),COALESCE(bool_or(id=$1),false) FROM fleet.credentials WHERE role='admin' AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>clock_timestamp())", id).Scan(&count, &targetActive); err != nil {
+			// Lock every active admin, in a fixed order, before counting, so
+			// two requests that each revoke an admin cannot both see the
+			// other as still active. A waiting request re-evaluates the
+			// predicate after the first commits and sees the revocation.
+			rows, err := tx.Query(ctx, "SELECT id FROM fleet.credentials WHERE role='admin' AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>clock_timestamp()) ORDER BY id FOR UPDATE")
+			if err != nil {
+				return err
+			}
+			count, targetActive := 0, false
+			for rows.Next() {
+				var active string
+				if err := rows.Scan(&active); err != nil {
+					rows.Close()
+					return err
+				}
+				count++
+				targetActive = targetActive || active == id
+			}
+			rows.Close()
+			if err := rows.Err(); err != nil {
 				return err
 			}
 			if targetActive && count <= 1 {
 				return fleet.ErrConflict
 			}
 		}
-		if _, err := tx.Exec(ctx, "UPDATE fleet.credentials SET revoked_at=clock_timestamp() WHERE id=$1", id); err != nil {
+		// A concurrent revocation of the same credential may have committed
+		// since the read above; it already announced the revocation.
+		revoked, err := tx.Exec(ctx, "UPDATE fleet.credentials SET revoked_at=clock_timestamp() WHERE id=$1 AND revoked_at IS NULL", id)
+		if err != nil {
 			return err
+		}
+		if revoked.RowsAffected() == 0 {
+			return nil
 		}
 		// Every replica closes sessions using the credential on commit.
 		if _, err := tx.Exec(ctx, "SELECT pg_notify('fleet_credential_revoked', $1)", id); err != nil {
