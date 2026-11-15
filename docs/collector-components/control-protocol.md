@@ -46,9 +46,12 @@ sequenceDiagram
         S->>C: DesiredState: same session_id, authorized_raw false
         C->>S: CollectorReport: desired_state_error, FAILED
     else Stream lost
-        Note over C,S: The session keeps running until its own deadline
+        Note over C,S: The session keeps running for up to 10 s
         C->>S: Reconnect with backoff, 100 ms up to 5 s
         S->>C: DesiredState: fresh, complete set
+    else Control silent for 10 s
+        Note over C: No DesiredState within 10 s
+        C->>S: CollectorReport: STOPPING, then FAILED (control_lost)
     end
 ```
 
@@ -94,6 +97,11 @@ States: `ACTIVE`, `STOPPING`, `COMPLETED`, `EXPIRED`, `LIMIT_REACHED`,
 `FAILED`, `DISABLED`. An ending session stays `STOPPING` until its queued
 copies left the delivery queue (at most 7 s), so a terminal state means the
 Collector sends nothing more for it.
+
+The status `reason` says why a session ended: `user` (stopped or removed
+from the desired set), `ttl`, `budget`, `kill_switch`, `shutdown`,
+`capture_panic`, `desired_state_rejected`, or `control_lost`. A desired
+session rejected before it started reports the rejection text instead.
 
 A session is activated only after its exporter has started. If the exporter
 fails to start, the session is reported as `FAILED`.
@@ -160,8 +168,12 @@ Rejections:
 ## Connection lifecycle
 
 - Reconnect backoff starts at 100 ms and is capped at five seconds.
-- Disconnecting keeps the running session until its existing local deadline.
-  A disconnect is not treated as an empty desired set and never extends the
+- The service sends the complete desired state again every few seconds,
+  also when nothing changed. A Collector ends a remote session as `FAILED`
+  with reason `control_lost` once 10 s pass without a desired state, whether
+  the stream is down or silent. Sessions started through local control are
+  not affected.
+- A disconnect is not treated as an empty desired set and never extends the
   TTL.
 - Remote sessions must carry an absolute expiry, and requests that have
   already expired are rejected.

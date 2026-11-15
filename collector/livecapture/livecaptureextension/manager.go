@@ -57,6 +57,7 @@ type termination struct{ state, reason string }
 type run struct {
 	manager  *Manager
 	id       string
+	remote   bool         // Started by the control service, so it ends when control is lost.
 	deadline atomic.Int64 // Unix nanoseconds; only ever moves earlier.
 	expiry   *time.Timer
 	// ended closes when admission is over; done when the run is terminal.
@@ -173,7 +174,36 @@ type Manager struct {
 	// export counts against it: one session runs at a time, so a failure
 	// belongs to it unless it raced with the start of the next one.
 	sender atomic.Pointer[run]
-	quit   chan struct{}
+	// lastControl is when the control stream last delivered a desired state,
+	// in Unix nanoseconds.
+	lastControl atomic.Int64
+	quit        chan struct{}
+}
+
+// controlTimeout ends a remote session after this long without a desired
+// state from the control service, which resends it every few seconds.
+const controlTimeout = 10 * time.Second
+
+// watchControl ends a remote session whose control service went silent.
+func (m *Manager) watchControl(ctx context.Context) {
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-tick.C:
+			m.checkControl(now)
+		}
+	}
+}
+
+func (m *Manager) checkControl(now time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s := m.current; s != nil && s.remote && now.UnixNano()-m.lastControl.Load() >= int64(controlTimeout) {
+		s.requestStop("failed", "control_lost")
+	}
 }
 
 // exportFailed counts records of a failed export under the delivery drop
@@ -239,8 +269,9 @@ func (m *Manager) Start(ctx context.Context, host component.Host) error {
 		m.local = server
 	}
 	if m.config.Control.Endpoint != "" {
-		m.wg.Add(1)
+		m.wg.Add(2)
 		go func() { defer m.wg.Done(); m.watch(workerCtx) }()
+		go func() { defer m.wg.Done(); m.watchControl(workerCtx) }()
 	}
 	return nil
 }
@@ -399,6 +430,12 @@ func (m *Manager) prepare(request Request, access Access) (Request, [32]byte, *c
 // StartSession starts a session, or atomically replaces the configuration of
 // the running session with the same ID. Capture never pauses for an update.
 func (m *Manager) StartSession(ctx context.Context, request Request, access Access) (Status, error) {
+	return m.startSession(request, access, false)
+}
+
+// startSession starts or updates a session. A remote one ends when the
+// control service goes silent (see controlTimeout).
+func (m *Manager) startSession(request Request, access Access, remote bool) (Status, error) {
 	prepared, fingerprint, filter, points, err := m.prepare(request, access)
 	if err != nil {
 		return Status{}, err
@@ -446,7 +483,7 @@ func (m *Manager) StartSession(ctx context.Context, request Request, access Acce
 	if !prepared.ExpiresAt.After(time.Now()) {
 		return Status{}, errors.New("session expired while starting")
 	}
-	r := &run{manager: m, id: prepared.SessionID, stop: make(chan struct{}), ended: make(chan struct{}), done: make(chan struct{})}
+	r := &run{manager: m, id: prepared.SessionID, remote: remote, stop: make(chan struct{}), ended: make(chan struct{}), done: make(chan struct{})}
 	r.deadline.Store(prepared.ExpiresAt.UnixNano())
 	s := &session{run: r, request: prepared, fingerprint: fingerprint, filter: filter, points: points}
 	m.current = s
