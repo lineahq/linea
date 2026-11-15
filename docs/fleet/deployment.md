@@ -218,6 +218,7 @@ docker compose ps
 | Crash | History stays durable. After the replica's heartbeat is 10 s old its agents read as disconnected (health and observation times preserved) and the leader replica releases them with `agent.disconnected` events |
 | Reconnect | Increments `generation`. Event cursors survive restarts; refresh snapshots only after an event 410 |
 | Reconnect storm | A full write queue answers new sessions 503 with `Retry-After`. A handshake waits up to 25 s for a slot before refusal, so opamp-go clients avoid long backoff. `--max-pending-sessions` bounds handshakes in progress |
+| Silent agent | An agent session that sends no message for 90 s (three of the Collector's 30 s heartbeats) is closed and the agent reconnects; every received message renews the deadline. An agent configured with a heartbeat interval of 90 s or more is closed repeatedly |
 | Database or own-registration loss | Readiness fails closed and the process stops within the heartbeat window. Compose does not restart it: restore the database, then start fleet explicitly |
 
 Connect to PostgreSQL directly or through a session pooler. Transaction

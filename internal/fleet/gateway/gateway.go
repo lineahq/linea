@@ -72,6 +72,16 @@ type agentEntry struct {
 // normally closes them first.
 const verifyGrace = 30 * time.Second
 
+// agentHeartbeat is the OpAMP heartbeat interval of the Collector (the
+// opamp-go default), and idleHeartbeats the number of silent intervals after
+// which a session is closed. Every received message renews the read deadline,
+// so a socket that goes silent cannot hold a connection slot for ever.
+const (
+	agentHeartbeat = 30 * time.Second
+	idleHeartbeats = 3
+	idleTimeout    = idleHeartbeats * agentHeartbeat
+)
+
 // busy is implemented by stores with writer backpressure.
 type busy interface{ Busy() bool }
 
@@ -81,6 +91,7 @@ type Gateway struct {
 	store            fleet.Repository
 	access           auth.Authorizer
 	verifyGrace      atomic.Int64 // nanoseconds
+	idleTimeout      atomic.Int64 // nanoseconds
 	ingest           *inventory.Ingest
 	maxConnections   int
 	mu               sync.Mutex
@@ -124,6 +135,7 @@ func NewAuthorized(store fleet.Repository, access auth.Authorizer, ingest *inven
 	}
 	g.handler = http.HandlerFunc(h)
 	g.verifyGrace.Store(int64(verifyGrace))
+	g.idleTimeout.Store(int64(idleTimeout))
 	go g.watch()
 	return g, nil
 }
@@ -275,6 +287,8 @@ func (g *Gateway) message(_ context.Context, c types.Connection, m *protobufs.Ag
 		disconnect(c)
 		return nil
 	}
+	// Every message renews the idle deadline, from the first one on.
+	_ = c.Connection().SetReadDeadline(time.Now().Add(time.Duration(g.idleTimeout.Load())))
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if g.ctx.Err() != nil || len(m.InstanceUid) != 16 || m.Flags != 0 {
@@ -315,7 +329,6 @@ func (g *Gateway) message(_ context.Context, c types.Connection, m *protobufs.Ag
 		// first message, an unchanged full state then needs no write.
 		s.commit(stored, health, config)
 		g.claim(s)
-		_ = c.Connection().SetReadDeadline(time.Time{})
 		response.Flags = uint64(protobufs.ServerToAgentFlags_ServerToAgentFlags_ReportFullState)
 	} else if s.id != id {
 		disconnect(c)

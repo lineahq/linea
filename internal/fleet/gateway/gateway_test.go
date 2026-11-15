@@ -574,3 +574,28 @@ func TestReconnectWithUnchangedStateWritesOnce(t *testing.T) {
 		t.Fatalf("changed health wrote %d times", n)
 	}
 }
+
+func TestIdleSessionClosesAndEveryMessageRenewsTheDeadline(t *testing.T) {
+	g, _, url, token := setup(t, 2, 2)
+	g.idleTimeout.Store(int64(400 * time.Millisecond))
+	c := dial(t, url, token)
+	m := &protobufs.AgentToServer{InstanceUid: bytes.Repeat([]byte{6}, 16), SequenceNum: 1}
+	exchange(t, c, m)
+
+	// Messages spaced below the timeout keep the session open for longer
+	// than one timeout in total.
+	for range 8 {
+		time.Sleep(100 * time.Millisecond)
+		m.SequenceNum++
+		exchange(t, c, m)
+	}
+
+	// A silent session is closed after the timeout.
+	expectClosedWithin(t, c, 3*time.Second)
+}
+
+func TestIdleTimeoutSpansSeveralHeartbeats(t *testing.T) {
+	if idleTimeout < 2*agentHeartbeat {
+		t.Fatalf("idle timeout %v closes an agent that misses one heartbeat", idleTimeout)
+	}
+}
