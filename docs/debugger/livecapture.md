@@ -311,6 +311,7 @@ batches fleet delivers on it; there is no OTLP listener.
 | Retention | None. A capture is kept until it is deleted, bounded by `store.storage_limit`, shared with ordinary runs and sources. Only terminal captures can be deleted. |
 | Storage | Immutable segments in the platform's store (metadata in PostgreSQL, segments in object storage); restart recovers committed records and frozen metadata. A service without any repository keeps captures memory-only and reports `lost_on_restart` after a restart. |
 | Raw points | Stored exactly as the source sent them, unencrypted like any capture. "Redacted" is the Collector's declared point classification, not a guarantee that telemetry contains no sensitive values. |
+| Filters | Run on the Collector before redaction, so a capture on a redacted point can still answer whether a hidden value matches its filter. `capture.start` is therefore a stronger permission than `capture.read`. |
 
 See [live capture internals](../internals/debugger-livecapture.md) and
 [artifact storage](../internals/artifact-storage.md#captures) for the details.

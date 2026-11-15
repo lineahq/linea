@@ -216,6 +216,14 @@ A session selects what to copy. Each pod runs at most one.
 | Functions | `IsMatch` with a literal, precompiled regex; `IsString`, `IsInt`, `IsDouble`, `IsBool`, `IsMap`, `IsList`; `TraceID` and `SpanID` literals |
 | Not available | Mutation and external lookups |
 | Errors | A runtime evaluation error counts as no match |
+| Input | Filters run on the original records, before redaction, also at a `redacted` point. Copying first would cost the pipeline a copy of every record, including those a filter discards |
+
+Because filters see unredacted values, whoever may set a filter on a
+redacted point can learn whether a denied attribute, a masked string or a
+cut-off body matches a condition: a session filtering on
+`attributes["http.request.header.authorization"] == "..."` copies records
+only when the value matches. The copies stay redacted; the answer is yes or
+no. Grant filter access to a redacted point with that in mind.
 
 ### Sampling and limits
 

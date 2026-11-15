@@ -235,6 +235,7 @@ at `v1/openapi.json` through this authenticated ingress.
 | Credential | A fleet admin or operator credential. Readers can discover peers and schemas but cannot create channels or captures |
 | Ownership | Capture and channel reads and ACKs are owner-only, even between admins |
 | Raw data | Default selection permits only catalog points marked redacted. Operator `raw_principals` is an explicit grant of credential IDs; admin alone never grants raw |
+| Filters on redacted points | Filters run before redaction, so a filter can test a value the copy will not show and reveal whether it matches ([configuration](../collector-components/configuration.md#filters)). Creating a capture on a redacted point is therefore more than reading redacted records |
 | Delegating clients | A client acting for its users (a shared team service) may send fleet's `X-Fleet-Acting-ID`, `-Name` and `-Request` headers ([plugins](plugins.md#opaque-public-api)). The plugin records them on the capture as `acting_for` and persists them with the operation (plugin migration 3, API schema 2.2.0) |
 | Attribution only | Ownership, ACKs and `raw_principals` still use the credential ID, so per-user raw decisions stay with the delegating client |
 
