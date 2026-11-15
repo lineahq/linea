@@ -26,7 +26,8 @@ the generic plugin mechanisms are in [fleet-plugin-host.md](fleet-plugin-host.md
   changes.
 - It re-introspects open connections every 10 s. Revoking, expiring or
   relabeling a credential in core closes affected streams within that
-  interval.
+  interval. The loop keeps a deadline (10 s after the last recheck started), so
+  link wakeups and early timers neither skip a round nor delay the next.
 - While core is unreachable, new streams are refused and capture stops with
   host authority.
 - Peer links resolve at most 64 per 10 s pass, through `agents/resolve` with

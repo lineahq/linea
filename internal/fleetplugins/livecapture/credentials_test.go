@@ -398,26 +398,63 @@ func TestValidateCreateNamesTheRule(t *testing.T) {
 	}
 }
 
-func TestRecheckDueOnEarlyTick(t *testing.T) {
+// TestRevalidateRechecksEveryPeriod drives the revalidation loop's rounds with
+// an injected clock: rounds from link wakeups and timers that fire early never
+// skip a recheck or move the next one.
+func TestRevalidateRechecksEveryPeriod(t *testing.T) {
 	const every = 10 * time.Second
-	tests := []struct {
-		name    string
-		elapsed time.Duration
-		want    bool
-	}{
-		{"link wakeup right after a recheck", 100 * time.Millisecond, false},
-		{"link wakeup halfway", every / 2, false},
-		{"tick a moment early", every - 50*time.Millisecond, true},
-		{"tick a little early", every - 500*time.Millisecond, true},
-		{"tick on time", every, true},
-		{"tick late", every + time.Second, true},
+	s, _, _ := fixture(t)
+	h := &fakeHost{
+		introspect: func(pluginsdk.IntrospectRequest) pluginsdk.Introspection {
+			return pluginsdk.Introspection{Active: true, CredentialID: "credential", Role: "agent", Labels: map[string]string{"capture": "test"}}
+		},
+		resolve: func(pluginsdk.ResolveRequest) pluginsdk.ResolveResponse { return pluginsdk.ResolveResponse{} },
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			start := time.Unix(1_700_000_000, 0)
-			if got := recheckDue(start.Add(tt.elapsed).Sub(start), every); got != tt.want {
-				t.Fatalf("recheckDue(%v, %v) = %v, want %v", tt.elapsed, every, got, tt.want)
-			}
-		})
+	withHost(t, s, h)
+	clock := time.Unix(1_700_000_000, 0)
+	s.now = func() time.Time { return clock }
+	schedule := newRecheckSchedule(clock, every)
+	rechecks := func() int {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return h.introspects
+	}
+	type round struct {
+		name     string
+		at       time.Duration
+		rechecks int // total after the round
+		wait     time.Duration
+	}
+	rounds := []round{
+		{"link wakeup before the first period", 3 * time.Second, 0, 7 * time.Second},
+		{"timer a moment early", every - 50*time.Millisecond, 0, 50 * time.Millisecond},
+		{"timer on time", every, 1, every},
+		{"link wakeup just before the next period", 2*every - time.Second, 1, time.Second},
+		{"timer on time again", 2 * every, 2, every},
+		{"late timer", 3*every + 4*time.Second, 3, every},
+		{"timer after a late one keeps the period", 4*every + 4*time.Second, 4, every},
+	}
+	for _, r := range rounds {
+		clock = time.Unix(1_700_000_000, 0).Add(r.at)
+		wait := s.revalidatePass(schedule)
+		if got := rechecks(); got != r.rechecks || wait != r.wait {
+			t.Fatalf("%s: rechecks=%d wait=%v, want %d and %v", r.name, got, wait, r.rechecks, r.wait)
+		}
+	}
+
+	// A host that is not ready skips the recheck and the loop retries soon
+	// instead of spinning on a deadline that stays due.
+	s.mu.Lock()
+	s.hostOK = false
+	s.mu.Unlock()
+	clock = clock.Add(every)
+	if wait := s.revalidatePass(schedule); wait != revalidateRetry || rechecks() != 4 {
+		t.Fatalf("host not ready: wait=%v rechecks=%d", wait, rechecks())
+	}
+	s.mu.Lock()
+	s.hostOK = true
+	s.mu.Unlock()
+	if wait := s.revalidatePass(schedule); wait != every || rechecks() != 5 {
+		t.Fatalf("host back: wait=%v rechecks=%d", wait, rechecks())
 	}
 }

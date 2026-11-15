@@ -137,41 +137,66 @@ type linkCandidate struct {
 	identity   Identity
 }
 
-// recheckDue reports whether a credential recheck is due. Link wakeups also
-// run the loop, so elapsed time keeps them from rechecking. The threshold sits
-// a tenth below the ticker period so that a tick arriving slightly early still
-// rechecks instead of waiting for the next one.
-func recheckDue(elapsed, every time.Duration) bool {
-	return elapsed >= every-every/10
+// recheckSchedule decides when credentials are introspected again. It holds a
+// deadline instead of counting ticks, so a link wakeup or a timer that fires
+// slightly early neither skips a round nor moves the next one: a recheck runs
+// at most revalidateEvery after the previous one started.
+type recheckSchedule struct {
+	every time.Duration
+	next  time.Time
 }
+
+func newRecheckSchedule(now time.Time, every time.Duration) *recheckSchedule {
+	return &recheckSchedule{every: every, next: now.Add(every)}
+}
+
+func (r *recheckSchedule) due(now time.Time) bool { return !now.Before(r.next) }
+
+// started records a recheck beginning at now.
+func (r *recheckSchedule) started(now time.Time) { r.next = now.Add(r.every) }
+
+// wait is the time until the next recheck, or zero when it is due.
+func (r *recheckSchedule) wait(now time.Time) time.Duration { return max(r.next.Sub(now), 0) }
+
+// revalidateRetry is how long the loop waits when a recheck is due but the
+// host is not ready, so a host outage does not spin it.
+const revalidateRetry = 500 * time.Millisecond
 
 // revalidate re-introspects connected peers' credentials, closing peers whose
 // credential was revoked, expired or lost the capture label, and links peers
 // to fleet agents.
 func (s *Server) revalidate() {
 	defer s.wg.Done()
-	tick := time.NewTicker(s.revalidateEvery)
-	defer tick.Stop()
-	lastIntrospection := time.Now()
+	schedule := newRecheckSchedule(s.now(), s.revalidateEvery)
+	wait := s.revalidateEvery
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
-		case <-tick.C:
+		case <-time.After(wait):
 		case <-s.linkWake:
 		}
-		s.mu.Lock()
-		session, ready := s.session, s.hostOK
-		s.mu.Unlock()
-		if !ready {
-			continue
-		}
-		if now := time.Now(); recheckDue(now.Sub(lastIntrospection), s.revalidateEvery) {
-			lastIntrospection = now
+		wait = s.revalidatePass(schedule)
+	}
+}
+
+// revalidatePass runs one loop round and returns how long to wait for the next
+// scheduled recheck.
+func (s *Server) revalidatePass(schedule *recheckSchedule) time.Duration {
+	s.mu.Lock()
+	session, ready := s.session, s.hostOK
+	s.mu.Unlock()
+	if ready {
+		if now := s.now(); schedule.due(now) {
+			schedule.started(now)
 			s.recheckCredentials(session)
 		}
 		s.linkPeers(session)
 	}
+	if wait := schedule.wait(s.now()); wait > 0 {
+		return wait
+	}
+	return revalidateRetry
 }
 
 func (s *Server) recheckCredentials(session pluginsdk.Session) {
