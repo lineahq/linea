@@ -68,14 +68,14 @@ service:
 ### Internal exporter
 
 The internal exporter always overrides the queue, batching, timeout and retry
-settings:
+settings. It logs nothing: a lost copy is counted, never logged.
 
 | Setting | Value |
 | --- | --- |
 | Queue | Nonblocking in-memory byte queue, one consumer per signal |
 | Batching | 100 ms / 256 KiB |
 | Attempt timeout | 1 s |
-| Retries | Start at 100 ms, 5 s retry budget |
+| Retries | None: a failed export is dropped and counted under the session's `delivery` drop reason |
 
 - A signal's exporter starts when the first session capturing that signal
   starts, and runs until the Collector shuts down.

@@ -127,3 +127,39 @@ func TestCachedCaptureLabelsPreserveSDKSeries(t *testing.T) {
 		}
 	}
 }
+
+func TestFailedExportCountsAsSessionDeliveryDrop(t *testing.T) {
+	m, _ := testManager(t)
+	r := traceRequest("failed-export")
+	s := start(t, m, r)
+	m.CaptureTraces(context.Background(), r.CapturePoints[0], testTraces())
+	if s.stats().Dropped["delivery"] != 0 {
+		t.Fatal(s.stats())
+	}
+	// The stock exporter creates its failed-send counter through the
+	// extension's meter provider and adds to it after a failed attempt.
+	counter, err := m.settings.MeterProvider.Meter("stock-exporter-fixture").Int64Counter("otelcol_exporter_send_failed_spans")
+	if err != nil {
+		t.Fatal(err)
+	}
+	counter.Add(context.Background(), 2)
+	if s.stats().Dropped["delivery"] != 2 {
+		t.Fatal(s.stats())
+	}
+	// Other counters pass through unchanged.
+	other, err := m.settings.MeterProvider.Meter("stock-exporter-fixture").Int64Counter("otelcol_exporter_sent_spans")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other.Add(context.Background(), 5)
+	if s.stats().Dropped["delivery"] != 2 {
+		t.Fatal(s.stats())
+	}
+}
+
+func TestInternalExporterNeverRetries(t *testing.T) {
+	m, _ := testManager(t)
+	if newOTLPDelivery(m).config().RetryConfig.Enabled {
+		t.Fatal("internal exporter retries failed exports")
+	}
+}

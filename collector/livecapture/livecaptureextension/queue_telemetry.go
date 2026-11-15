@@ -15,6 +15,39 @@ type queueObservations struct {
 	mu        sync.Mutex
 	next      uint64
 	callbacks map[uint64]func(context.Context) int64
+	// failed receives the records of each failed export. Set before any
+	// exporter is created, then only read.
+	failed func(Signal, int64)
+}
+
+// failedSignals maps the stock exporter's failed-send counters to signals.
+var failedSignals = map[string]Signal{
+	"otelcol_exporter_send_failed_spans":         Traces,
+	"otelcol_exporter_send_failed_metric_points": Metrics,
+	"otelcol_exporter_send_failed_log_records":   Logs,
+}
+
+// failedCounter forwards a failed-send count to the stock instrument and to
+// the capture session's delivery drops.
+type failedCounter struct {
+	metric.Int64Counter
+	signal Signal
+	queues *queueObservations
+}
+
+func (c failedCounter) Add(ctx context.Context, n int64, options ...metric.AddOption) {
+	c.Int64Counter.Add(ctx, n, options...)
+	if c.queues.failed != nil && n > 0 {
+		c.queues.failed(c.signal, n)
+	}
+}
+
+func (m *queueMeter) Int64Counter(name string, options ...metric.Int64CounterOption) (metric.Int64Counter, error) {
+	counter, err := m.Meter.Int64Counter(name, options...)
+	if signal, ok := failedSignals[name]; ok && err == nil {
+		return failedCounter{Int64Counter: counter, signal: signal, queues: m.queues}, nil
+	}
+	return counter, err
 }
 
 func (q *queueObservations) sum(ctx context.Context) int64 {

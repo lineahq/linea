@@ -142,7 +142,24 @@ type Manager struct {
 	// they left the queue (see drained).
 	delivery delivery
 	queues   *queueObservations
-	quit     chan struct{}
+	// sender is the run that last handed a copy to the exporter. A failed
+	// export counts against it: one session runs at a time, so a failure
+	// belongs to it unless it raced with the start of the next one.
+	sender atomic.Pointer[run]
+	quit   chan struct{}
+}
+
+// exportFailed counts records of a failed export under the delivery drop
+// reason of the run that sent last.
+func (m *Manager) exportFailed(signal Signal, n int64) {
+	r := m.sender.Load()
+	if r == nil {
+		return
+	}
+	r.drops[dropDelivery].Add(n)
+	if labels := m.telemetry.dropLabels[signal]; labels != nil {
+		m.telemetry.dropped.Add(context.Background(), n, labels[dropDelivery])
+	}
 }
 
 // drainLimit bounds how long an ended session waits for its queued copies:
@@ -175,6 +192,7 @@ func newManager(settings extension.Settings, config Config) (*Manager, error) {
 		return nil, err
 	}
 	m := &Manager{config: config, settings: settings, telemetry: telemetry, redactor: redactor, points: make(map[captureKey]CapturePoint), queues: queues, quit: make(chan struct{})}
+	queues.failed = m.exportFailed
 	m.settings.MeterProvider = queueMeterProvider{MeterProvider: settings.MeterProvider, queues: queues}
 	m.enabled.Store(config.Enabled)
 	m.delivery = newOTLPDelivery(m)

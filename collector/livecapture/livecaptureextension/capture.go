@@ -238,6 +238,8 @@ func (c *capture) admit(prune func(int), size func() int64, send func() error) {
 		prune(keep)
 		// Estimates bound admission; counters record the exact copy.
 		actual := size()
+		// Before the send, so an export failing at once finds this run.
+		c.manager.sender.Store(r)
 		if err := send(); err != nil {
 			if errors.Is(err, exporterQueueFull) {
 				c.drops[dropQueueFull] += int64(keep)
