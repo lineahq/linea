@@ -66,6 +66,13 @@ func (m *Manager) begin(signal Signal, point Point) *capture {
 		return nil
 	}
 	started := time.Now()
+	if reason := s.exhausted(started.UnixNano()); reason >= 0 {
+		// The window cannot admit anything, so the call is not examined. One
+		// drop marks the capture incomplete; the records are not counted.
+		s.run.drops[reason].Add(1)
+		m.telemetry.dropped.Add(context.Background(), 1, m.telemetry.dropLabels[signal][reason])
+		return nil
+	}
 	c := &capture{manager: m, session: s, signal: signal, point: point, options: selected.options, redact: selected.redactor, started: started, now: started.UnixNano(), refused: -1}
 	c.sizes = c.sizeArray[:0]
 	return c
@@ -93,7 +100,25 @@ func (c *capture) finish() {
 	t.duration.Record(context.Background(), time.Since(c.started).Seconds(), c.options)
 }
 
-func (c *capture) stopped() bool { return c.session.stopped.Load() }
+// exhausted reports why the current rate window admits no record, or -1.
+func (s *session) exhausted(now int64) dropReason {
+	r, limits := s.run, &s.request.Limits
+	if now-r.windowStart.Load() >= int64(time.Second) {
+		return -1
+	}
+	if r.windowRecords.Load() >= limits.RecordsPerSecond {
+		return dropRateRecords
+	}
+	if r.windowBytes.Load() >= limits.BytesPerSecond {
+		return dropRateBytes
+	}
+	return -1
+}
+
+// halted ends the walk over the records: the session stopped, or a record
+// was refused. Admission keeps a prefix of the staged records, so no later
+// record of this call could be admitted and none is examined.
+func (c *capture) halted() bool { return c.refused >= 0 || c.session.stopped.Load() }
 
 func (c *capture) matched(ok bool, err error) bool {
 	if err != nil {
@@ -154,8 +179,8 @@ func (c *capture) refusal(size int64) dropReason {
 	return -1
 }
 
-// precheck runs before a selected record is copied. It refuses every record
-// once one was refused: admission keeps a prefix of the staged records.
+// precheck runs before a selected record is copied. The first refusal halts
+// the call: admission keeps a prefix of the staged records.
 func (c *capture) precheck() bool {
 	if c.refused < 0 {
 		c.refused = c.refusal(1)
@@ -290,7 +315,7 @@ records:
 			var scope ptrace.ScopeSpans
 			hasScope := false
 			for _, span := range ss.Spans().All() {
-				if c.stopped() {
+				if c.halted() {
 					break records
 				}
 				if len(s.filter.span) > 0 {
@@ -368,7 +393,7 @@ records:
 			var scope plog.ScopeLogs
 			hasScope := false
 			for _, log := range sl.LogRecords().All() {
-				if c.stopped() {
+				if c.halted() {
 					break records
 				}
 				if len(s.filter.log) > 0 {
@@ -522,7 +547,7 @@ records:
 		for _, sm := range rm.ScopeMetrics().All() {
 			mc.sm, mc.hasScope = sm, false
 			for _, source := range sm.Metrics().All() {
-				if c.stopped() {
+				if c.halted() {
 					break records
 				}
 				if len(s.filter.metric) > 0 {
@@ -543,7 +568,7 @@ records:
 						points = source.Gauge().DataPoints()
 					}
 					for _, p := range points.All() {
-						if c.stopped() {
+						if c.halted() {
 							break records
 						}
 						if !selects(mc, p) {
@@ -565,7 +590,7 @@ records:
 					}
 				case pmetric.MetricTypeHistogram:
 					for _, p := range source.Histogram().DataPoints().All() {
-						if c.stopped() {
+						if c.halted() {
 							break records
 						}
 						if !selects(mc, p) {
@@ -583,7 +608,7 @@ records:
 					}
 				case pmetric.MetricTypeExponentialHistogram:
 					for _, p := range source.ExponentialHistogram().DataPoints().All() {
-						if c.stopped() {
+						if c.halted() {
 							break records
 						}
 						if !selects(mc, p) {
@@ -601,7 +626,7 @@ records:
 					}
 				case pmetric.MetricTypeSummary:
 					for _, p := range source.Summary().DataPoints().All() {
-						if c.stopped() {
+						if c.halted() {
 							break records
 						}
 						if !selects(mc, p) {

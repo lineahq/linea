@@ -161,7 +161,8 @@ processor either way.
 
 ```mermaid
 flowchart TD
-    P[capture processor hands the batch to the extension] --> F[Session OTTL filters: resource, then record]
+    P[capture processor hands the batch to the extension] --> W[Rate window check]
+    W --> F[Session OTTL filters: resource, then record]
     F --> S[Sampling]
     S --> L[Rate and total pre-check]
     L --> C[Copy, redact, tag]
@@ -170,7 +171,8 @@ flowchart TD
     G --> Q[Bounded byte queue per signal]
     Q --> X[Internal OTLP exporter]
     X --> D[delivery.endpoint]
-    S -- sampling --> DROP[Dropped and counted]
+    W -- rate_records, rate_bytes --> DROP[Dropped and counted]
+    S -- sampling --> DROP
     L -- budget, rate_records, rate_bytes --> DROP
     Z -- record_size --> DROP
     G -- budget, rate_records, rate_bytes, stopping --> DROP
@@ -181,8 +183,14 @@ flowchart TD
   evaluation error counts as no match and is reported under `filter_errors`.
 - Redaction applies to redacted points only.
 - A drop is counted under its reason in the session's `dropped` stats.
+- The first refusal by the pre-check or admission ends the walk over the
+  batch: the records after it are not examined, selected or counted.
+- While the current one-second window has used up its record or byte rate,
+  calls are not examined at all. Each such call counts one drop under
+  `rate_records` or `rate_bytes`, so the session shows it is incomplete;
+  the drop counts are a lower bound.
 - The queue step drops as `queue_full` when the byte queue is full, or
-  `delivery` when the exporter refuses a copy for another reason.
+  `delivery` when the exporter refuses a copy or an export fails.
 
 ## Sessions
 

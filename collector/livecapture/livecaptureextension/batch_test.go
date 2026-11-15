@@ -71,7 +71,8 @@ func TestBatchAdmissionKeepsGroupedPrefix(t *testing.T) {
 		}
 	}
 	stats := s.stats()
-	if stats.Selected != 8 || stats.EnqueuedRecords != 5 || stats.Dropped["rate_records"] != 3 {
+	// The first refusal halts the call: the records after it are not examined.
+	if stats.Selected != 6 || stats.EnqueuedRecords != 5 || stats.Dropped["rate_records"] != 1 {
 		t.Fatalf("stats %+v", stats)
 	}
 	if stats.EnqueuedBytes != int64((&ptrace.ProtoMarshaler{}).TracesSize(copy)) {
@@ -260,5 +261,22 @@ func TestKillSwitchDoesNotWaitForExporterStart(t *testing.T) {
 	close(slow.release)
 	if err := <-result; err == nil || m.active.Load() != nil {
 		t.Fatal("session activated after the kill switch")
+	}
+}
+
+// A used-up rate window skips the whole call and marks one drop.
+func TestExhaustedRateWindowSkipsCall(t *testing.T) {
+	m, sink := testManager(t)
+	r := traceRequest("exhausted")
+	r.Limits.RecordsPerSecond = 2
+	s := start(t, m, r)
+	m.CaptureTraces(context.Background(), r.CapturePoints[0], tracesWith(1, 1, 2))
+	if s.stats().EnqueuedRecords != 2 || len(s.stats().Dropped) != 0 {
+		t.Fatalf("stats %+v", s.stats())
+	}
+	m.CaptureTraces(context.Background(), r.CapturePoints[0], tracesWith(2, 2, 2))
+	stats := s.stats()
+	if len(sink.trace) != 1 || stats.Selected != 2 || stats.Dropped["rate_records"] != 1 {
+		t.Fatalf("stats %+v", stats)
 	}
 }
