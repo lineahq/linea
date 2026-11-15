@@ -251,6 +251,15 @@ the first item below.
   `Retry-After: 1`, which promised a wait that a full operation table (cleared
   only by purge) or full slots never kept.
 
+- The live capture plugin no longer exits on one slow database answer (plugin
+  0.5.0). Only its maintenance loop pings the database, once a second; API
+  requests, deliveries and control wakes read the result. A ping that waits
+  behind other statements is not counted. The plugin exits after three failed
+  pings in a row, or at once when the connection is closed. Compose now
+  restarts it (`restart: unless-stopped` in `compose.livecapture.yaml`). The
+  credential recheck runs every 10 s even when link wakeups arrive between
+  rechecks.
+
 - Report schema 0.16: each topology component lists what a run does not show
   of the real component (`not_shown`, a code and a sentence each): export
   outcomes of captured exporters (every export succeeds, so errors, retries,

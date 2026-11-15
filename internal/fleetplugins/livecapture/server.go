@@ -37,16 +37,18 @@ type activeOperation struct {
 	raw     bool
 }
 type Server struct {
-	mu              sync.Mutex
-	config          Config
-	repo            Repository
-	ctx             context.Context
-	cancel          context.CancelFunc
-	instance        string
-	host            pluginsdk.HostClient
-	epoch           string
-	session         pluginsdk.Session
-	hostOK, dbOK    bool
+	mu           sync.Mutex
+	config       Config
+	repo         Repository
+	ctx          context.Context
+	cancel       context.CancelFunc
+	instance     string
+	host         pluginsdk.HostClient
+	epoch        string
+	session      pluginsdk.Session
+	hostOK, dbOK bool
+	// storageFailures counts consecutive failed pings; only maintain changes it.
+	storageFailures int
 	permissionsOK   bool
 	draining        bool
 	peers           map[string]*peer
@@ -205,6 +207,32 @@ func (s *Server) monitorHost() {
 		}
 	}
 }
+
+// storageFailureLimit is how many consecutive failed database pings, sampled
+// once a second, end the process. A ping that finds the connection closed ends
+// it at once instead: the driver never reconnects, so waiting cannot help.
+// A busy connection is no sample. A lost capture is cheap, a plugin exit ends
+// every capture, so one slow answer must not be fatal.
+const storageFailureLimit = 3
+
+// observeStorageLocked records one probe result and reports whether it makes
+// the database fatal. Only maintain calls it: every other path reads dbOK.
+func (s *Server) observeStorageLocked(err error) bool {
+	switch {
+	case err == nil:
+		s.storageFailures = 0
+	case errors.Is(err, ErrStorageBusy):
+	case errors.Is(err, ErrStorageLost):
+		return true
+	default:
+		s.storageFailures++
+		return s.storageFailures >= storageFailureLimit
+	}
+	return false
+}
+
+// maintain owns database liveness: it probes once a second and keeps dbOK.
+// Requests, deliveries and control wakes read the flag and never ping.
 func (s *Server) maintain() {
 	defer s.wg.Done()
 	tick := time.NewTicker(250 * time.Millisecond)
@@ -218,7 +246,7 @@ func (s *Server) maintain() {
 			if now.Sub(lastDB) >= time.Second {
 				err := s.repo.Ready(s.ctx)
 				s.mu.Lock()
-				if err != nil {
+				if s.observeStorageLocked(err) {
 					s.fatalLocked()
 					s.mu.Unlock()
 					return

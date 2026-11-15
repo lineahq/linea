@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,13 +35,16 @@ type memoryRepo struct {
 	peers  map[string]*memoryPeer
 	floor  uint64
 	now    func() time.Time
+	probes atomic.Int32
 }
 
 func newMemoryRepo() *memoryRepo {
 	return &memoryRepo{ops: map[string]Operation{}, leases: map[string]string{}, peers: map[string]*memoryPeer{}, now: time.Now}
 }
-func (r *memoryRepo) AuthorityID() string         { return strings.Repeat("f", 32) }
-func (r *memoryRepo) Ready(context.Context) error { return nil }
+func (r *memoryRepo) AuthorityID() string { return strings.Repeat("f", 32) }
+
+// Ready counts probes so tests can show that only the maintenance loop pings.
+func (r *memoryRepo) Ready(context.Context) error { r.probes.Add(1); return nil }
 func (r *memoryRepo) NextGeneration(_ context.Context, id string) (uint64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

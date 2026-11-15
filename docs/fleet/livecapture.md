@@ -525,9 +525,13 @@ docker compose @captureCompose up -d --wait livecapture-plugin
   all secret files. Back up fleet independently.
 - The metadata holds owners, hashes, reservations, generations and a stable
   authority ID, but no filters or telemetry.
-- A database ownership or session loss exits the plugin. Compose does not
-  restart it: restore storage, then start it explicitly. Fleet stays ready
-  when this separate database fails.
+- The plugin pings its database once a second. It exits when the connection
+  is lost, or after three failed pings in a row; a ping that waits behind
+  other statements is not counted. Compose restarts it
+  (`restart: unless-stopped`), and it keeps trying while storage is down.
+  Captures end when it exits. To restore storage, stop the plugin first (the
+  command above), then start it. Fleet stays ready when this separate
+  database fails.
 
 **Restore** into a fresh plugin volume:
 

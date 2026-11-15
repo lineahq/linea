@@ -99,6 +99,22 @@ func (s *Store) Close() {
 	_ = s.conn.Close(ctx)
 }
 func (s *Store) storageObservations() *storageMetrics { return &s.observed }
+
+// enter waits for the connection until ctx ends and returns its release.
+func (s *Store) enter(ctx context.Context) (func(), error) {
+	waiting := time.Now()
+	s.observed.waiters.Add(1)
+	select {
+	case s.gate <- struct{}{}:
+		s.observed.waiters.Add(-1)
+		s.observed.wait.Observe(time.Since(waiting))
+		return func() { <-s.gate }, nil
+	case <-ctx.Done():
+		s.observed.waiters.Add(-1)
+		s.observed.wait.Observe(time.Since(waiting))
+		return nil, ErrUnavailable
+	}
+}
 func (s *Store) access(ctx context.Context, fn func(context.Context) error) (result error) {
 	defer func() {
 		if result != nil {
@@ -107,18 +123,11 @@ func (s *Store) access(ctx context.Context, fn func(context.Context) error) (res
 	}()
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	waiting := time.Now()
-	s.observed.waiters.Add(1)
-	select {
-	case s.gate <- struct{}{}:
-		s.observed.waiters.Add(-1)
-		s.observed.wait.Observe(time.Since(waiting))
-		defer func() { <-s.gate }()
-	case <-ctx.Done():
-		s.observed.waiters.Add(-1)
-		s.observed.wait.Observe(time.Since(waiting))
-		return ErrUnavailable
+	release, err := s.enter(ctx)
+	if err != nil {
+		return err
 	}
+	defer release()
 	started := time.Now()
 	defer func() { s.observed.duration.Observe(time.Since(started)) }()
 	if s.closed.Load() {
@@ -256,8 +265,47 @@ WHERE state IN ('starting','active','stopping')`)
 	}
 	return s, nil
 }
+
+// probeQueueWait and probeTimeout bound the liveness probe. The probe waits
+// behind other statements for at most probeQueueWait; that wait is not part of
+// the sample. Only the ping itself, given probeTimeout from the moment it owns
+// the connection, can fail it.
+const (
+	probeQueueWait = time.Second
+	probeTimeout   = 2 * time.Second
+)
+
+// Ready probes the database through the working connection. It returns
+// ErrStorageBusy when the connection stayed occupied (no sample), ErrStorageLost
+// when it is closed, and ErrUnavailable when the ping failed on a live one.
+// Only the server's maintenance loop calls it.
 func (s *Store) Ready(ctx context.Context) error {
-	return s.access(ctx, func(ctx context.Context) error { return s.conn.Ping(ctx) })
+	queue, cancel := context.WithTimeout(ctx, probeQueueWait)
+	release, err := s.enter(queue)
+	cancel()
+	if err != nil {
+		if ctx.Err() != nil {
+			return ErrUnavailable
+		}
+		return ErrStorageBusy
+	}
+	defer release()
+	if s.closed.Load() || s.conn.IsClosed() {
+		s.observed.errors.Add(1)
+		return ErrStorageLost
+	}
+	started := time.Now()
+	defer func() { s.observed.duration.Observe(time.Since(started)) }()
+	ping, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	if err := s.conn.Ping(ping); err != nil {
+		s.observed.errors.Add(1)
+		if s.conn.IsClosed() {
+			return ErrStorageLost
+		}
+		return ErrUnavailable
+	}
+	return nil
 }
 func (s *Store) NextGeneration(ctx context.Context, id string) (uint64, error) {
 	var gen uint64

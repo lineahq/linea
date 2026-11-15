@@ -112,12 +112,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(w, ErrInvalid)
 		return
 	}
-	// Metadata metrics intentionally remain nonblocking and payload-free. Every
-	// other service request verifies the pinned session before using memory state.
-	if r.URL.Path != pluginsdk.APIPath+"v1/metrics" && s.repo.Ready(r.Context()) != nil {
-		fail(w, ErrUnavailable)
-		return
-	}
+	// Database liveness is the flag maintain keeps (dbOK, read below); a request
+	// never pings, so a busy connection queue cannot make it look dead.
 	if r.Method == "GET" && r.URL.Path == pluginsdk.ManifestPath {
 		s.mu.Lock()
 		ready := s.dbOK && !s.draining

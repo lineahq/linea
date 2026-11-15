@@ -14,6 +14,16 @@ the generic plugin mechanisms are in [fleet-plugin-host.md](fleet-plugin-host.md
   (see Online purge).
 - A durable authority identity plus a new process instance fences stale
   requests, even if a restore rolls the generation back.
+- Database liveness is decided only by `maintain`, which pings once a second
+  and keeps the flag every other path reads (`dbOK`). The ping waits for the
+  working connection for at most 1 s, and that wait is not a sample: a
+  connection occupied by other statements gives no result, neither a success
+  nor a failure. Only the ping itself, with 2 s from the moment it owns the
+  connection, can fail. The process exits after three failed pings in a row,
+  or at once when the driver reports the connection closed (it never
+  reconnects, so a later ping cannot succeed). A failed `Save` of an
+  operation still ends the process. After an exit, Compose restarts the
+  plugin (`restart: unless-stopped`).
 - Startup after a restore records previous live operations as interrupted,
   retains uncertain leases, reconnects peers with empty desired state and
   never replays capture.
@@ -40,8 +50,9 @@ the generic plugin mechanisms are in [fleet-plugin-host.md](fleet-plugin-host.md
   again every 3 s when nothing changed. The Collector ends a remote session
   as `control_lost` after 10 s without one, so a healthy stream never lets
   it expire.
-- A change pings the database before sending. The 3 s repeat does not; it
-  reads the database flag the desired state already checks.
+- Neither a change nor the 3 s repeat pings the database: both read the
+  database flag the desired state checks. Plugin API requests and OTLP
+  deliveries read it too.
 
 ## Delivery and reservations
 

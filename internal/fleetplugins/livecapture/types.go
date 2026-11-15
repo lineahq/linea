@@ -17,6 +17,20 @@ var ErrPeerBusy = fmt.Errorf("collector is serving another capture: %w", ErrConf
 var ErrForbidden = errors.New("capture access denied")
 var ErrNotFound = errors.New("capture resource not found")
 var ErrUnavailable = errors.New("capture service unavailable")
+
+// Repository.Ready results other than nil and ErrUnavailable. Both wrap
+// ErrUnavailable for callers that only care whether storage answered.
+//
+// ErrStorageBusy means the one connection stayed occupied by other statements
+// for the whole wait, so there is no sample of the database at all. A busy
+// queue is not a dead database.
+//
+// ErrStorageLost means the connection is closed. The driver does not
+// reconnect it, so every later probe fails too and waiting does not help.
+var (
+	ErrStorageBusy = fmt.Errorf("storage connection busy: %w", ErrUnavailable)
+	ErrStorageLost = fmt.Errorf("storage connection lost: %w", ErrUnavailable)
+)
 var ErrCapacity = errors.New("capture capacity reached")
 var ErrPrecondition = errors.New("capture revision changed")
 var ErrCursorExpired = errors.New("capture peer cursor expired; refresh discovery")

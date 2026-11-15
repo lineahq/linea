@@ -124,9 +124,6 @@ func (s *Server) authenticate(ctx context.Context) (credential, error) {
 	if !entry.admitted {
 		return credential{}, status.Error(codes.Unauthenticated, "fleet agent credential inactive or not allowed to capture")
 	}
-	if s.repo.Ready(ctx) != nil {
-		return credential{}, status.Error(codes.Unavailable, "capture authority unavailable")
-	}
 	return entry.credential, nil
 }
 

@@ -80,7 +80,7 @@ services:
     cpus: 2
     mem_limit: 512m
     pids_limit: 128
-    restart: "no"
+    restart: unless-stopped
     healthcheck:
       test: [CMD, /plugin, probe, --config, /etc/livecapture/config.json]
       interval: 5s

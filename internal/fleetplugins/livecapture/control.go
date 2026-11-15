@@ -226,14 +226,10 @@ func (s *Server) Watch(stream grpc.ServerStream) error {
 			case <-stream.Context().Done():
 				return
 			case <-p.wake:
-				if s.repo.Ready(stream.Context()) != nil {
-					failures <- ErrUnavailable
-					return
-				}
 			case <-resend.C:
 				// The Collector ends a remote session after 10 s without a
-				// desired state. The repeat reads the database flag that
-				// desiredLocked checks and does not ping.
+				// desired state. A change and the repeat alike read the database
+				// flag desiredLocked checks; neither pings.
 			}
 			s.mu.Lock()
 			message, err := s.desiredLocked(p)
