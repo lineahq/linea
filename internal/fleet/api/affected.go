@@ -11,19 +11,20 @@ import (
 	"github.com/lineahq/linea/internal/fleet/fleet"
 )
 
-// DefaultUnstagedLimit is how many connected agents a group change may give
-// a new config without max_affected.
+// DefaultUnstagedLimit is how many connected agents a group change or a
+// credential opt-in may give a new config without max_affected.
 const DefaultUnstagedLimit = 10
 
-// SetUnstagedLimit sets how many connected agents a group change may give a
-// new config before the request must carry max_affected; 0 keeps the default.
+// SetUnstagedLimit sets how many connected agents a group change or a
+// credential opt-in may give a new config before the request must carry
+// max_affected; 0 keeps the default.
 func (h *Handler) SetUnstagedLimit(n int) {
 	if n > 0 {
 		h.unstagedLimit = n
 	}
 }
 
-// errTooManyAffected refuses a group change above the unstaged limit.
+// errTooManyAffected refuses a change above the unstaged limit.
 type errTooManyAffected struct{ affected, limit int }
 
 func (e *errTooManyAffected) Error() string {
@@ -55,18 +56,70 @@ func maxAffected(w http.ResponseWriter, r *http.Request) (int, bool) {
 // the guard against an edit that reconfigures a fleet at once. The count is
 // taken before the write and is not atomic with it.
 func (h *Handler) checkGroupChange(ctx context.Context, next fleet.Group, max int) error {
-	limit := h.unstagedLimit
-	if max >= 0 {
-		limit = max
-	}
 	n, err := h.affectedByGroup(ctx, next)
 	if err != nil {
 		return err
+	}
+	return h.checkAffected(n, max)
+}
+
+// checkAffected refuses n affected agents above max, or above the server's
+// limit when the request does not set max.
+func (h *Handler) checkAffected(n, max int) error {
+	limit := h.unstagedLimit
+	if max >= 0 {
+		limit = max
 	}
 	if n > limit {
 		return &errTooManyAffected{affected: n, limit: limit}
 	}
 	return nil
+}
+
+// checkOptIn refuses opting a credential in to remote config when that gives
+// more connected agents a new config than allowed, like a group change: a
+// rollout cannot stage it either. Opting out sends nothing, so it is never
+// refused. The count is taken before the write and is not atomic with it.
+func (h *Handler) checkOptIn(ctx context.Context, id string, enabled bool, max int) error {
+	if !enabled || h.configs == nil || h.credentials == nil {
+		return nil
+	}
+	c, err := h.credentials.Repository.Credential(ctx, id)
+	if err != nil {
+		// The write reports a missing credential itself.
+		return nil
+	}
+	if c.RemoteConfig || c.RevokedAt != nil {
+		// Already opted in, or no agent can connect with it.
+		return nil
+	}
+	targets, err := h.configs.Targets(ctx)
+	if err != nil {
+		return err
+	}
+	connected := true
+	q := fleet.AgentQuery{Credential: id, Connected: &connected, Limit: 500}
+	count := 0
+	for {
+		page, err := h.store.ListAgents(ctx, q)
+		if err != nil {
+			return err
+		}
+		for _, a := range page.Items {
+			if a.Capabilities&configmgmt.AcceptsRemoteConfig == 0 {
+				continue
+			}
+			d, _ := describe(targets, a, c.Labels)
+			if d != nil && (a.RemoteConfig == nil || a.RemoteConfig.Hash != d.Hash) {
+				count++
+			}
+		}
+		if page.NextAfter == "" {
+			break
+		}
+		q.After = page.NextAfter
+	}
+	return h.checkAffected(count, max)
 }
 
 // affectedByGroup counts the connected agents whose desired config changes

@@ -700,6 +700,14 @@ func (h *Handler) resource(w http.ResponseWriter, r *http.Request, p auth.Princi
 					failure(w, fleet.Invalid("remote_config is required"))
 					return
 				}
+				max, ok := maxAffected(w, r)
+				if !ok {
+					return
+				}
+				if err := h.checkOptIn(ctx, id, *body.RemoteConfig, max); err != nil {
+					failure(w, err)
+					return
+				}
 				c, err := h.credentials.Repository.SetCredentialRemoteConfig(ctx, p.ID, id, *body.RemoteConfig)
 				if err != nil {
 					failure(w, err)

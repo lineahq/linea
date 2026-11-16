@@ -446,7 +446,19 @@
       },
       "patch": {
         "operationId": "updateCredential",
-        "description": "Admin only. Changes the remote_config opt-in of an active agent credential; no other field is mutable. Replicas refresh their policy on notification.",
+        "description": "Admin only. Changes the remote_config opt-in of an active agent credential; no other field is mutable. Replicas refresh their policy on notification. With config management, an opt-in that gives more connected agents a new config than the unstaged limit is refused with 409 too_many_affected unless max_affected covers them.",
+        "parameters": [
+          {
+            "name": "max_affected",
+            "in": "query",
+            "required": false,
+            "description": "The most connected agents this change may give a new config; replaces the server's unstaged limit for this request.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -490,6 +502,9 @@
             "$ref": "#/components/responses/Error"
           },
           "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
             "$ref": "#/components/responses/Error"
           },
           "413": {

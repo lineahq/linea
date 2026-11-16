@@ -80,3 +80,53 @@ func TestGroupChangeAboveUnstagedLimitIsRefused(t *testing.T) {
 		t.Fatalf("reporting-only server: %d %s", w.Code, w.Body)
 	}
 }
+
+func TestCredentialOptInAboveUnstagedLimitIsRefused(t *testing.T) {
+	s := fleet.NewStore(8)
+	credential := auth.Credential{ID: strings.Repeat("73", 16), Role: "agent", Labels: map[string]string{"env": "prod"}}
+	for i := range 3 {
+		id := strings.Repeat(string(rune('a'+i))+"2", 16)
+		if _, _, err := s.ConnectAgent(context.Background(), id, credential.ID, fleet.Report{Capabilities: 3, Attributes: map[string]string{"service.name": "edge"}}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// An agent that does not accept remote config gets nothing.
+	if _, _, err := s.ConnectAgent(context.Background(), strings.Repeat("d2", 16), credential.ID, fleet.Report{Capabilities: 1, Attributes: map[string]string{"service.name": "edge"}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	group := strings.Repeat("9b", 16)
+	target, err := configmgmt.NewTarget(configmgmt.Assignment{ID: strings.Repeat("e2", 16), Name: "base", ConfigID: strings.Repeat("c2", 16), Version: 1, Layer: 10,
+		GroupID: group, CredentialLabels: map[string]string{"env": "prod"}}, bytes.Repeat([]byte{1}, 32), "service.name=edge", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials := &fakeCredentials{c: credential}
+	h := NewAuthorized(s, roles{}, ServerInfo{ServerID: "test"}, fakeControl{}, &auth.Service{Repository: credentials})
+	h.SetConfigManagement(&fakeConfigs{targets: []configmgmt.Target{target}}, nil)
+	h.SetUnstagedLimit(2)
+
+	path := "/api/v1/credentials/" + credential.ID
+	on := map[string]any{"remote_config": true}
+	if w := call(t, h, "PATCH", path, "admin", on); w.Code != 409 || errorCode(t, w) != "too_many_affected" || !strings.Contains(w.Body.String(), `"affected":3`) {
+		t.Fatalf("unstaged opt-in: %d %s", w.Code, w.Body)
+	}
+	if credentials.c.RemoteConfig {
+		t.Fatal("a refused opt-in was written")
+	}
+	if w := call(t, h, "PATCH", path+"?max_affected=2", "admin", on); w.Code != 409 {
+		t.Fatalf("max_affected below the count: %d", w.Code)
+	}
+	if w := call(t, h, "PATCH", path+"?max_affected=x", "admin", on); w.Code != 400 {
+		t.Fatalf("invalid max_affected: %d", w.Code)
+	}
+	if w := call(t, h, "PATCH", path+"?max_affected=3", "admin", on); w.Code != 200 || !credentials.c.RemoteConfig {
+		t.Fatalf("acknowledged opt-in: %d %s", w.Code, w.Body)
+	}
+	// Opting in again changes nothing, and opting out sends nothing.
+	if w := call(t, h, "PATCH", path, "admin", on); w.Code != 200 {
+		t.Fatalf("repeated opt-in: %d %s", w.Code, w.Body)
+	}
+	if w := call(t, h, "PATCH", path, "admin", map[string]any{"remote_config": false}); w.Code != 200 || credentials.c.RemoteConfig {
+		t.Fatalf("opt-out: %d %s", w.Code, w.Body)
+	}
+}

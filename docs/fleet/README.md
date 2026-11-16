@@ -147,7 +147,7 @@ only.
 | PUT /api/v1/groups/{id}, DELETE /api/v1/groups/{id} | Admin or operator; static `agent_ids` or selector; quoted `If-Match` revision required; with config management, an edit that reconfigures more connected agents than `--config-unstaged-limit` needs `?max_affected=N` |
 | GET /api/v1/credentials, GET /api/v1/credentials/{id} | Admin; metadata only, never tokens or hashes |
 | POST /api/v1/credentials, DELETE /api/v1/credentials/{id} | Admin; one-time issuance, persistent revocation |
-| PATCH /api/v1/credentials/{id} | Admin; sets the `remote_config` opt-in ([config management](config-management.md)) |
+| PATCH /api/v1/credentials/{id} | Admin; sets the `remote_config` opt-in ([config management](config-management.md)); with config management, an opt-in that reconfigures more connected agents than `--config-unstaged-limit` needs `?max_affected=N` |
 | GET /api/v1/openapi.json | [OpenAPI 3.1 contract](../../internal/fleet/api/openapi.json) |
 | GET /metrics | Authenticated, fixed-cardinality Prometheus metrics |
 

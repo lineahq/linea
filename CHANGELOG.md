@@ -341,6 +341,8 @@ the first item below.
   agents the edit would reconfigure. The debugger passes it on as a conflict
   with `affected` (HTTP and MCP), takes `max_affected` on a collector group
   save, and the web client asks inline to confirm before resending.
+  Opting a credential in to `remote_config` is counted and refused the same
+  way; opting out is never refused.
 - Fleet serializes group, config, credential and plugin row creations that a
   row cap bounds, so concurrent creations can no longer pass the cap together.
 - The live capture plugin introspects the credential of every new control

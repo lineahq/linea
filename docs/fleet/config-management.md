@@ -267,8 +267,12 @@ Some changes reach agents at once, without waves:
 - **Agent attributes.** An agent that reports new attributes may enter or
   leave a selector at once. Nothing can stage that; required credential
   labels limit it to agents whose credential an admin labelled.
-- **Credential labels.** An admin's label change on a credential applies to
-  all its agents at once.
+- **Credential opt-in.** Turning on `remote_config` for a credential gives
+  every matching agent that uses it its desired config at once. The same
+  count and limit apply: the server refuses the `PATCH` with 409
+  `too_many_affected` above `--config-unstaged-limit` unless it carries
+  `?max_affected=N`. Turning it off sends nothing and is never refused.
+  Credential labels cannot change; issue a new credential instead.
 
 ## Roll out changes
 

@@ -156,7 +156,7 @@ Optional Compose variables (environment or a protected env file):
 | `--plugin-listen` | `127.0.0.1:8081` | Private plugin host listener |
 | `--config-management` | off | [Remote config management](config-management.md) (PostgreSQL only) |
 | `--config-allowed-components` | any | `kind:type` list config versions may use |
-| `--config-unstaged-limit` | 10 | Connected agents a group edit may reconfigure without `max_affected` ([unstaged changes](config-management.md#changes-a-rollout-cannot-stage)) |
+| `--config-unstaged-limit` | 10 | Connected agents a group edit or a credential opt-in may reconfigure without `max_affected` ([unstaged changes](config-management.md#changes-a-rollout-cannot-stage)) |
 
 ### Network exposure
 
