@@ -212,6 +212,13 @@ the first item below.
     `scripts/debugger/compose-fleet.sh` and restart `linea`. If you set
     `raw_principals` to the server's credential ID, change it to the second
     `_`-separated field of the operator token.
+- Live capture: a Collector still reserved by an earlier capture is refused
+  with `collector_busy` also after a stop, reconnect or restart (it was a
+  plain `capture_request_refused`). A stop before the session was sent frees
+  the Collector at once and can answer `stopped` directly. An operation
+  leaves `starting` once every target is active or already ended. A
+  Collector that reconnects replaces its old peer once that peer missed
+  reports for 3 s, instead of being refused as a duplicate for up to 6 s.
 - The live-capture plugin always serves TLS on its control and delivery
   listeners: the `test_insecure` setting is removed, and a configuration that
   still names it is refused. **Upgrading:** delete `test_insecure` from the
