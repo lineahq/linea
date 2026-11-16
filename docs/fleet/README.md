@@ -144,7 +144,7 @@ only.
 | GET /api/v1/audit | Admin; the administrative record, newest first: `limit`, `before` (from `next_before`), `kind`, `actor`, `since`, `until` |
 | GET /api/v1/groups, GET /api/v1/groups/{id} | Group metadata; static members or canonical selector |
 | GET /api/v1/groups/{id}/agents | Current members as agent pages |
-| PUT /api/v1/groups/{id}, DELETE /api/v1/groups/{id} | Admin or operator; static `agent_ids` or selector; quoted `If-Match` revision required |
+| PUT /api/v1/groups/{id}, DELETE /api/v1/groups/{id} | Admin or operator; static `agent_ids` or selector; quoted `If-Match` revision required; with config management, an edit that reconfigures more connected agents than `--config-unstaged-limit` needs `?max_affected=N` |
 | GET /api/v1/credentials, GET /api/v1/credentials/{id} | Admin; metadata only, never tokens or hashes |
 | POST /api/v1/credentials, DELETE /api/v1/credentials/{id} | Admin; one-time issuance, persistent revocation |
 | PATCH /api/v1/credentials/{id} | Admin; sets the `remote_config` opt-in ([config management](config-management.md)) |

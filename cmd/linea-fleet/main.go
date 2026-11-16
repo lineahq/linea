@@ -169,6 +169,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	fs.BoolVar(&cfg.StoreHealthErrors, "store-health-errors", false, "store redacted, truncated component health error text")
 	fs.BoolVar(&cfg.ConfigManagement, "config-management", false, "enable opt-in remote config management for supervised agents (postgres only)")
 	allowedComponents := fs.String("config-allowed-components", "", "comma-separated kind:type components config versions may use (default: any)")
+	fs.IntVar(&cfg.ConfigUnstagedLimit, "config-unstaged-limit", 0, "connected agents a group change may reconfigure without max_affected (default 10)")
 	showVersion := fs.Bool("version", false, "print build version")
 	if err := fs.Parse(args); err != nil {
 		return err

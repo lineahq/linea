@@ -41,6 +41,9 @@ type Config struct {
 	// ConfigAllowedComponents restricts config versions to these
 	// kind:type components; empty allows any.
 	ConfigAllowedComponents []string
+	// ConfigUnstagedLimit bounds the connected agents a group change may
+	// reconfigure without max_affected; 0 is the default (10).
+	ConfigUnstagedLimit int
 	// Log receives the transition log; nil discards it.
 	Log *translog.Logger
 }
@@ -71,6 +74,9 @@ func (c Config) Validate() error {
 	}
 	if len(c.ConfigAllowedComponents) > 0 && !c.ConfigManagement {
 		return errors.New("config-allowed-components requires config-management")
+	}
+	if c.ConfigUnstagedLimit < 0 || c.ConfigUnstagedLimit > 100000 {
+		return errors.New("config-unstaged-limit must be 0 to 100000")
 	}
 	if len(c.ConfigAllowedComponents) > 256 || !configmgmt.ValidPolicy(c.ConfigAllowedComponents) {
 		return errors.New("config-allowed-components: comma-separated kind:type entries (receiver, processor, exporter, connector, extension)")

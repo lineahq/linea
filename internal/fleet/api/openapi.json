@@ -600,7 +600,7 @@
       },
       "put": {
         "operationId": "replaceGroup",
-        "description": "Admin or operator. If-Match quoted zero creates; otherwise replace at the exact current revision. A static group lists known inventory UIDs, at most 1000, sorted and deduplicated. A selector group stores a canonical selector that is evaluated whenever the group is read.",
+        "description": "Admin or operator. If-Match quoted zero creates; otherwise replace at the exact current revision. A static group lists known inventory UIDs, at most 1000, sorted and deduplicated. A selector group stores a canonical selector that is evaluated whenever the group is read. With config management, a change that gives more connected agents a new config than the server's unstaged limit (default 10) is refused with too_many_affected unless max_affected is at least that count.",
         "parameters": [
           {
             "name": "If-Match",
@@ -609,6 +609,16 @@
             "schema": {
               "type": "string",
               "pattern": "^\"[0-9]+\"$"
+            }
+          },
+          {
+            "name": "max_affected",
+            "in": "query",
+            "required": false,
+            "description": "The most connected agents this change may give a new config; replaces the server's unstaged limit for this request.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
             }
           }
         ],

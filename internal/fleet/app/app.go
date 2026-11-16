@@ -145,6 +145,7 @@ func runWithStore(ctx context.Context, cfg Config, version string, notify func(m
 	apiHandler.SetPlugins(registry)
 	if cfg.ConfigManagement {
 		apiHandler.SetConfigManagement(durable, cfg.ConfigAllowedComponents)
+		apiHandler.SetUnstagedLimit(cfg.ConfigUnstagedLimit)
 	}
 	var host net.Listener
 	if len(registrations) > 0 {

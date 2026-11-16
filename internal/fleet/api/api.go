@@ -60,14 +60,17 @@ type Handler struct {
 	// configs is nil unless config management is enabled.
 	configs           configmgmt.Repository
 	allowedComponents []string
-	ready             atomic.Bool
-	draining          atomic.Bool
-	drained           chan struct{}
-	drainOnce         sync.Once
-	waiters           atomic.Int64
-	requests, errors  atomic.Uint64
-	duration          metrics.Duration
-	metricWriters     []func(io.Writer)
+	// unstagedLimit bounds the connected agents a group change reconfigures
+	// without max_affected.
+	unstagedLimit    int
+	ready            atomic.Bool
+	draining         atomic.Bool
+	drained          chan struct{}
+	drainOnce        sync.Once
+	waiters          atomic.Int64
+	requests, errors atomic.Uint64
+	duration         metrics.Duration
+	metricWriters    []func(io.Writer)
 	// log is nil until SetLogger; a nil logger discards.
 	log *translog.Logger
 }
@@ -90,7 +93,7 @@ func NewAuthorized(store fleet.Repository, access auth.Authorizer, info ServerIn
 	if info.Storage == "" {
 		info.Storage = "memory"
 	}
-	return &Handler{store: store, access: access, info: info, control: control, credentials: credentials, drained: make(chan struct{})}
+	return &Handler{store: store, access: access, info: info, control: control, credentials: credentials, drained: make(chan struct{}), unstagedLimit: DefaultUnstagedLimit}
 }
 func (h *Handler) SetReady(ready bool) { h.ready.Store(ready) }
 
@@ -166,6 +169,8 @@ func failure(w http.ResponseWriter, err error) {
 		fail(w, 412, "precondition_failed", "group revision changed; refresh before retrying")
 	case errors.Is(err, fleet.ErrCursorExpired):
 		fail(w, 410, "cursor_expired", "refresh inventory and groups, then poll without a cursor")
+	case errors.As(err, new(*errTooManyAffected)):
+		fail(w, 409, "too_many_affected", err.Error())
 	case errors.Is(err, fleet.ErrInvalid):
 		message := "invalid request"
 		var invalid *fleet.InvalidError
@@ -645,6 +650,14 @@ func (h *Handler) resource(w http.ResponseWriter, r *http.Request, p auth.Princi
 			group := fleet.Group{ID: id, Name: body.Name, AgentIDs: body.AgentIDs}
 			if body.Selector != nil {
 				group.Selector = *body.Selector
+			}
+			max, ok := maxAffected(w, r)
+			if !ok {
+				return
+			}
+			if err := h.checkGroupChange(ctx, group, max); err != nil {
+				failure(w, err)
+				return
 			}
 			g, err := h.control.PutGroup(ctx, p.ID, group, revision)
 			if err != nil {

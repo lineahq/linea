@@ -250,6 +250,23 @@ curl -s -H "$ADMIN" -H 'Content-Type: application/json' -X POST $API/config-assi
 targets now, with the desired config each would receive, before or after you
 create it.
 
+### Changes a rollout cannot stage
+
+Some changes reach agents at once, without waves:
+
+- **Group edits.** Replacing a group's selector or members changes which
+  agents its assignments target. The server counts the connected agents
+  whose desired config the edit changes and refuses the edit with 409
+  `too_many_affected` when they exceed `--config-unstaged-limit` (default 10).
+  Resend it with `?max_affected=N`, N at least the count the error names, to
+  accept that many. The count is taken just before the write, so agents that
+  connect in between are not in it.
+- **Agent attributes.** An agent that reports new attributes may enter or
+  leave a selector at once. Nothing can stage that; required credential
+  labels limit it to agents whose credential an admin labelled.
+- **Credential labels.** An admin's label change on a credential applies to
+  all its agents at once.
+
 ## Roll out changes
 
 Every change is a rollout: `POST $API/rollouts` with `to_version` moves an
