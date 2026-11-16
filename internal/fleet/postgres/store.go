@@ -72,7 +72,9 @@ var migrations = []string{migration, deploymentTokensMigration, lifecycleMigrati
 // adminLock serializes offline administration (migrate, bootstrap, grants).
 // v1 servers held the same lock, so a v1 server also blocks migration to v2.
 const adminLock int64 = 731281604309
-const schemaVersion = 12
+
+// schemaVersion is the newest migration; a database at it needs none.
+var schemaVersion = len(migrations)
 
 // ErrOwnerBusy is retryable contention, distinct from schema/identity conflicts.
 var ErrOwnerBusy = fmt.Errorf("fleet administration or a v1 server already active: %w", fleet.ErrConflict)

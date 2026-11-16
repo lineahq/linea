@@ -451,9 +451,10 @@ docker compose --project-name fleet-restore --env-file restore.env up -d --wait 
 3. Run migrations, start fleet, and check readiness and authenticated
    inventory, groups and credential metadata with an independent HTTP client.
 
-- The current durable schema is version 12 (version 12 adds the `operator`
-  credential role; version 11 lets admin and reader credentials be valid
-  until revoked). Migrations only go forward, and
+- The current durable schema is version 14 (version 14 adds plugin access,
+  delegation and the plugin token to credentials; version 13 adds the shared
+  plugin state; version 12 adds the `operator` credential role; version 11
+  lets admin and reader credentials be valid until revoked). Migrations only go forward, and
   `docker compose run --rm -T migrate` also re-applies the runtime role's
   grants.
 - The config management tables exist in every installation and stay unused
