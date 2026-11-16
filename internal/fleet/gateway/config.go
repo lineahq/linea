@@ -230,6 +230,16 @@ func (g *Gateway) owns(s *session) bool {
 	return ok && e.conn == s.conn && e.generation == s.generation
 }
 
+// attachConfig puts the config to deliver, if any, into an answer to the
+// agent. With the push in this file, it is the only place that sends remote
+// config (TestOnlyConfigFileSendsAgentCommands).
+func (g *Gateway) attachConfig(ctx context.Context, s *session, prev configmgmt.Status, transition bool, response *protobufs.ServerToAgent) {
+	if remote := g.deliver(ctx, s, prev, transition); remote != nil {
+		response.RemoteConfig = remote
+		g.config.responses.Add(1)
+	}
+}
+
 // deliver runs under s.mu on a committed session. prev is the remote config
 // status before the message being handled; a change applies the failure
 // hold. It returns the config to send, if any.

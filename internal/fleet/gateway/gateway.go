@@ -432,10 +432,7 @@ func (g *Gateway) message(_ context.Context, c types.Connection, m *protobufs.Ag
 	}
 	if g.config != nil && evaluate {
 		current := statusOf(s.report.RemoteConfig)
-		if remote := g.deliver(ctx, s, previous, first || answered || !sameStatus(previous, current)); remote != nil {
-			response.RemoteConfig = remote
-			g.config.responses.Add(1)
-		}
+		g.attachConfig(ctx, s, previous, first || answered || !sameStatus(previous, current), response)
 	}
 	return response
 }

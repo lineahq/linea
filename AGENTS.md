@@ -151,7 +151,8 @@ in the root does not enter nested modules.
   exception is opt-in config management: with `--config-management`, the
   reconcile rule in `internal/fleet/configmgmt`, called from
   `internal/fleet/gateway/config.go`, may send remote config to agents whose
-  credential allows it. Nothing else may send it.
+  credential allows it. Nothing else may send it, nor any command, package or
+  connection offer; `TestOnlyConfigFileSendsAgentCommands` enforces it.
 - **Fleet isolation and bounds.** Preserve separate agent and management
   credentials and listeners. Bound inventory, connections, message sizes and
   API result pages. Docker Compose is the fleet deployment path: preserve
