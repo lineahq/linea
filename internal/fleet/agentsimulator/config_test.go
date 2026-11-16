@@ -35,7 +35,7 @@ func (m *managed) GetVersion(_ context.Context, configID string, version int, _ 
 }
 
 func (m *managed) ManagedCredentials(context.Context) (map[string]map[string]string, error) {
-	return map[string]map[string]string{"memory-agent": nil}, nil
+	return map[string]map[string]string{"memory-agent": {"env": "prod"}}, nil
 }
 
 func (m *managed) SetConfigHold(_ context.Context, id string, _ uint64, expected, next string) (string, error) {
@@ -82,7 +82,7 @@ func managedFixture(t *testing.T) (Config, *managed) {
 	t.Helper()
 	m := &managed{body: "receivers: {filelog: {}}\n", held: map[string]string{}, sets: map[string]configmgmt.Components{}}
 	digest := sha256.Sum256([]byte(m.body))
-	target, err := configmgmt.NewTarget(configmgmt.Assignment{ID: "a1", Name: "base", ConfigID: "c1", Version: 1, Layer: 10, Selector: "service.name=linea-fleet-simulator"}, digest[:], "", nil)
+	target, err := configmgmt.NewTarget(configmgmt.Assignment{ID: "a1", Name: "base", ConfigID: "c1", Version: 1, Layer: 10, Selector: "service.name=linea-fleet-simulator", CredentialLabels: map[string]string{"env": "prod"}}, digest[:], "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

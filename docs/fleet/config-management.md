@@ -129,9 +129,10 @@ curl -s -H "$ADMIN" -H 'Content-Type: application/json' -X POST $API/credentials
 ```
 
 - The token is disclosed once: keep it in your secret manager.
-- Labels are optional, set by admins and verified by the server. Agent
-  attributes are self-reported, so assignments that matter should also
-  require `credential_labels`, not attributes alone.
+- Labels are set by admins and verified by the server. Agent attributes are
+  self-reported, so every assignment must name at least one
+  `credential_labels` entry: a managed credential needs a label for any
+  assignment to reach it.
 - A Collector's instance UID is also self-reported, but fleet binds it to the
   credential that holds it: another credential cannot take over a connected
   UID, so a credential outside the label match cannot displace a managed
@@ -181,9 +182,9 @@ OpAMP client it runs; there is no per-agent switch on the server.
 | OpAMP client | The contrib `opamp` extension in the Collector config ([example](../../examples/fleet-collector.yaml)) | The supervisor ([above](#connect-supervised-collectors)) with `accepts_remote_config: true` |
 | Config source | Your existing tooling (Helm, the OpenTelemetry Operator, GitOps) | Fleet layers merged over the supervisor's local `config_files` |
 
-- Add the managed credential's label to every assignment as
-  `credential_labels`, so previews and rollout targets count only managed
-  agents.
+- Name the managed credential's label in every assignment's
+  `credential_labels` (required), so previews and rollout targets count only
+  managed agents.
 - A reporting Collector cannot be managed by mistake. A plain Collector with
   the managed token still only reports, because the `opamp` extension never
   advertises `AcceptsRemoteConfig`. A supervisor with the reporting token
@@ -223,8 +224,10 @@ curl -s -H "$ADMIN" -H 'Content-Type: application/json' -X POST $API/configs/$CO
 
 An assignment targets exactly one of a group (`group_id`) or a selector over
 stored attributes (`selector`, for example
-`k8s.namespace.name=shop,service.name in (cart,checkout)`), optionally
-narrowed by `credential_labels`.
+`k8s.namespace.name=shop,service.name in (cart,checkout)`), narrowed by
+`credential_labels`, which are required: the server refuses an assignment
+without one, since attributes alone let any opted-in credential claim a
+config by reporting the right attributes.
 
 - Its `layer` (0 to 99) orders it. Each matching assignment becomes one
   config entry named `NN-<name>`. The supervisor merges entries in name

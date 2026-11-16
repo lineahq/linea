@@ -148,7 +148,7 @@ func TestFleetConfigLifecycle(t *testing.T) {
 	_, err = s.ListFleetConfigVersions(ctx, me, c.ID, CollectorPageRequest{Cursor: "x"})
 	wantCode(t, err, CodeInvalidRequest)
 
-	a, err := s.CreateFleetAssignment(ctx, me, FleetAssignmentCreate{Name: "edge", ConfigID: c.ID, Version: 1, Layer: 20, Selector: "service.name=gateway",
+	a, err := s.CreateFleetAssignment(ctx, me, FleetAssignmentCreate{Name: "edge", ConfigID: c.ID, Version: 1, Layer: 20, Selector: "service.name=gateway", CredentialLabels: map[string]string{"env": "prod"},
 		Rollout: &FleetRolloutPolicy{Waves: []FleetRolloutWave{{Percent: new(100)}}}})
 	if err != nil || a.RolloutID == "" || a.Layer != 20 {
 		t.Fatalf("assignment = %+v, %v", a, err)

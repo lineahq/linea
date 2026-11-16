@@ -117,7 +117,7 @@ base="http://127.0.0.1:$(docker port "$fleet" 8080/tcp | head -n 1 | sed 's/.*:/
 [ "$(req GET /api/v1/server | json 'd["config_management"]')" = True ] || fail "config management not enabled"
 
 expires=$("$python" -c "import datetime; print((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(hours=1)).isoformat())")
-token=$(req POST /api/v1/credentials "{\"id\":\"$(random_id)\",\"name\":\"supervised\",\"role\":\"agent\",\"remote_config\":true,\"expires_at\":\"$expires\"}" 201 | json 'd["token"]')
+token=$(req POST /api/v1/credentials "{\"id\":\"$(random_id)\",\"name\":\"supervised\",\"role\":\"agent\",\"labels\":{\"fleet\":\"smoke\"},\"remote_config\":true,\"expires_at\":\"$expires\"}" 201 | json 'd["token"]')
 LINEA_FLEET_AGENT_TOKEN=$token compose up --detach collector >/dev/null 2>&1 || fail "supervisor start"
 supervisor=$(compose ps --quiet collector)
 uid=""
@@ -133,7 +133,7 @@ config=$(random_id) group=$(random_id) assignment=$(random_id)
 req POST /api/v1/configs "{\"id\":\"$config\",\"name\":\"smoke\",\"description\":\"supervisor smoke\"}" 201 >/dev/null
 good=$(version "$config" "$fixtures/good.yaml" good)
 req PUT "/api/v1/groups/$group" "{\"name\":\"supervised\",\"agent_ids\":[\"$uid\"]}" 201 '"0"' >/dev/null
-creating=$(req POST /api/v1/config-assignments "{\"id\":\"$assignment\",\"name\":\"base\",\"config_id\":\"$config\",\"version\":$good,\"layer\":10,\"group_id\":\"$group\",\"rollout\":{$single}}" 201 | json 'd["rollout_id"]')
+creating=$(req POST /api/v1/config-assignments "{\"id\":\"$assignment\",\"name\":\"base\",\"config_id\":\"$config\",\"version\":$good,\"layer\":10,\"group_id\":\"$group\",\"credential_labels\":{\"fleet\":\"smoke\"},\"rollout\":{$single}}" 201 | json 'd["rollout_id"]')
 wait_for 180 "the creating rollout did not complete" rollout_is "$creating" completed
 good_hash=$(desired)
 wait_for 90 "the good config was not applied" check 'd["in_sync"]'
@@ -225,7 +225,7 @@ both=$(random_id) canary=$(random_id) fleetwide=$(random_id)
 req PUT "/api/v1/groups/$both" "{\"name\":\"both\",\"agent_ids\":[\"$first\",\"$second_uid\"]}" 201 '"0"' >/dev/null
 req PUT "/api/v1/groups/$canary" "{\"name\":\"canary\",\"agent_ids\":[\"$first\"]}" 201 '"0"' >/dev/null
 waves="\"canary_group_id\":\"$canary\",\"waves\":[{\"percent\":100}],\"bake_seconds\":10"
-creating=$(req POST /api/v1/config-assignments "{\"id\":\"$fleetwide\",\"name\":\"fleetwide\",\"config_id\":\"$config\",\"version\":$good,\"layer\":10,\"group_id\":\"$both\",\"rollout\":{$waves}}" 201 | json 'd["rollout_id"]')
+creating=$(req POST /api/v1/config-assignments "{\"id\":\"$fleetwide\",\"name\":\"fleetwide\",\"config_id\":\"$config\",\"version\":$good,\"layer\":10,\"group_id\":\"$both\",\"credential_labels\":{\"fleet\":\"smoke\"},\"rollout\":{$waves}}" 201 | json 'd["rollout_id"]')
 wait_for 180 "the two-agent creating rollout did not complete" rollout_is "$creating" completed
 for uid in "$first" "$second_uid"; do check 'd["in_sync"]' || fail "$uid is not in sync with the good config"; done
 fleet_hash=$(desired)

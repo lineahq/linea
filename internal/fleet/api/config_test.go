@@ -204,12 +204,12 @@ func TestConfigVersionsAPI(t *testing.T) {
 func TestAgentConfigAPI(t *testing.T) {
 	s := fleet.NewStore(3)
 	id := strings.Repeat("a1", 16)
-	credential := auth.Credential{ID: strings.Repeat("72", 16), Role: "agent", Labels: map[string]string{"env": "prod"}, RemoteConfig: true}
+	credential := auth.Credential{ID: strings.Repeat("72", 16), Role: "agent", Labels: map[string]string{"env": "prod", "fleet": "edge"}, RemoteConfig: true}
 	digest := bytes.Repeat([]byte{1}, 32)
-	base, _ := configmgmt.NewTarget(configmgmt.Assignment{ID: strings.Repeat("e1", 16), Name: "base", ConfigID: strings.Repeat("c1", 16), Version: 3, Layer: 10, Selector: "service.name=edge"}, digest, "", nil)
+	base, _ := configmgmt.NewTarget(configmgmt.Assignment{ID: strings.Repeat("e1", 16), Name: "base", ConfigID: strings.Repeat("c1", 16), Version: 3, Layer: 10, Selector: "service.name=edge", CredentialLabels: map[string]string{"fleet": "edge"}}, digest, "", nil)
 	prod, _ := configmgmt.NewTarget(configmgmt.Assignment{ID: strings.Repeat("e2", 16), Name: "prod", ConfigID: strings.Repeat("c1", 16), Version: 4, Layer: 50, Selector: "service.name=edge",
 		CredentialLabels: map[string]string{"env": "prod"}}, digest, "", nil)
-	other, _ := configmgmt.NewTarget(configmgmt.Assignment{ID: strings.Repeat("e3", 16), Name: "other", ConfigID: strings.Repeat("c1", 16), Version: 1, Layer: 20, Selector: "service.name=core"}, digest, "", nil)
+	other, _ := configmgmt.NewTarget(configmgmt.Assignment{ID: strings.Repeat("e3", 16), Name: "other", ConfigID: strings.Repeat("c1", 16), Version: 1, Layer: 20, Selector: "service.name=core", CredentialLabels: map[string]string{"fleet": "edge"}}, digest, "", nil)
 	repo := &fakeConfigs{targets: []configmgmt.Target{other, prod, base}}
 	creds := &fakeCredentials{c: credential}
 	h := NewAuthorized(s, roles{}, ServerInfo{ServerID: "test"}, nil, &auth.Service{Repository: creds})
@@ -237,7 +237,7 @@ func TestAgentConfigAPI(t *testing.T) {
 	}
 	// Without the label the agent loses the prod layer; with no match at
 	// all a formerly managed agent is released with the unmanaged entry.
-	creds.c.Labels = nil
+	creds.c.Labels = map[string]string{"fleet": "edge"}
 	if w := call(t, h, "GET", "/api/v1/agents/"+id+"/config", "reader", nil); json.Unmarshal(w.Body.Bytes(), &view) != nil || len(view.Desired.Layers) != 1 || view.InSync {
 		t.Fatalf("unlabelled view = %s", w.Body)
 	}

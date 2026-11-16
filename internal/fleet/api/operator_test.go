@@ -38,7 +38,7 @@ func TestOperatorRoleScope(t *testing.T) {
 		{"PUT", "/api/v1/groups/" + group, map[string]any{"name": "g", "selector": "a=b"}},
 		{"POST", "/api/v1/configs", map[string]string{"id": config, "name": "base"}},
 		{"POST", versions, map[string]string{"body": "receivers:\n  otlp: {}\n"}},
-		{"POST", "/api/v1/config-assignments", map[string]any{"id": assignment, "name": "base", "config_id": config, "version": 1, "layer": 10, "selector": "a=b"}},
+		{"POST", "/api/v1/config-assignments", map[string]any{"id": assignment, "name": "base", "config_id": config, "version": 1, "layer": 10, "selector": "a=b", "credential_labels": map[string]string{"env": "prod"}}},
 		{"POST", "/api/v1/rollouts", map[string]any{"assignment_id": assignment, "to_version": 1}},
 		{"POST", "/api/v1/rollouts/" + rollout + ":pause", nil},
 		{"POST", "/api/v1/agents/" + strings.Repeat("a1", 16) + "/config:retry", nil},

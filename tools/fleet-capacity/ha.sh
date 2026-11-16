@@ -264,7 +264,7 @@ until curl -sf --max-time 2 "$base/readyz" >/dev/null && [ "$(curl -s -o /dev/nu
 sleep 3 # health checks: every replica rises before the ramp
 credential=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
 expires=$("$python" -c "import datetime; print((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(hours=3)).isoformat())")
-req POST /api/v1/credentials "{\"id\": \"$credential\", \"name\": \"ha\", \"role\": \"agent\"$( [ "$rollout" = 1 ] && echo ', "remote_config": true'), \"expires_at\": \"$expires\"}" 201 | json 'd["token"]' | tr -d '\r\n' > "$run/agent_token"
+req POST /api/v1/credentials "{\"id\": \"$credential\", \"name\": \"ha\", \"role\": \"agent\", \"labels\": {\"fleet\": \"ha\"}$( [ "$rollout" = 1 ] && echo ', "remote_config": true'), \"expires_at\": \"$expires\"}" 201 | json 'd["token"]' | tr -d '\r\n' > "$run/agent_token"
 chmod 444 "$run/agent_token"
 
 simargs=(--endpoint ws://lb:4320/v1/opamp --allow-insecure-transport --token-file /run/agent_token --checkpoint-dir /checkpoints
@@ -328,7 +328,7 @@ if [ "$rollout" = 1 ]; then
   req POST /api/v1/configs "{\"id\": \"$config\", \"name\": \"ha\"}" 201 >/dev/null
   req POST "/api/v1/configs/$config/versions" '{"body": "receivers:\n  otlp: {}\n", "message": "v1"}' 201 >/dev/null
   req POST "/api/v1/configs/$config/versions" '{"body": "receivers:\n  otlp: {}\n  filelog: {}\n", "message": "v2 uses filelog"}' 201 >/dev/null
-  creating=$(req POST /api/v1/config-assignments "{\"id\": \"$assignment\", \"name\": \"ha\", \"config_id\": \"$config\", \"version\": 1, \"layer\": 10, \"selector\": \"service.name=linea-fleet-simulator\", \"rollout\": {$policy}}" 201 | json 'd["rollout_id"]')
+  creating=$(req POST /api/v1/config-assignments "{\"id\": \"$assignment\", \"name\": \"ha\", \"config_id\": \"$config\", \"version\": 1, \"layer\": 10, \"selector\": \"service.name=linea-fleet-simulator\", \"credential_labels\": {\"fleet\": \"ha\"}, \"rollout\": {$policy}}" 201 | json 'd["rollout_id"]')
   note "creating rollout $creating started; killing a replica once wave 2 (50 %) is released"
   wait_wave "$creating" 2
 fi

@@ -28,6 +28,9 @@ func (f *fakeSource) GetVersion(_ context.Context, id string, v int, _ bool) (Ve
 
 func target(t *testing.T, name string, layer, version int, body string, labels map[string]string) Target {
 	t.Helper()
+	if labels == nil {
+		labels = map[string]string{"env": "prod"}
+	}
 	d := sha256.Sum256([]byte(body))
 	tg, err := NewTarget(Assignment{ID: name, Name: name, ConfigID: "c", Version: version, Layer: layer, CredentialLabels: labels}, d[:], "", []string{"agent"})
 	if err != nil {

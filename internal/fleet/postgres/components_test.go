@@ -66,7 +66,7 @@ func TestPostgresComponentSets(t *testing.T) {
 		t.Fatal("invalid hash accepted:", err)
 	}
 
-	managed, err := auth.Generate(auth.CredentialRequest{ID: strings.Repeat("72", 16), Name: "managed", Role: "agent", RemoteConfig: true, ExpiresAt: new(time.Now().Add(time.Hour))}, time.Now())
+	managed, err := auth.Generate(auth.CredentialRequest{ID: strings.Repeat("72", 16), Name: "managed", Role: "agent", Labels: map[string]string{"env": "prod"}, RemoteConfig: true, ExpiresAt: new(time.Now().Add(time.Hour))}, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestPostgresComponentSets(t *testing.T) {
 	policy := configmgmt.DefaultPolicy()
 	policy.Waves, policy.BakeSeconds = []configmgmt.Wave{{Percent: 100}}, 0
 	rollout := strings.Repeat("f1", 16)
-	if _, _, err := s.CreateAssignment(ctx, admin, configmgmt.Assignment{ID: strings.Repeat("e1", 16), Name: "base", ConfigID: config, Version: 1, Layer: 10, Selector: "env=prod"},
+	if _, _, err := s.CreateAssignment(ctx, admin, configmgmt.Assignment{ID: strings.Repeat("e1", 16), Name: "base", ConfigID: config, Version: 1, Layer: 10, Selector: "env=prod", CredentialLabels: map[string]string{"env": "prod"}},
 		configmgmt.RolloutRequest{ID: rollout, Policy: policy}); err != nil {
 		t.Fatal("create:", err)
 	}

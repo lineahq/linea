@@ -472,8 +472,8 @@ func (s *Service) CreateFleetAssignment(ctx context.Context, caller Caller, req 
 		return nil, captureInvalid("an assignment targets a group or a selector, not both")
 	case req.GroupID != "" && !validFleetID(req.GroupID), !collectorText(req.Selector, 4096, false):
 		return nil, captureInvalid("invalid assignment group or selector")
-	case len(req.CredentialLabels) > 16:
-		return nil, captureInvalid("an assignment requires at most 16 credential labels")
+	case len(req.CredentialLabels) == 0 || len(req.CredentialLabels) > 16:
+		return nil, captureInvalid("an assignment requires 1 to 16 credential labels")
 	}
 	if err := checkRolloutPolicy(req.Rollout); err != nil {
 		return nil, err

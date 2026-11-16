@@ -49,7 +49,7 @@ func TestPostgresRollouts(t *testing.T) {
 	s := open()
 	admin := issued.Credential.ID
 
-	managed, err := auth.Generate(auth.CredentialRequest{ID: strings.Repeat("72", 16), Name: "managed", Role: "agent", RemoteConfig: true, ExpiresAt: new(time.Now().Add(time.Hour))}, time.Now())
+	managed, err := auth.Generate(auth.CredentialRequest{ID: strings.Repeat("72", 16), Name: "managed", Role: "agent", Labels: map[string]string{"env": "prod"}, RemoteConfig: true, ExpiresAt: new(time.Now().Add(time.Hour))}, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestPostgresRollouts(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		d, err := configmgmt.Describe(configmgmt.Match(targets, id, attrs, map[string]string{}), "")
+		d, err := configmgmt.Describe(configmgmt.Match(targets, id, attrs, map[string]string{"env": "prod"}), "")
 		if err != nil || d == nil {
 			t.Fatalf("desired for %s = %+v err = %v", id, d, err)
 		}
@@ -141,14 +141,14 @@ func TestPostgresRollouts(t *testing.T) {
 	policy.BakeSeconds, policy.WaveTimeoutSeconds = 0, 60
 
 	// Creation: the snapshot holds only eligible agents, in two waves.
-	assignment := configmgmt.Assignment{ID: strings.Repeat("e1", 16), Name: "base", ConfigID: config, Version: 1, Layer: 10, Selector: "env=prod"}
+	assignment := configmgmt.Assignment{ID: strings.Repeat("e1", 16), Name: "base", ConfigID: config, Version: 1, Layer: 10, Selector: "env=prod", CredentialLabels: map[string]string{"env": "prod"}}
 	create := strings.Repeat("f1", 16)
 	a, view, err := s.CreateAssignment(ctx, admin, assignment, configmgmt.RolloutRequest{ID: create, Policy: policy})
 	if err != nil || view.Targets != 4 || view.WaveCount != 2 || a.Version != 0 {
 		t.Fatalf("create = %+v %+v err = %v", a, view, err)
 	}
 	// Another assignment over the same agents waits for this rollout.
-	other := configmgmt.Assignment{ID: strings.Repeat("e2", 16), Name: "other", ConfigID: config, Version: 1, Layer: 20, Selector: "env=prod"}
+	other := configmgmt.Assignment{ID: strings.Repeat("e2", 16), Name: "other", ConfigID: config, Version: 1, Layer: 20, Selector: "env=prod", CredentialLabels: map[string]string{"env": "prod"}}
 	if _, _, err := s.CreateAssignment(ctx, admin, other, configmgmt.RolloutRequest{ID: strings.Repeat("f2", 16), Policy: policy}); !errors.Is(err, configmgmt.ErrRolloutActive) {
 		t.Fatal("overlapping rollout:", err)
 	}
@@ -163,7 +163,7 @@ func TestPostgresRollouts(t *testing.T) {
 	// Only released agents receive the pending assignment's layer.
 	targets, _ := s.Targets(ctx)
 	for _, id := range eligible {
-		if matched := configmgmt.Match(targets, id, attrs, map[string]string{}); (len(matched) == 1) != (id == canary[0]) {
+		if matched := configmgmt.Match(targets, id, attrs, map[string]string{"env": "prod"}); (len(matched) == 1) != (id == canary[0]) {
 			t.Fatalf("%s matched %d layers before its wave", id, len(matched))
 		}
 	}

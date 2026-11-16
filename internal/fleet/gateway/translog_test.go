@@ -65,7 +65,7 @@ func serveLogged(t *testing.T, src *source, hs *holds, log *translog.Logger) (*G
 func TestWithheldConfigIsLoggedOncePerSessionAndPlan(t *testing.T) {
 	uid := bytes.Repeat([]byte{5}, 16)
 	id := hex.EncodeToString(uid)
-	src := &source{bodies: map[int]string{1: "receivers: {otlp: {}}\n"}, credentials: map[string]map[string]string{"memory-agent": nil}}
+	src := &source{bodies: map[int]string{1: "receivers: {otlp: {}}\n"}, credentials: map[string]map[string]string{"memory-agent": {"env": "prod"}}}
 	src.assign(t, id, 1)
 	hs := &holds{held: map[string]string{}}
 	var out logBuffer
@@ -95,7 +95,7 @@ func TestWithheldConfigIsLoggedOncePerSessionAndPlan(t *testing.T) {
 func TestAgentFailureHoldIsLogged(t *testing.T) {
 	uid := bytes.Repeat([]byte{9}, 16)
 	id := hex.EncodeToString(uid)
-	src := &source{bodies: map[int]string{1: "receivers: {otlp: {}}\n"}, credentials: map[string]map[string]string{"memory-agent": nil}}
+	src := &source{bodies: map[int]string{1: "receivers: {otlp: {}}\n"}, credentials: map[string]map[string]string{"memory-agent": {"env": "prod"}}}
 	src.assign(t, id, 1)
 	hs := &holds{held: map[string]string{}}
 	var out logBuffer

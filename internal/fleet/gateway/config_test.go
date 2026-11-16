@@ -67,7 +67,7 @@ func (s *source) assign(t *testing.T, agentID string, version int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	digest := sha256.Sum256([]byte(s.bodies[version]))
-	target, err := configmgmt.NewTarget(configmgmt.Assignment{ID: "a1", Name: "base", ConfigID: "c1", Version: version, Layer: 10}, digest[:], "", []string{agentID})
+	target, err := configmgmt.NewTarget(configmgmt.Assignment{ID: "a1", Name: "base", ConfigID: "c1", Version: version, Layer: 10, CredentialLabels: map[string]string{"env": "prod"}}, digest[:], "", []string{agentID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +233,7 @@ func TestConfigDeliveryAndFailureHold(t *testing.T) {
 	uid := bytes.Repeat([]byte{9}, 16)
 	id := hex.EncodeToString(uid)
 	src := &source{bodies: map[int]string{1: "receivers: {otlp: {}}\n", 2: "receivers: {otlp: {protocols: {grpc: {}}}}\n"},
-		credentials: map[string]map[string]string{"memory-agent": nil}}
+		credentials: map[string]map[string]string{"memory-agent": {"env": "prod"}}}
 	src.assign(t, id, 1)
 	hs := &holds{held: map[string]string{}}
 	g, url, token := serve(t, src, hs)
@@ -289,7 +289,7 @@ func TestConfigDeliveryAndFailureHold(t *testing.T) {
 
 func TestReconnectWaitsForFullStateBeforeResending(t *testing.T) {
 	uid := bytes.Repeat([]byte{7}, 16)
-	src := &source{bodies: map[int]string{1: "receivers: {otlp: {}}\n"}, credentials: map[string]map[string]string{"memory-agent": nil}}
+	src := &source{bodies: map[int]string{1: "receivers: {otlp: {}}\n"}, credentials: map[string]map[string]string{"memory-agent": {"env": "prod"}}}
 	src.assign(t, hex.EncodeToString(uid), 1)
 	g, url, token := serve(t, src, &holds{held: map[string]string{}})
 	a := &agent{t: t, g: g, c: dial(t, url, token), uid: uid}
@@ -312,7 +312,7 @@ func TestReconnectWaitsForFullStateBeforeResending(t *testing.T) {
 func TestHoldClearedThroughTheAPIIsRetried(t *testing.T) {
 	uid := bytes.Repeat([]byte{6}, 16)
 	id := hex.EncodeToString(uid)
-	src := &source{bodies: map[int]string{1: "receivers: {otlp: {}}\n"}, credentials: map[string]map[string]string{"memory-agent": nil}}
+	src := &source{bodies: map[int]string{1: "receivers: {otlp: {}}\n"}, credentials: map[string]map[string]string{"memory-agent": {"env": "prod"}}}
 	src.assign(t, id, 1)
 	hs := &holds{held: map[string]string{}}
 	g, url, token := serve(t, src, hs)
@@ -349,7 +349,7 @@ func TestConfigDeliveryRequiresOptIn(t *testing.T) {
 	a.quiet(acceptsRemoteConfig)
 	// With the opt-in, an agent that does not accept remote config gets none.
 	src.mu.Lock()
-	src.credentials = map[string]map[string]string{"memory-agent": nil}
+	src.credentials = map[string]map[string]string{"memory-agent": {"env": "prod"}}
 	src.mu.Unlock()
 	if a.report(1, nil).RemoteConfig != nil {
 		t.Fatal("config sent to an agent without AcceptsRemoteConfig")
@@ -393,7 +393,7 @@ func buildHash(receivers ...string) []byte {
 func TestIncompatibleBuildIsWithheld(t *testing.T) {
 	uid, other := bytes.Repeat([]byte{5}, 16), bytes.Repeat([]byte{4}, 16)
 	src := &source{bodies: map[int]string{1: "receivers: {otlp: {}}\n", 2: "receivers: {filelog: {}}\n"},
-		credentials: map[string]map[string]string{"memory-agent": nil}}
+		credentials: map[string]map[string]string{"memory-agent": {"env": "prod"}}}
 	src.assign(t, hex.EncodeToString(uid), 1)
 	hs := &holds{held: map[string]string{}}
 	g, url, token := serve(t, src, hs)
@@ -458,7 +458,7 @@ func TestClearedHoldOwesOneRetry(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			uid := bytes.Repeat([]byte{byte(20 + i)}, 16)
 			id := hex.EncodeToString(uid)
-			src := &source{bodies: map[int]string{1: "receivers: {otlp: {}}\n"}, credentials: map[string]map[string]string{"memory-agent": nil}}
+			src := &source{bodies: map[int]string{1: "receivers: {otlp: {}}\n"}, credentials: map[string]map[string]string{"memory-agent": {"env": "prod"}}}
 			src.assign(t, id, 1)
 			hs := &holds{held: map[string]string{}}
 			g, url, token := serve(t, src, hs)
@@ -497,7 +497,7 @@ func TestClearedHoldOwesOneRetry(t *testing.T) {
 
 func TestUnverifiedBuildIsWithheld(t *testing.T) {
 	uid := bytes.Repeat([]byte{5}, 16)
-	src := &source{bodies: map[int]string{1: "receivers: {otlp: {}}\n"}, credentials: map[string]map[string]string{"memory-agent": nil}}
+	src := &source{bodies: map[int]string{1: "receivers: {otlp: {}}\n"}, credentials: map[string]map[string]string{"memory-agent": {"env": "prod"}}}
 	src.assign(t, hex.EncodeToString(uid), 1)
 	hs := &holds{held: map[string]string{}}
 	g, url, token := serve(t, src, hs)
@@ -541,7 +541,7 @@ func TestUnmanagedCredentialResolvesNoBuild(t *testing.T) {
 func TestRemoteConfigAboveTheReceiveLimitIsSent(t *testing.T) {
 	uid := bytes.Repeat([]byte{5}, 16)
 	body := "receivers: {otlp: {}}\n# " + strings.Repeat("x", 4096) + "\n"
-	src := &source{bodies: map[int]string{1: body}, credentials: map[string]map[string]string{"memory-agent": nil}}
+	src := &source{bodies: map[int]string{1: body}, credentials: map[string]map[string]string{"memory-agent": {"env": "prod"}}}
 	src.assign(t, hex.EncodeToString(uid), 1)
 	g, url, token := serveLimited(t, src, &holds{held: map[string]string{}}, 1024)
 	a := &agent{t: t, g: g, c: dial(t, url, token), uid: uid}

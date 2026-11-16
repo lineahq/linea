@@ -143,13 +143,14 @@ func TestPostgresConfigs(t *testing.T) {
 	if _, err := s.PutGroup(ctx, admin, fleet.Group{ID: selectorGroup, Name: "prod", Selector: "deployment.environment.name=prod"}, 0); err != nil {
 		t.Fatal(err)
 	}
-	staticAssignment := configmgmt.Assignment{ID: strings.Repeat("e1", 16), Name: "base", ConfigID: id, Version: 1, Layer: 10, GroupID: group}
-	if _, _, err := s.CreateAssignment(ctx, admin, configmgmt.Assignment{ID: strings.Repeat("e9", 16), Name: "missing", ConfigID: id, Version: 7, Layer: 10, GroupID: group}, rollout(strings.Repeat("f9", 16))); !errors.Is(err, fleet.ErrInvalid) {
+	team := map[string]string{"team": "a"}
+	staticAssignment := configmgmt.Assignment{ID: strings.Repeat("e1", 16), Name: "base", ConfigID: id, Version: 1, Layer: 10, GroupID: group, CredentialLabels: team}
+	if _, _, err := s.CreateAssignment(ctx, admin, configmgmt.Assignment{ID: strings.Repeat("e9", 16), Name: "missing", ConfigID: id, Version: 7, Layer: 10, GroupID: group, CredentialLabels: team}, rollout(strings.Repeat("f9", 16))); !errors.Is(err, fleet.ErrInvalid) {
 		t.Fatal("assignment of a missing version:", err)
 	}
 	cursor, _ = s.Events(ctx, "", 10000)
 	a, view, err := s.CreateAssignment(ctx, admin, staticAssignment, rollout(strings.Repeat("f1", 16)))
-	if err != nil || a.Revision != 1 || a.CredentialLabels != nil || a.Version != 0 || a.RolloutID != view.ID ||
+	if err != nil || a.Revision != 1 || a.CredentialLabels["team"] != "a" || a.Version != 0 || a.RolloutID != view.ID ||
 		view.FromVersion != 0 || view.ToVersion != 1 || view.Targets != 0 || view.State != configmgmt.Running {
 		t.Fatalf("assignment = %+v rollout = %+v err = %v", a, view, err)
 	}
@@ -158,13 +159,13 @@ func TestPostgresConfigs(t *testing.T) {
 		compact(events.Items[1].Detail) != fmt.Sprintf(`{"layer":10,"action":"created","version":1,"config_id":"%s"}`, id) {
 		t.Fatalf("assignment events = %+v", events.Items)
 	}
-	if _, _, err := s.CreateAssignment(ctx, admin, configmgmt.Assignment{ID: strings.Repeat("e2", 16), Name: "base", ConfigID: id, Version: 1, Layer: 20, Selector: "a=b"}, rollout(strings.Repeat("f2", 16))); !errors.Is(err, fleet.ErrConflict) {
+	if _, _, err := s.CreateAssignment(ctx, admin, configmgmt.Assignment{ID: strings.Repeat("e2", 16), Name: "base", ConfigID: id, Version: 1, Layer: 20, Selector: "a=b", CredentialLabels: team}, rollout(strings.Repeat("f2", 16))); !errors.Is(err, fleet.ErrConflict) {
 		t.Fatal("duplicate assignment name:", err)
 	}
 	if _, _, err := s.CreateAssignment(ctx, admin, configmgmt.Assignment{ID: strings.Repeat("e2", 16), Name: "both", ConfigID: id, Version: 1, Layer: 20, Selector: "a=b", GroupID: group}, rollout(strings.Repeat("f2", 16))); !errors.Is(err, fleet.ErrInvalid) {
 		t.Fatal("assignment with two targets:", err)
 	}
-	prod, _, err := s.CreateAssignment(ctx, admin, configmgmt.Assignment{ID: strings.Repeat("e2", 16), Name: "prod", ConfigID: id, Version: 1, Layer: 50, GroupID: selectorGroup}, rollout(strings.Repeat("f2", 16)))
+	prod, _, err := s.CreateAssignment(ctx, admin, configmgmt.Assignment{ID: strings.Repeat("e2", 16), Name: "prod", ConfigID: id, Version: 1, Layer: 50, GroupID: selectorGroup, CredentialLabels: team}, rollout(strings.Repeat("f2", 16)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,11 +188,11 @@ func TestPostgresConfigs(t *testing.T) {
 		t.Fatalf("targets = %d err = %v", len(targets), err)
 	}
 	prodAttrs := map[string]string{"deployment.environment.name": "prod", "service.name": "edge"}
-	matched := configmgmt.Match(targets, member, prodAttrs, map[string]string{"env": "prod"})
+	matched := configmgmt.Match(targets, member, prodAttrs, map[string]string{"env": "prod", "team": "a"})
 	if len(matched) != 3 || matched[0].Name != "base" || matched[1].Name != "prod" || matched[2].Name != "edge" {
 		t.Fatalf("matched = %+v", matched)
 	}
-	if matched := configmgmt.Match(targets, outsider, prodAttrs, nil); len(matched) != 1 || matched[0].ID != prod.ID {
+	if matched := configmgmt.Match(targets, outsider, prodAttrs, team); len(matched) != 1 || matched[0].ID != prod.ID {
 		t.Fatalf("outsider matched = %+v", matched)
 	}
 	desired, err := configmgmt.Describe(matched, "")

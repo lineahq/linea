@@ -373,27 +373,28 @@ func TestRevertedAndControl(t *testing.T) {
 func TestMatchAppliesRolloutOverride(t *testing.T) {
 	a, b := agentIDs(2)[0], agentIDs(2)[1]
 	members := []string{a, b}
-	base, _ := NewTarget(Assignment{ID: "base", Name: "base", ConfigID: "c", Version: 1, Layer: 10, GroupID: "g"}, []byte{1}, "", members)
+	prod := map[string]string{"env": "prod"}
+	base, _ := NewTarget(Assignment{ID: "base", Name: "base", ConfigID: "c", Version: 1, Layer: 10, GroupID: "g", CredentialLabels: prod}, []byte{1}, "", members)
 	base.Override = &Override{RolloutID: "r", Version: 2, Digest: []byte{2}, Released: map[string]struct{}{a: {}}}
-	got := Match([]Target{base}, a, nil, nil)
+	got := Match([]Target{base}, a, nil, prod)
 	if len(got) != 1 || got[0].Version != 2 || got[0].Digest[0] != 2 {
 		t.Fatal("released target did not get the rollout version", got)
 	}
-	if got := Match([]Target{base}, b, nil, nil); len(got) != 1 || got[0].Version != 1 {
+	if got := Match([]Target{base}, b, nil, prod); len(got) != 1 || got[0].Version != 1 {
 		t.Fatal("unreleased target changed", got)
 	}
 	// A deletion removes the layer for released targets only.
 	base.Override.Version, base.Override.Digest = 0, nil
-	if got := Match([]Target{base}, a, nil, nil); len(got) != 0 {
+	if got := Match([]Target{base}, a, nil, prod); len(got) != 0 {
 		t.Fatal("deleted layer still matched", got)
 	}
 	// A new assignment has no version until its rollout completes.
-	created, _ := NewTarget(Assignment{ID: "new", Name: "new", ConfigID: "c", Layer: 20, GroupID: "g"}, nil, "", members)
+	created, _ := NewTarget(Assignment{ID: "new", Name: "new", ConfigID: "c", Layer: 20, GroupID: "g", CredentialLabels: prod}, nil, "", members)
 	created.Override = &Override{RolloutID: "r", Version: 1, Digest: []byte{1}, Released: map[string]struct{}{a: {}}}
-	if got := Match([]Target{created}, a, nil, nil); len(got) != 1 || got[0].Version != 1 {
+	if got := Match([]Target{created}, a, nil, prod); len(got) != 1 || got[0].Version != 1 {
 		t.Fatal("released target did not get the new layer", got)
 	}
-	if got := Match([]Target{created}, b, nil, nil); len(got) != 0 {
+	if got := Match([]Target{created}, b, nil, prod); len(got) != 0 {
 		t.Fatal("unreleased target got the new layer", got)
 	}
 }
