@@ -130,6 +130,9 @@ func New(ctx context.Context, configs []Config, store fleet.Repository) *Registr
 		}}
 		e.apiReads, e.apiWrites = make(chan struct{}, 2), make(chan struct{}, 2)
 		e.apiClient = pluginsdk.NewHTTPClient()
+		for _, c := range []*http.Client{e.client, e.probeClient, e.apiClient} {
+			config.trustRoots(c)
+		}
 		e.apiClient.Timeout = 2 * time.Second
 		transport := e.apiClient.Transport.(*http.Transport)
 		transport.MaxConnsPerHost, transport.MaxIdleConnsPerHost = 4, 4

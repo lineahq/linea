@@ -100,7 +100,7 @@ func New(ctx context.Context, c Config, repo Repository, log *translog.Logger) (
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	s := &Server{config: c, repo: repo, ctx: ctx, cancel: cancel, instance: pluginsdk.RandomID(), dbOK: true, peers: map[string]*peer{}, joining: map[string]bool{}, operations: map[string]*activeOperation{}, channels: map[string]*channel{}, credentials: map[[32]byte]cachedCredential{}, linkWake: make(chan struct{}, 1), revalidateEvery: credentialTTL, peerIdle: peerRetention, now: time.Now, fatal: make(chan error, 1), log: log, authFailures: translog.NewFailureSummary(log, translog.SummaryEvery, time.Now())}
-	s.host = pluginsdk.HostClient{Endpoint: c.HostEndpoint, Token: c.hostToken, InstanceID: s.instance, HTTP: pluginsdk.NewHTTPClient(), SessionHTTP: pluginsdk.NewHTTPClient()}
+	s.host = pluginsdk.HostClient{Endpoint: c.HostEndpoint, Token: c.hostToken, InstanceID: s.instance, HTTP: c.hostClient(), SessionHTTP: c.hostClient()}
 	for i, limit := range []int{c.peerLimit() + 16, 64, 64} {
 		s.budgets[i] = &connectionBudget{slots: make(chan struct{}, limit)}
 	}

@@ -47,6 +47,16 @@ credential. Build a plugin when you need one of:
 
 - Each registration has its own host and service token. Fleet identifies the
   plugin on the host listener by its host token alone.
+- **The service token is the plugin's administrator.** Whoever holds it, and
+  reaches the plugin's listener with the public instance ID and epoch, can
+  call the plugin as any caller with any access level. The host token acts
+  as the plugin toward fleet's host services. Keep both like an admin
+  credential, and keep the plugin listener reachable only by fleet.
+- **Transport.** Bearer tokens, no mutual TLS. Use HTTPS to the plugin
+  (`ca_file` for a private CA) and `--tls-cert` on the host listener, with
+  the plugin's own CA option for it, unless the network between them is
+  private: then plain HTTP is acceptable only if no other workload can reach
+  or observe that network.
 - **Instance ID:** the plugin picks a random one at every process start and
   reports it in its manifest.
 - **Epoch:** fleet keeps one per plugin, shared by every fleet replica, and
@@ -162,6 +172,7 @@ Pass `--plugins-config FILE` to fleet.
 | `permissions` | yes | Array (possibly empty) of the permissions below, each at most once |
 | `api_version` | no | Grants the opaque public API. Same format as `version`; the manifest must match. Omit it for a plugin without a public API |
 | `host_token_file`, `service_token_file` | yes | Files holding 64 lowercase hex characters (surrounding whitespace ignored). Relative paths resolve beside the registration file |
+| `ca_file` | no | PEM bundle, at most 64 KiB, that fleet trusts for this plugin's `https` endpoint instead of the system roots, for a certificate from a private CA. Relative paths resolve beside the registration file. Refused with an `http` endpoint |
 
 | Permission | Grants |
 | --- | --- |
@@ -521,7 +532,7 @@ the template.
 | --- | --- |
 | Fleet | Replaces `command` with the base command plus `--plugins-config /etc/linea-fleet/plugins.json --plugin-listen 0.0.0.0:8081`, mounts the registration, adds the token secrets and an internal `plugins` network |
 | Plugin | Joins only the `plugins` network (plus its own database network, if any); publishes no port for fleet traffic; reads both tokens from Docker secrets; runs non-root with a read-only root, dropped capabilities, `no-new-privileges` and CPU, memory and PID limits |
-| Registration | Uses `http://<service>:<port>` with `allow_insecure_http: true`, acceptable only because the network is internal |
+| Registration | Uses `http://<service>:<port>` with `allow_insecure_http: true`, acceptable only because the network is internal: it must hold only fleet and the plugin, and no other container may join it |
 
 ```sh
 # from the repository root

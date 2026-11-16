@@ -2,8 +2,11 @@ package livecapture
 
 import (
 	"bytes"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 	"unicode"
@@ -28,14 +31,20 @@ const (
 const DefaultCaptureLabel = "capture"
 
 type Config struct {
-	DrainSeconds            int      `json:"drain_seconds,omitempty"`
-	ID                      string   `json:"id"`
-	Version                 string   `json:"version"`
-	HostEndpoint            string   `json:"host_endpoint"`
-	AllowInsecureHost       bool     `json:"allow_insecure_host"`
-	HostTokenFile           string   `json:"host_token_file"`
-	ServiceTokenFile        string   `json:"service_token_file"`
-	HTTPListen              string   `json:"http_listen"`
+	DrainSeconds      int    `json:"drain_seconds,omitempty"`
+	ID                string `json:"id"`
+	Version           string `json:"version"`
+	HostEndpoint      string `json:"host_endpoint"`
+	AllowInsecureHost bool   `json:"allow_insecure_host"`
+	HostTokenFile     string `json:"host_token_file"`
+	// HostCAFile is a PEM bundle trusted for an https host endpoint instead
+	// of the system roots.
+	HostCAFile       string `json:"host_ca_file,omitempty"`
+	ServiceTokenFile string `json:"service_token_file"`
+	HTTPListen       string `json:"http_listen"`
+	// HTTPTLS serves the fleet-facing HTTP listener with the plugin's
+	// certificate, so fleet reaches it over https.
+	HTTPTLS                 bool     `json:"http_tls,omitempty"`
 	ControlListen           string   `json:"control_listen"`
 	DeliveryListen          string   `json:"delivery_listen"`
 	CertFile                string   `json:"tls_cert_file"`
@@ -48,6 +57,7 @@ type Config struct {
 	MetricsTokenFile        string   `json:"metrics_token_file,omitempty"`
 	hostToken, serviceToken string
 	metricsToken            string
+	hostRoots               *x509.CertPool
 }
 
 func Secret(path string) (string, error) {
@@ -62,6 +72,16 @@ func Secret(path string) (string, error) {
 	}
 	return strings.TrimSpace(string(b)), nil
 }
+
+// hostClient is an SDK client that trusts the host CA bundle when one is set.
+func (c Config) hostClient() *http.Client {
+	client := pluginsdk.NewHTTPClient()
+	if c.hostRoots != nil {
+		client.Transport.(*http.Transport).TLSClientConfig = &tls.Config{RootCAs: c.hostRoots, MinVersion: tls.VersionTLS12}
+	}
+	return client
+}
+
 func safeName(s string) bool {
 	return len(s) > 0 && len(s) <= 128 && strings.TrimSpace(s) == s && strings.IndexFunc(s, unicode.IsControl) < 0
 }
@@ -93,6 +113,16 @@ func LoadConfig(path string) (Config, error) {
 	c.HostEndpoint, err = pluginsdk.Endpoint(c.HostEndpoint, c.AllowInsecureHost)
 	if err != nil {
 		return c, ErrInvalid
+	}
+	if c.HostCAFile != "" {
+		if !strings.HasPrefix(c.HostEndpoint, "https://") {
+			return c, ErrInvalid
+		}
+		pem, err := Secret(c.HostCAFile)
+		c.hostRoots = x509.NewCertPool()
+		if err != nil || !c.hostRoots.AppendCertsFromPEM([]byte(pem)) {
+			return c, ErrInvalid
+		}
 	}
 	c.hostToken, err = Secret(c.HostTokenFile)
 	if err != nil || !pluginsdk.ValidToken(c.hostToken) {

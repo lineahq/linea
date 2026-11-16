@@ -97,7 +97,13 @@ func Run(ctx context.Context, config Config, repo Repository, log *translog.Logg
 	defer listener.Close()
 	httpServer := &http.Server{Handler: s, ReadHeaderTimeout: time.Second, ReadTimeout: 2 * time.Second, WriteTimeout: 3 * time.Second, IdleTimeout: 10 * time.Second, MaxHeaderBytes: 16 << 10}
 	defer httpServer.Close()
-	go func() { failures <- httpServer.Serve(&boundedListener{Listener: listener, budget: s.budgets[2]}) }()
+	var served net.Listener = &boundedListener{Listener: listener, budget: s.budgets[2]}
+	if config.HTTPTLS {
+		httpTLS := tlsConfig.Clone()
+		httpTLS.NextProtos = []string{"http/1.1"}
+		served = tls.NewListener(served, httpTLS)
+	}
+	go func() { failures <- httpServer.Serve(served) }()
 	s.Start()
 	defer s.Close()
 	select {

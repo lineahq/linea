@@ -133,7 +133,11 @@ ingress or load balancer.
   credential as a bearer token. This is not mutual TLS. The plugin always
   serves TLS on both gRPC listeners; there is no plaintext option.
 - The private host and service HTTP links explicitly allow protected
-  plaintext. Remote links need a protected transport.
+  plaintext. Remote links need a protected transport: an `https`
+  `host_endpoint`, with `host_ca_file` (a PEM bundle of at most 16 KiB)
+  when fleet's host listener has a certificate from a private CA, and the
+  registration's [`ca_file`](plugins.md#register-a-plugin) for the plugin's
+  own HTTP listener, which serves TLS with `http_tls`.
 
 ## Connect existing Collectors
 
