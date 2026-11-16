@@ -226,13 +226,13 @@ services:
     networks: [database]
     restart: "no"
   # Installs the admin token as the first fleet admin and linea-server's
-  # token as a fleet operator; repeating it changes nothing while they are
-  # active.
+  # token as a fleet operator that may write live captures and act for its
+  # users; repeating it only reapplies those grants while they are active.
   fleet-bootstrap:
     <<: *fleet-hardened
     image: ghcr.io/lineahq/linea-fleet:${LINEA_VERSION:-0.2.0}
     profiles: [fleet-init]
-    command: [bootstrap, --server-id, "${LINEA_FLEET_SERVER_ID:-linea-fleet}", --name, deployment-admin, --operator-name, linea-server]
+    command: [bootstrap, --server-id, "${LINEA_FLEET_SERVER_ID:-linea-fleet}", --name, deployment-admin, --plugin-access, livecapture=admin, --operator-name, linea-server, --operator-plugin-access, livecapture=write, --operator-delegate]
     environment:
       LINEA_FLEET_DATABASE_URL_FILE: /run/secrets/fleet_database_url
       LINEA_FLEET_BOOTSTRAP_TOKEN_FILE: /run/secrets/fleet_admin_token

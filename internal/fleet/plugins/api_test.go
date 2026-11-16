@@ -55,12 +55,12 @@ func TestOpaquePluginAPIIsolationAndBounds(t *testing.T) {
 		req := httptest.NewRequest(method, "http://fleet/api/v1/plugins/"+config.ID+"/api/"+path, strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer private-client-secret")
 		req.Header.Set("Cookie", "private-cookie")
-		req.Header.Set(pluginsdk.CallerRoleHeader, "admin")
+		req.Header.Set(pluginsdk.CallerAccessHeader, "admin")
 		req.Header.Set(pluginsdk.ActingNameHeader, "forged")
 		req.Header.Set("If-Match", `"1"`)
 		req = req.WithContext(fleet.WithActing(req.Context(), &pluginsdk.Acting{ID: "user:alice", RequestID: "req-1"}))
 		w := httptest.NewRecorder()
-		r.ServeAPI(w, req, config.ID, path, auth.Principal{ID: "reader", Role: "reader"})
+		r.ServeAPI(w, req, config.ID, path, auth.Principal{ID: "reader", Role: "reader", PluginAccess: map[string]string{config.ID: "read"}})
 		return w
 	}
 	w := call("v1/custom", "POST", `{"opaque":"value"}`)
@@ -68,7 +68,7 @@ func TestOpaquePluginAPIIsolationAndBounds(t *testing.T) {
 		t.Fatal("opaque response contract failed", w.Code)
 	}
 	headersMu.Lock()
-	if incoming.Get("Authorization") != "Bearer "+config.serviceToken || incoming.Get("Cookie") != "" || incoming.Get(pluginsdk.CallerIDHeader) != "reader" || incoming.Get(pluginsdk.CallerRoleHeader) != "reader" || incoming.Get(pluginsdk.InstanceHeader) == "" || incoming.Get(pluginsdk.EpochHeader) == "" || incoming.Get("If-Match") != `"1"` ||
+	if incoming.Get("Authorization") != "Bearer "+config.serviceToken || incoming.Get("Cookie") != "" || incoming.Get(pluginsdk.CallerIDHeader) != "reader" || incoming.Get(pluginsdk.CallerAccessHeader) != "read" || incoming.Get(pluginsdk.InstanceHeader) == "" || incoming.Get(pluginsdk.EpochHeader) == "" || incoming.Get("If-Match") != `"1"` ||
 		incoming.Get(pluginsdk.ActingIDHeader) != "user:alice" || incoming.Get(pluginsdk.ActingRequestHeader) != "req-1" || incoming.Values(pluginsdk.ActingNameHeader) != nil {
 		t.Fatal("caller or directional credential isolation failed")
 	}
@@ -111,7 +111,7 @@ func TestOpaquePluginAPIIsolationAndBounds(t *testing.T) {
 	}}
 	req := httptest.NewRequest("POST", "http://fleet/api/v1/plugins/inventory-example/api/v1/custom", body)
 	w = httptest.NewRecorder()
-	r.ServeAPI(w, req, config.ID, "v1/custom", auth.Principal{ID: "reader", Role: "reader"})
+	r.ServeAPI(w, req, config.ID, "v1/custom", auth.Principal{ID: "reader", Role: "reader", PluginAccess: map[string]string{config.ID: "read"}})
 	if w.Code != 503 || forwarded.Load() != count {
 		t.Fatal("late request body bypassed retired authority")
 	}
@@ -145,7 +145,7 @@ func TestStalledRequestBodyDoesNotHoldAPISlot(t *testing.T) {
 	serve := func(body io.Reader) *httptest.ResponseRecorder {
 		req := httptest.NewRequest("POST", "http://fleet/api/v1/plugins/"+config.ID+"/api/v1/custom", body)
 		w := httptest.NewRecorder()
-		r.ServeAPI(w, req, config.ID, "v1/custom", auth.Principal{ID: "reader", Role: "reader"})
+		r.ServeAPI(w, req, config.ID, "v1/custom", auth.Principal{ID: "reader", Role: "reader", PluginAccess: map[string]string{config.ID: "read"}})
 		return w
 	}
 	slots := cap(r.entries[0].apiWrites)

@@ -64,7 +64,9 @@ services:
   bootstrap:
     <<: *fleet
     profiles: [admin]
-    command: [bootstrap, --server-id, "${FLEET_SERVER_ID:-local-fleet}"]
+    # FLEET_BOOTSTRAP_PLUGIN_ACCESS grants the admin plugin access, such as
+    # livecapture=admin; empty grants none.
+    command: [bootstrap, --server-id, "${FLEET_SERVER_ID:-local-fleet}", --plugin-access, "${FLEET_BOOTSTRAP_PLUGIN_ACCESS:-}"]
     environment:
       <<: *fleet-env
       LINEA_FLEET_DATABASE_URL_FILE: /run/secrets/runtime_url

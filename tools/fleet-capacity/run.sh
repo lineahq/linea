@@ -276,12 +276,12 @@ record machine "$(printf '{"os":"%s","architecture":"%s","cpus":%s,"memory_bytes
 {
     printf "FLEET_SECRET_DIR='%s'\nFLEET_SERVER_ID=%s\nFLEET_API_PORT=0\nFLEET_AGENT_PORT=0\nFLEET_VERSION=%s\n" "$dir" "$project" "$image_tag"
     if [ "$fault" = 1 ]; then
-        printf "FLEET_LIVECAPTURE_SECRET_DIR='%s/capture'\nCAPTURE_VERSION=%s\nCAPTURE_CONTROL_PORT=0\nCAPTURE_DELIVERY_PORT=0\n" "$dir" "$image_tag"
+        printf "FLEET_LIVECAPTURE_SECRET_DIR='%s/capture'\nCAPTURE_VERSION=%s\nCAPTURE_CONTROL_PORT=0\nCAPTURE_DELIVERY_PORT=0\nFLEET_BOOTSTRAP_PLUGIN_ACCESS=livecapture=admin\n" "$dir" "$image_tag"
     fi
 } > "$env_file"
 # Compose needs the variable defined to interpolate the Collector services; the
 # real credential replaces it once the fleet server has issued it.
-export LINEA_FLEET_AGENT_TOKEN='not-issued-yet'
+export LINEA_FLEET_AGENT_TOKEN='not-issued-yet' LINEA_FLEET_PLUGIN_TOKEN='not-issued-yet'
 
 # The Compose override: the fleet command, one service per Collector (each with
 # a locally assigned UUIDv7 instance identity kept across restarts) and the
@@ -314,7 +314,7 @@ if fault:
     command += ["--plugins-config", "/etc/linea-fleet/plugins.json", "--plugin-listen", "0.0.0.0:8081"]
     services["capture-probe"] = {
         "image": capture_image, "command": ["--config=/fixture.yaml"],
-        "environment": {"GOMAXPROCS": "1", "LINEA_FLEET_AGENT_TOKEN": "${LINEA_FLEET_AGENT_TOKEN}", "POD_NAME": "capacity-probe"},
+        "environment": {"GOMAXPROCS": "1", "LINEA_FLEET_PLUGIN_TOKEN": "${LINEA_FLEET_PLUGIN_TOKEN}", "POD_NAME": "capacity-probe"},
         "volumes": [root + "/examples/fleet-livecapture/collector.yaml:/fixture.yaml:ro",
                     d + "/capture/tls_cert.pem:/certs/ca.pem:ro"],
         "networks": ["capture-ingress"], "cpus": 1, "mem_limit": "256m", "pids_limit": 128,
@@ -396,9 +396,12 @@ labels=''
 if [ "$fault" = 1 ]; then labels=',"labels":{"capture":"s4"}'; fi
 credential=$(printf '{"id":"%s","name":"capacity-deployment","role":"agent","expires_at":"%s"%s}' \
     "$(random_hex 16)" "$(iso_in 3600)" "$labels")
-issued=$(req POST /api/v1/credentials "$admin" "$credential" 201 | json 'd["token"]')
-[ -n "$issued" ] || fail 'Agent credential was not issued'
-export LINEA_FLEET_AGENT_TOKEN=$issued
+issued=$(req POST /api/v1/credentials "$admin" "$credential" 201)
+LINEA_FLEET_AGENT_TOKEN=$(printf '%s' "$issued" | json 'd["token"]')
+LINEA_FLEET_PLUGIN_TOKEN=$(printf '%s' "$issued" | json 'd["plugin_token"]')
+unset issued
+[ -n "$LINEA_FLEET_AGENT_TOKEN" ] && [ -n "$LINEA_FLEET_PLUGIN_TOKEN" ] || fail 'Agent credential was not issued'
+export LINEA_FLEET_AGENT_TOKEN LINEA_FLEET_PLUGIN_TOKEN
 if [ "$fault" = 1 ]; then compose up --detach --no-deps capture-probe; fi
 
 phase=$(now_s)

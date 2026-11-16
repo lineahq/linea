@@ -15,35 +15,47 @@ import (
 	"unicode"
 
 	"github.com/lineahq/linea/internal/fleet/fleet"
+	"github.com/lineahq/linea/pluginsdk"
 )
 
 var ErrUnauthorized = errors.New("credential is invalid, expired or revoked")
 var ErrForbidden = errors.New("credential does not permit this operation")
 
-type Principal struct{ ID, Role string }
+// Principal is an authenticated credential. PluginAccess maps a plugin ID to
+// the access level the credential holds on that plugin's API; Delegate lets
+// it name the user it acts for.
+type Principal struct {
+	ID, Role     string
+	PluginAccess map[string]string
+	Delegate     bool
+}
+
+// Access returns the credential's access level on a plugin, or "".
+func (p Principal) Access(plugin string) string { return p.PluginAccess[plugin] }
 type Authorizer interface {
 	Authenticate(context.Context, *http.Request) (Principal, error)
 	Active(context.Context, []Principal) (map[string]bool, error)
 }
 
+// Static is memory mode's single token per listener. PluginAccess is the
+// management token's plugin grant.
 type Static struct {
-	Bearer Bearer
-	Role   string
+	Bearer       Bearer
+	Role         string
+	PluginAccess map[string]string
 }
 
 func (s Static) Authenticate(_ context.Context, r *http.Request) (Principal, error) {
 	if !s.Bearer.Valid(r) {
 		return Principal{}, ErrUnauthorized
 	}
-	return Principal{ID: "memory-" + s.Role, Role: s.Role}, nil
+	return Principal{ID: "memory-" + s.Role, Role: s.Role, PluginAccess: s.PluginAccess}, nil
 }
 
-// Introspect recognizes the development agent token without labels.
-func (s Static) Introspect(_ context.Context, tokenSHA256 [32]byte) (Introspection, error) {
-	if s.Role != "agent" || subtle.ConstantTimeCompare(tokenSHA256[:], s.Bearer.digest[:]) != 1 {
-		return Introspection{}, nil
-	}
-	return Introspection{Active: true, CredentialID: "memory-agent", Role: "agent"}, nil
+// Introspect answers inactive for every token: memory mode has no plugin
+// tokens, and the agent token never authenticates to a plugin.
+func (Static) Introspect(context.Context, [32]byte) (Introspection, error) {
+	return Introspection{}, nil
 }
 
 func (s Static) Active(_ context.Context, ps []Principal) (map[string]bool, error) {
@@ -62,13 +74,21 @@ type Credential struct {
 	Labels map[string]string `json:"labels,omitempty"`
 	// RemoteConfig lets config management send configuration to agents
 	// using this credential. Only agent credentials can carry it.
-	RemoteConfig bool      `json:"remote_config"`
-	CreatedAt    time.Time `json:"created_at"`
+	RemoteConfig bool `json:"remote_config"`
+	// PluginAccess maps a plugin ID to read, write or admin. Fleet forwards
+	// a plugin API call only for a granted plugin. Management credentials
+	// only.
+	PluginAccess map[string]string `json:"plugin_access,omitempty"`
+	// Delegate lets a management credential send acting-for headers.
+	Delegate  bool      `json:"delegate"`
+	CreatedAt time.Time `json:"created_at"`
 	// ExpiresAt is nil for an admin or reader credential that is valid
 	// until revoked. Agent credentials always expire.
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 	RevokedAt *time.Time `json:"revoked_at,omitempty"`
 	Hash      []byte     `json:"-"`
+	// PluginHash is the SHA-256 of an agent credential's plugin token.
+	PluginHash []byte `json:"-"`
 }
 
 // Active reports whether the credential is neither revoked nor expired at now.
@@ -86,6 +106,8 @@ type CredentialRequest struct {
 	Role         string            `json:"role"`
 	Labels       map[string]string `json:"labels,omitempty"`
 	RemoteConfig bool              `json:"remote_config,omitempty"`
+	PluginAccess map[string]string `json:"plugin_access,omitempty"`
+	Delegate     bool              `json:"delegate,omitempty"`
 	// ExpiresAt is required for agent credentials. Omitted, an admin or
 	// reader credential is valid until revoked.
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
@@ -98,8 +120,27 @@ const (
 	MaxLabelValueBytes = 128
 )
 
-// Introspection answers whether a presented token is an active agent
-// credential. Inactive answers carry no other fields.
+// MaxPluginAccess bounds a credential's plugin grants, the registration limit.
+const MaxPluginAccess = 16
+
+// PluginAccessRule is the reason for a grant ValidPluginAccess refuses.
+var PluginAccessRule = fmt.Sprintf("plugin_access allows at most %d plugin IDs, each mapped to read, write or admin", MaxPluginAccess)
+
+// ValidPluginAccess bounds the grants and their levels.
+func ValidPluginAccess(access map[string]string) bool {
+	if len(access) > MaxPluginAccess {
+		return false
+	}
+	for id, level := range access {
+		if !pluginsdk.ValidID(id) || !pluginsdk.ValidAccess(level) {
+			return false
+		}
+	}
+	return true
+}
+
+// Introspection answers whether a presented plugin token belongs to an active
+// agent credential. Inactive answers carry no other fields.
 type Introspection struct {
 	Active       bool              `json:"active"`
 	CredentialID string            `json:"credential_id,omitempty"`
@@ -108,14 +149,17 @@ type Introspection struct {
 	ExpiresAt    *time.Time        `json:"expires_at,omitempty"`
 }
 
-// Introspector resolves the SHA-256 of a presented token. Plugins hash the
-// bearer a Collector presented to them; core never receives the token.
+// Introspector resolves the SHA-256 of a presented plugin token. Plugins hash
+// the bearer a Collector presented to them; core never receives the token.
 type Introspector interface {
 	Introspect(ctx context.Context, tokenSHA256 [32]byte) (Introspection, error)
 }
+// Issued discloses a new credential's tokens once. An agent credential has
+// two: Token for OpAMP, and PluginToken, the only one plugins accept.
 type Issued struct {
-	Credential Credential `json:"credential"`
-	Token      string     `json:"token"`
+	Credential  Credential `json:"credential"`
+	Token       string     `json:"token"`
+	PluginToken string     `json:"plugin_token,omitempty"`
 }
 type CredentialRepository interface {
 	Credential(context.Context, string) (Credential, error)
@@ -126,7 +170,8 @@ type CredentialRepository interface {
 	// config opt-in.
 	SetCredentialRemoteConfig(ctx context.Context, actor, id string, enabled bool) (Credential, error)
 	ActiveCredentialIDs(context.Context, []string) (map[string]bool, error)
-	CredentialByHash(context.Context, []byte) (Credential, error)
+	// CredentialByPluginHash finds an agent credential by its plugin token.
+	CredentialByPluginHash(context.Context, []byte) (Credential, error)
 }
 type Service struct{ Repository CredentialRepository }
 
@@ -156,14 +201,25 @@ func Generate(req CredentialRequest, now time.Time) (Issued, error) {
 		return Issued{}, fleet.Invalid(LabelsRule)
 	case req.Role != "agent" && (len(req.Labels) > 0 || req.RemoteConfig):
 		return Issued{}, fleet.Invalid("labels and remote_config are for agent credentials only")
+	case !ValidPluginAccess(req.PluginAccess):
+		return Issued{}, fleet.Invalid(PluginAccessRule)
+	case req.Role == "agent" && (len(req.PluginAccess) > 0 || req.Delegate):
+		return Issued{}, fleet.Invalid("plugin_access and delegate are for management credentials only")
 	}
-	secret := make([]byte, 32)
-	if _, err := rand.Read(secret); err != nil {
-		return Issued{}, fleet.ErrUnavailable
+	token, hash, err := newToken(tokenPrefix, req.ID)
+	if err != nil {
+		return Issued{}, err
 	}
-	token := "of1_" + req.ID + "_" + hex.EncodeToString(secret)
-	hash := sha256.Sum256([]byte(token))
-	c := Credential{ID: req.ID, Name: req.Name, Role: req.Role, RemoteConfig: req.RemoteConfig, CreatedAt: now.UTC(), Hash: hash[:]}
+	c := Credential{ID: req.ID, Name: req.Name, Role: req.Role, RemoteConfig: req.RemoteConfig, Delegate: req.Delegate, CreatedAt: now.UTC(), Hash: hash}
+	var pluginToken string
+	if req.Role == "agent" {
+		if pluginToken, c.PluginHash, err = newToken(pluginTokenPrefix, req.ID); err != nil {
+			return Issued{}, err
+		}
+	}
+	if len(req.PluginAccess) > 0 {
+		c.PluginAccess = maps.Clone(req.PluginAccess)
+	}
 	if req.ExpiresAt != nil {
 		expires := req.ExpiresAt.UTC()
 		c.ExpiresAt = &expires
@@ -171,7 +227,24 @@ func Generate(req CredentialRequest, now time.Time) (Issued, error) {
 	if len(req.Labels) > 0 {
 		c.Labels = maps.Clone(req.Labels)
 	}
-	return Issued{Credential: c, Token: token}, nil
+	return Issued{Credential: c, Token: token, PluginToken: pluginToken}, nil
+}
+
+// Token prefixes: of1_ authenticates to core, ofp1_ only to plugins, so a
+// plugin never holds a token that core's listeners accept.
+const (
+	tokenPrefix       = "of1_"
+	pluginTokenPrefix = "ofp1_"
+)
+
+func newToken(prefix, id string) (token string, hash []byte, err error) {
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return "", nil, fleet.ErrUnavailable
+	}
+	token = prefix + id + "_" + hex.EncodeToString(secret)
+	sum := sha256.Sum256([]byte(token))
+	return token, sum[:], nil
 }
 
 // TokenRule describes a credential token a deployment generates itself.
@@ -245,7 +318,7 @@ func (s *Service) Authenticate(ctx context.Context, r *http.Request) (Principal,
 	if subtle.ConstantTimeCompare(hash[:], c.Hash) != 1 || !c.Active(time.Now()) {
 		return Principal{}, ErrUnauthorized
 	}
-	return Principal{ID: c.ID, Role: c.Role}, nil
+	return Principal{ID: c.ID, Role: c.Role, PluginAccess: c.PluginAccess, Delegate: c.Delegate}, nil
 }
 
 // ValidLabels bounds label count, keys and printable values.
@@ -262,7 +335,7 @@ func ValidLabels(labels map[string]string) bool {
 }
 
 func (s *Service) Introspect(ctx context.Context, tokenSHA256 [32]byte) (Introspection, error) {
-	c, err := s.Repository.CredentialByHash(ctx, tokenSHA256[:])
+	c, err := s.Repository.CredentialByPluginHash(ctx, tokenSHA256[:])
 	if errors.Is(err, fleet.ErrNotFound) {
 		return Introspection{}, nil
 	}

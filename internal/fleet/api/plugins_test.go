@@ -56,7 +56,7 @@ func TestPublicPluginAPIAuthenticatesAndContainsUpstream(t *testing.T) {
 		}
 	}
 	bearer, _ := auth.New(apiToken)
-	h := New(store, bearer, ServerInfo{ServerID: "test"})
+	h := NewAuthorized(store, auth.Static{Bearer: bearer, Role: "reader", PluginAccess: map[string]string{"example": "read"}}, ServerInfo{ServerID: "test"}, nil, nil)
 	h.SetPlugins(registry)
 	for _, tc := range []struct {
 		path, token string
@@ -67,7 +67,7 @@ func TestPublicPluginAPIAuthenticatesAndContainsUpstream(t *testing.T) {
 		{"/api/v1/plugins/example/status", serviceToken, 401},
 		{"/api/v1/plugins", apiToken, 200},
 		{"/api/v1/plugins/example", apiToken, 200},
-		{"/api/v1/plugins/missing/status", apiToken, 404},
+		{"/api/v1/plugins/missing/status", apiToken, 403},
 		{"/api/v1/plugins/example/status?callback=foreign", apiToken, 400},
 	} {
 		r := httptest.NewRequest("GET", tc.path, nil)
@@ -86,21 +86,29 @@ func TestPublicPluginAPIAuthenticatesAndContainsUpstream(t *testing.T) {
 	if refused.Code != 400 || !strings.Contains(refused.Body.String(), "invalid_acting_for") {
 		t.Fatalf("malformed acting-for = %d %s", refused.Code, refused.Body)
 	}
+	undelegated := httptest.NewRequest("GET", "/api/v1/plugins", nil)
+	undelegated.Header.Set("Authorization", "Bearer "+apiToken)
+	undelegated.Header.Set(pluginsdk.ActingIDHeader, "user:alice")
+	refused = httptest.NewRecorder()
+	h.ServeHTTP(refused, undelegated)
+	if refused.Code != 400 || !strings.Contains(refused.Body.String(), "acting_for_not_delegated") {
+		t.Fatalf("acting-for from a credential without delegate = %d %s", refused.Code, refused.Body)
+	}
 	r := httptest.NewRequest("GET", "/api/v1/plugins/example/status", nil)
 	r.Header.Set("Authorization", "Bearer "+apiToken)
-	r.Header.Set(pluginsdk.CallerRoleHeader, "admin")
+	r.Header.Set(pluginsdk.CallerAccessHeader, "admin")
 	r.Header.Set(pluginsdk.CallerIDHeader, "forged-id")
 	r.Header.Set("Cookie", "private-client-cookie")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	headers := <-seen
-	if w.Code != 200 || !json.Valid(w.Body.Bytes()) || w.Header().Get("Set-Cookie") != "" || headers.Get("Cookie") != "" || headers.Get("Authorization") != "Bearer "+serviceToken || headers.Get(pluginsdk.CallerRoleHeader) != "reader" || headers.Get(pluginsdk.CallerIDHeader) != "memory-reader" {
+	if w.Code != 200 || !json.Valid(w.Body.Bytes()) || w.Header().Get("Set-Cookie") != "" || headers.Get("Cookie") != "" || headers.Get("Authorization") != "Bearer "+serviceToken || headers.Get(pluginsdk.CallerAccessHeader) != "read" || headers.Get(pluginsdk.CallerIDHeader) != "memory-reader" {
 		t.Fatal("unsafe public plugin boundary")
 	}
 	for _, path := range []string{"/api/v1/plugins/example/lifecycle"} {
 		req := httptest.NewRequest("POST", path, strings.NewReader(`{}`))
 		req.Header.Set("Authorization", "Bearer "+apiToken)
-		req.Header.Set(pluginsdk.CallerRoleHeader, "admin")
+		req.Header.Set(pluginsdk.CallerAccessHeader, "admin")
 		result := httptest.NewRecorder()
 		h.ServeHTTP(result, req)
 		if result.Code != 403 {
@@ -121,5 +129,40 @@ func TestPublicPluginAPIAuthenticatesAndContainsUpstream(t *testing.T) {
 	h.ServeHTTP(w, r)
 	if w.Code != 503 || strings.Contains(w.Body.String(), upstream.URL) || strings.Contains(w.Body.String(), serviceToken) {
 		t.Fatal("upstream failure was not sanitized")
+	}
+}
+
+// delegates authenticates "delegate" with the delegate flag and "plain"
+// without it, both as readers.
+type delegates struct{ roles }
+
+func (delegates) Authenticate(_ context.Context, r *http.Request) (auth.Principal, error) {
+	switch strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ") {
+	case "delegate":
+		return auth.Principal{ID: "delegate-id", Role: "reader", Delegate: true}, nil
+	case "plain":
+		return auth.Principal{ID: "plain-id", Role: "reader"}, nil
+	}
+	return auth.Principal{}, auth.ErrUnauthorized
+}
+
+// Only a credential with the delegate flag may name the user it acts for.
+func TestActingForNeedsDelegate(t *testing.T) {
+	h := NewAuthorized(fleet.NewStore(1), delegates{}, ServerInfo{ServerID: "test"}, nil, nil)
+	for _, tc := range []struct {
+		token  string
+		acting bool
+		want   int
+	}{{"delegate", true, 200}, {"plain", true, 400}, {"plain", false, 200}, {"delegate", false, 200}} {
+		r := httptest.NewRequest("GET", "/api/v1/server", nil)
+		r.Header.Set("Authorization", "Bearer "+tc.token)
+		if tc.acting {
+			r.Header.Set(pluginsdk.ActingIDHeader, "user:alice")
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != tc.want {
+			t.Fatalf("%s acting=%v: %d %s", tc.token, tc.acting, w.Code, w.Body)
+		}
 	}
 }

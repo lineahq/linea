@@ -81,7 +81,7 @@ summary_ok() { [ "$(status "/api/v1/plugins/$plugin/api/v1/summary")" = 200 ]; }
 mkdir -p "$root/.local"
 sh "$root/scripts/fleet/new-deployment-secrets.sh" "$run" >/dev/null || fail "secrets"
 sh "$root/scripts/fleet/new-plugin-secrets.sh" "$run/summary" >/dev/null || fail "plugin secrets"
-printf "FLEET_SECRET_DIR=%s\nFLEET_SUMMARY_SECRET_DIR=%s\nFLEET_SERVER_ID=ha-plugin-%s\nFLEET_REPLICAS=%s\nFLEET_API_PORT=0\nFLEET_AGENT_PORT=0\n" \
+printf "FLEET_SECRET_DIR=%s\nFLEET_SUMMARY_SECRET_DIR=%s\nFLEET_SERVER_ID=ha-plugin-%s\nFLEET_REPLICAS=%s\nFLEET_API_PORT=0\nFLEET_AGENT_PORT=0\nFLEET_BOOTSTRAP_PLUGIN_ACCESS=agent-summary=admin\n" \
   "$run" "$run/summary" "$id" "$replicas" > "$run/compose.env"
 cat > "$run/override.json" <<EOF
 {"networks": {"database": {"ipam": {"config": [{"subnet": "$subnet.1.0/24"}]}}, "ingress": {"ipam": {"config": [{"subnet": "$subnet.2.0/24"}]}}, "plugins": {"ipam": {"config": [{"subnet": "$subnet.3.0/24"}]}}}}

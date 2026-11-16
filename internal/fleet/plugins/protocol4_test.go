@@ -112,7 +112,7 @@ func TestPlugin421IsNeverForwarded(t *testing.T) {
 	call := func() *httptest.ResponseRecorder {
 		req := httptest.NewRequest("GET", "http://fleet/api/v1/plugins/"+config.ID+"/api/v1/custom", nil)
 		w := httptest.NewRecorder()
-		r.ServeAPI(w, req, config.ID, "v1/custom", auth.Principal{ID: "reader", Role: "reader"})
+		r.ServeAPI(w, req, config.ID, "v1/custom", auth.Principal{ID: "reader", Role: "reader", PluginAccess: map[string]string{config.ID: "read"}})
 		return w
 	}
 	answer = 421
@@ -125,7 +125,7 @@ func TestPlugin421IsNeverForwarded(t *testing.T) {
 		t.Fatalf("a domain conflict must be forwarded: %d", w.Code)
 	}
 	answer = 421
-	if _, err := r.Status(context.Background(), config.ID, auth.Principal{ID: "reader", Role: "reader"}); !errors.Is(err, fleet.ErrUnavailable) {
+	if _, err := r.Status(context.Background(), config.ID, auth.Principal{ID: "reader", Role: "reader", PluginAccess: map[string]string{config.ID: "read"}}); !errors.Is(err, fleet.ErrUnavailable) {
 		t.Fatalf("status 421 must read as unavailable: %v", err)
 	}
 }

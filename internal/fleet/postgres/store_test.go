@@ -65,14 +65,14 @@ func TestPostgresLifecycle(t *testing.T) {
 	if err := Migrate(ctx, url); err != nil {
 		t.Fatal("repeat migration:", err)
 	}
-	issued, err := Bootstrap(ctx, url, "integration-fleet", "bootstrap-admin")
+	issued, err := Bootstrap(ctx, url, "integration-fleet", "bootstrap-admin", nil)
 	if err != nil {
 		t.Fatal("bootstrap:", err)
 	}
 	if issued.Credential.ExpiresAt != nil {
 		t.Fatal("bootstrap administrator expires")
 	}
-	if _, err := Bootstrap(ctx, url, "integration-fleet", "another-admin"); !errors.Is(err, fleet.ErrConflict) {
+	if _, err := Bootstrap(ctx, url, "integration-fleet", "another-admin", nil); !errors.Is(err, fleet.ErrConflict) {
 		t.Fatal("bootstrap duplicated active administrator")
 	}
 	options := Options{ServerID: "integration-fleet", MaxAgents: 10, MaxEvents: 100, Heartbeat: 200 * time.Millisecond, Alive: time.Second, Flush: 200 * time.Millisecond}

@@ -251,9 +251,10 @@ func (p *plugin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reply(w, 200, pluginsdk.Manifest{ID: pluginID, Version: version, ProtocolVersion: pluginsdk.ProtocolVersion, InstanceID: p.instance, APIVersion: apiVersion})
 		return
 	}
-	// Status and API calls carry the authenticated fleet caller.
-	caller, role := r.Header.Values(pluginsdk.CallerIDHeader), r.Header.Values(pluginsdk.CallerRoleHeader)
-	if len(caller) != 1 || caller[0] == "" || len(role) != 1 || (role[0] != "reader" && role[0] != "admin") {
+	// Status and API calls carry the fleet caller and its access level on
+	// this plugin.
+	_, access, ok := pluginsdk.Caller(r.Header)
+	if !ok {
 		fail(w, 403, "forbidden")
 		return
 	}
@@ -297,8 +298,8 @@ func (p *plugin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		reply(w, 200, s)
 	case route == "v1/groups/count" && r.Method == "POST":
-		if role[0] != "admin" {
-			fail(w, 403, "admin_required")
+		if access == pluginsdk.AccessRead {
+			fail(w, 403, "write_required")
 			return
 		}
 		p.countGroup(ctx, w, r, session)

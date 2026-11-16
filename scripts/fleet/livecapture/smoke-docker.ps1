@@ -10,7 +10,7 @@ $captureID=[Guid]::NewGuid().ToString('N')
 $captureProject="capture-s4-$captureID"
 $captureRunDir=Join-Path $captureFleetRoot ".local/$captureProject"
 $captureEnv=Join-Path $captureRunDir 'compose.env'
-$captureOldToken=$env:LINEA_FLEET_AGENT_TOKEN
+$captureOldToken=$env:LINEA_FLEET_PLUGIN_TOKEN
 $captureCreated=$false
 $captureChildren=[System.Collections.Generic.List[string]]::new()
 $captureSequence=0
@@ -85,7 +85,7 @@ try{
     }
     [System.IO.File]::WriteAllText($captureObserve,($captureObserveConfig|ConvertTo-Json -Depth 12))
     $captureCompose+=@('--file',$captureObserve)
-    [System.IO.File]::WriteAllText($captureEnv,"FLEET_SECRET_DIR='$capturePath/fleet'`nFLEET_LIVECAPTURE_SECRET_DIR='$capturePath/plugin'`nFLEET_SERVER_ID=s4-$captureID`nFLEET_API_PORT=0`nFLEET_AGENT_PORT=0`nCAPTURE_CONTROL_PORT=0`nCAPTURE_DELIVERY_PORT=0`nFLEET_VERSION=${ImageTag}`nCAPTURE_VERSION=${ImageTag}`n")
+    [System.IO.File]::WriteAllText($captureEnv,"FLEET_SECRET_DIR='$capturePath/fleet'`nFLEET_LIVECAPTURE_SECRET_DIR='$capturePath/plugin'`nFLEET_SERVER_ID=s4-$captureID`nFLEET_API_PORT=0`nFLEET_AGENT_PORT=0`nCAPTURE_CONTROL_PORT=0`nCAPTURE_DELIVERY_PORT=0`nFLEET_VERSION=${ImageTag}`nCAPTURE_VERSION=${ImageTag}`nFLEET_BOOTSTRAP_PLUGIN_ACCESS=livecapture=admin`n")
     if(-not $SkipBuild){
         foreach($captureTarget in @(@('runtime','linea-fleet-livecapture-compat:collector'),@('capture-smoke','linea-fleet-livecapture-compat:capture-smoke'))){
             & docker build --file (Join-Path $captureFleetRoot 'deploy/docker/linea-collector.Dockerfile') --target $captureTarget[0] --tag $captureTarget[1] $captureFleetRoot
@@ -125,15 +125,16 @@ try{
     # The unchanged extension presents a fleet agent credential whose capture
     # label allows the s4 collector group; the plugin introspects it via core.
     $captureUnlabeled=Capture-Request POST /api/v1/credentials $captureAdmin (@{id=[Guid]::NewGuid().ToString('N');name='s4 unlabeled';role='agent';expires_at=[DateTime]::UtcNow.AddDays(1).ToString('o')}|ConvertTo-Json) 201
-    $captureUnlabeledFile=Join-Path $captureRunDir 'unlabeled_token';[System.IO.File]::WriteAllText($captureUnlabeledFile,$captureUnlabeled.token)
+    $captureUnlabeledFile=Join-Path $captureRunDir 'unlabeled_token';[System.IO.File]::WriteAllText($captureUnlabeledFile,$captureUnlabeled.plugin_token)
     $captureCredential=[Guid]::NewGuid().ToString('N')
     $captureIssued=Capture-Request POST /api/v1/credentials $captureAdmin (@{id=$captureCredential;name='s4 collectors';role='agent';expires_at=[DateTime]::UtcNow.AddDays(1).ToString('o');labels=@{capture='s4'}}|ConvertTo-Json) 201
-    $captureAgentFile=Join-Path $captureRunDir 'agent_token';[System.IO.File]::WriteAllText($captureAgentFile,$captureIssued.token)
-    if(-not $IsWindows){& chmod 444 $captureAgentFile $captureUnlabeledFile}
-    $env:LINEA_FLEET_AGENT_TOKEN=$captureIssued.token
+    $captureOpampFile=Join-Path $captureRunDir 'opamp_token';[System.IO.File]::WriteAllText($captureOpampFile,$captureIssued.token)
+    $captureAgentFile=Join-Path $captureRunDir 'plugin_token';[System.IO.File]::WriteAllText($captureAgentFile,$captureIssued.plugin_token)
+    if(-not $IsWindows){& chmod 444 $captureAgentFile $captureOpampFile $captureUnlabeledFile}
+    $env:LINEA_FLEET_PLUGIN_TOKEN=$captureIssued.plugin_token
     foreach($capturePod in @('collector-a','collector-b')){
         $captureName="$captureProject-$capturePod"
-        $null=& docker run --detach --init --name $captureName --network "${captureProject}_capture-ingress" --network-alias $capturePod --cpus 2 --memory 512m --pids-limit 128 --read-only --cap-drop ALL --security-opt no-new-privileges --mount "type=bind,source=$captureFleetRoot/plugins/livecapture/examples/collector.yaml,target=/fixture.yaml,readonly" --mount "type=bind,source=$captureRunDir/plugin/tls_cert.pem,target=/certs/ca.pem,readonly" --env LINEA_FLEET_AGENT_TOKEN --env "POD_NAME=$capturePod" -e GOMAXPROCS=2 linea-fleet-livecapture-compat:collector --config /fixture.yaml
+        $null=& docker run --detach --init --name $captureName --network "${captureProject}_capture-ingress" --network-alias $capturePod --cpus 2 --memory 512m --pids-limit 128 --read-only --cap-drop ALL --security-opt no-new-privileges --mount "type=bind,source=$captureFleetRoot/plugins/livecapture/examples/collector.yaml,target=/fixture.yaml,readonly" --mount "type=bind,source=$captureRunDir/plugin/tls_cert.pem,target=/certs/ca.pem,readonly" --env LINEA_FLEET_PLUGIN_TOKEN --env "POD_NAME=$capturePod" -e GOMAXPROCS=2 linea-fleet-livecapture-compat:collector --config /fixture.yaml
         if($LASTEXITCODE -ne 0){throw 'Real Collector startup failed'}
         $captureChildren.Add($captureName)
     }
@@ -162,6 +163,7 @@ try{
     Capture-Active $captureOperation.id
     Capture-IngressRefusal (Join-Path $captureRunDir 'plugin/host_token') Unauthenticated
     Capture-IngressRefusal $captureUnlabeledFile Unauthenticated
+    Capture-IngressRefusal $captureOpampFile Unauthenticated
     Capture-IngressRefusal $captureAgentFile PermissionDenied
     Capture-IngressRefusal $captureAgentFile ResourceExhausted '' $true
     Capture-IngressRefusal $captureAgentFile Unavailable wrong-host
@@ -251,7 +253,7 @@ try{
 
     # A lost management credential cannot keep a consumer channel alive.
     $captureOtherID=[Guid]::NewGuid().ToString('N')
-    $captureOtherKey=Capture-Request POST /api/v1/credentials $captureAdmin (@{id=$captureOtherID;name='s4-other-client';role='admin';expires_at=[DateTime]::UtcNow.AddHours(1).ToString('o')}|ConvertTo-Json) 201
+    $captureOtherKey=Capture-Request POST /api/v1/credentials $captureAdmin (@{id=$captureOtherID;name='s4-other-client';role='admin';plugin_access=@{livecapture='write'};expires_at=[DateTime]::UtcNow.AddHours(1).ToString('o')}|ConvertTo-Json) 201
     $captureOtherFile=Join-Path $captureRunDir 'other_admin_token';[System.IO.File]::WriteAllText($captureOtherFile,$captureOtherKey.token)
     if(-not $IsWindows){& chmod 444 $captureOtherFile}
     $captureOtherChannel=Capture-NewChannel $captureOtherKey.token
@@ -361,5 +363,5 @@ try{
 }finally{
     foreach($captureName in $captureChildren){& docker logs $captureName *> (Join-Path $captureRunDir "$captureName.log");$null=& docker rm --force $captureName 2>&1}
     if($captureCreated){Capture-Compose down --volumes --remove-orphans --timeout 5}
-    $env:LINEA_FLEET_AGENT_TOKEN=$captureOldToken
+    $env:LINEA_FLEET_PLUGIN_TOKEN=$captureOldToken
 }

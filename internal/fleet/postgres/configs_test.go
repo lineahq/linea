@@ -35,7 +35,7 @@ func TestPostgresConfigs(t *testing.T) {
 	if err := Migrate(ctx, url); err != nil {
 		t.Fatal("fresh migration:", err)
 	}
-	issued, err := Bootstrap(ctx, url, "configs-fleet", "bootstrap-admin")
+	issued, err := Bootstrap(ctx, url, "configs-fleet", "bootstrap-admin", nil)
 	if err != nil {
 		t.Fatal("bootstrap:", err)
 	}

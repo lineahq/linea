@@ -30,7 +30,7 @@
             "description": "Invalid general API credential"
           },
           "403": {
-            "description": "Plugin role, raw permission, or ownership denied"
+            "description": "Access level, raw permission, or ownership denied"
           },
           "404": {
             "description": "Resource absent/expired"
@@ -92,7 +92,7 @@
             "description": "Invalid general API credential"
           },
           "403": {
-            "description": "Plugin role, raw permission, or ownership denied"
+            "description": "Access level, raw permission, or ownership denied"
           },
           "404": {
             "description": "Resource absent/expired"
@@ -161,7 +161,7 @@
             "description": "Invalid general API credential"
           },
           "403": {
-            "description": "Plugin role, raw permission, or ownership denied"
+            "description": "Access level, raw permission, or ownership denied"
           },
           "404": {
             "description": "Resource absent/expired"
@@ -215,7 +215,7 @@
             "description": "Invalid general API credential"
           },
           "403": {
-            "description": "Plugin role, raw permission, or ownership denied"
+            "description": "Access level, raw permission, or ownership denied"
           },
           "404": {
             "description": "Resource absent/expired"
@@ -266,7 +266,7 @@
             "description": "Invalid general API credential"
           },
           "403": {
-            "description": "Plugin role, raw permission, or ownership denied"
+            "description": "Access level, raw permission, or ownership denied"
           },
           "404": {
             "description": "Resource absent/expired"
@@ -324,7 +324,7 @@
             "description": "Invalid general API credential"
           },
           "403": {
-            "description": "Plugin role, raw permission, or ownership denied"
+            "description": "Access level, raw permission, or ownership denied"
           },
           "404": {
             "description": "Resource absent/expired"
@@ -379,7 +379,7 @@
             "description": "Invalid general API credential"
           },
           "403": {
-            "description": "Plugin role, raw permission, or ownership denied"
+            "description": "Access level, raw permission, or ownership denied"
           },
           "404": {
             "description": "Resource absent/expired"
@@ -433,7 +433,7 @@
             "description": "Invalid general API credential"
           },
           "403": {
-            "description": "Plugin role, raw permission, or ownership denied"
+            "description": "Access level, raw permission, or ownership denied"
           },
           "404": {
             "description": "Resource absent/expired"
@@ -488,7 +488,7 @@
             "description": "Invalid general API credential"
           },
           "403": {
-            "description": "Plugin role, raw permission, or ownership denied"
+            "description": "Access level, raw permission, or ownership denied"
           },
           "404": {
             "description": "Resource absent/expired"
@@ -533,7 +533,7 @@
     },
     "/v1/metrics": {
       "get": {
-        "summary": "Reader/admin reads fixed-cardinality in-memory plugin metric aggregates",
+        "summary": "Any granted caller reads fixed-cardinality in-memory plugin metric aggregates",
         "responses": {
           "403": {
             "description": "Reader/admin required"

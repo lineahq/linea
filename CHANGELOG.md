@@ -212,6 +212,30 @@ the first item below.
     `scripts/debugger/compose-fleet.sh` and restart `linea`. If you set
     `raw_principals` to the server's credential ID, change it to the second
     `_`-separated field of the operator token.
+- Fleet scopes management credentials to plugins. A credential reaches a
+  plugin's status and API only with a `plugin_access` grant for that plugin
+  (`read`, `write` or `admin`, at most 16 plugins); the role grants none, and
+  fleet answers 403 without a grant, also for an unknown plugin. Fleet sends
+  the level as `X-Fleet-Caller-Access`, which replaces `X-Fleet-Caller-Role`
+  in host protocol 4 (`pluginsdk.Caller` reads it). Acting-for headers need
+  the new `delegate` flag, else 400 `acting_for_not_delegated`. An agent
+  credential gets a second token, `plugin_token` (`ofp1_...`), that Collector
+  components present to plugins: introspection matches only it, and fleet
+  refuses it. Migration 014 adds the columns. Live capture lets `read` list
+  and `write` or `admin` write; the example plugin's group count needs `write`
+  (`write_required`). `linea-fleet bootstrap` takes `--plugin-access` for the
+  first admin and `--operator-plugin-access` and `--operator-delegate` for the
+  deployment operator, and a repeat applies changed grants. The debugger's
+  Compose overlay and Helm chart grant the admin `livecapture=admin` and
+  `linea-server` `livecapture=write` with delegate. Memory mode grants its
+  management token `read` on every plugin and issues no plugin tokens.
+
+  **Upgrading:** reissue agent credentials whose Collectors use a plugin and
+  set the livecapture extension's headers to the new `plugin_token`
+  (`LINEA_FLEET_PLUGIN_TOKEN` in the examples); the plugin refuses the agent
+  token. Grant `plugin_access` to each management credential that calls a
+  plugin. A plugin of your own reads `X-Fleet-Caller-Access` instead of the
+  role.
 - Fleet binds an agent's OpAMP instance UID to the credential that holds it.
   While the agent is connected, a connection with another credential and the
   same UID is refused with an OpAMP error response and recorded as

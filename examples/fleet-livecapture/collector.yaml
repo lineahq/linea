@@ -11,13 +11,13 @@ extensions:
     control:
       endpoint: livecapture-plugin:4340
       headers:
-        Authorization: "Bearer ${env:LINEA_FLEET_AGENT_TOKEN}"
+        Authorization: "Bearer ${env:LINEA_FLEET_PLUGIN_TOKEN}"
       tls:
         ca_file: /certs/ca.pem
     delivery:
       endpoint: livecapture-plugin:4341
       headers:
-        Authorization: "Bearer ${env:LINEA_FLEET_AGENT_TOKEN}"
+        Authorization: "Bearer ${env:LINEA_FLEET_PLUGIN_TOKEN}"
       tls:
         ca_file: /certs/ca.pem
 receivers:

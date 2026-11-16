@@ -970,7 +970,7 @@
     "/api/v1/plugins/{id}/status": {
       "get": {
         "operationId": "getPluginStatus",
-        "description": "Reader, operator or admin only. No client-provided registration URLs or arbitrary proxy paths. Plugin readiness does not affect core readiness. No query parameters.",
+        "description": "Needs a plugin_access grant on this plugin, at any level; 403 without one. No client-provided registration URLs or arbitrary proxy paths. Plugin readiness does not affect core readiness. No query parameters.",
         "responses": {
           "200": {
             "description": "Operator-registered plugin discovery or bounded status",
@@ -1092,7 +1092,7 @@
     "/api/v1/plugins/{id}/api/{plugin_path}": {
       "get": {
         "summary": "Invoke an operator-granted plugin-owned JSON API",
-        "description": "Opaque plugin contract; path may contain multiple validated segments. Requests cap at 64 KiB; responses at 1 MiB. Plugin publishes its own schemas and authorization. No application-selected service URL.",
+        "description": "Needs a plugin_access grant on this plugin; 403 without one. Fleet sends the caller ID and the granted level. Opaque plugin contract; path may contain multiple validated segments. Requests cap at 64 KiB; responses at 1 MiB. Plugin publishes its own schemas and authorization. No application-selected service URL.",
         "parameters": [
           {
             "name": "id",
@@ -1175,7 +1175,7 @@
       },
       "post": {
         "summary": "Invoke an operator-granted plugin-owned JSON API",
-        "description": "Opaque plugin contract; path may contain multiple validated segments. Requests cap at 64 KiB; responses at 1 MiB. Plugin publishes its own schemas and authorization. No application-selected service URL.",
+        "description": "Needs a plugin_access grant on this plugin; 403 without one. Fleet sends the caller ID and the granted level. Opaque plugin contract; path may contain multiple validated segments. Requests cap at 64 KiB; responses at 1 MiB. Plugin publishes its own schemas and authorization. No application-selected service URL.",
         "parameters": [
           {
             "name": "id",
@@ -1266,7 +1266,7 @@
       },
       "put": {
         "summary": "Invoke an operator-granted plugin-owned JSON API",
-        "description": "Opaque plugin contract; path may contain multiple validated segments. Requests cap at 64 KiB; responses at 1 MiB. Plugin publishes its own schemas and authorization. No application-selected service URL.",
+        "description": "Needs a plugin_access grant on this plugin; 403 without one. Fleet sends the caller ID and the granted level. Opaque plugin contract; path may contain multiple validated segments. Requests cap at 64 KiB; responses at 1 MiB. Plugin publishes its own schemas and authorization. No application-selected service URL.",
         "parameters": [
           {
             "name": "id",
@@ -1357,7 +1357,7 @@
       },
       "patch": {
         "summary": "Invoke an operator-granted plugin-owned JSON API",
-        "description": "Opaque plugin contract; path may contain multiple validated segments. Requests cap at 64 KiB; responses at 1 MiB. Plugin publishes its own schemas and authorization. No application-selected service URL.",
+        "description": "Needs a plugin_access grant on this plugin; 403 without one. Fleet sends the caller ID and the granted level. Opaque plugin contract; path may contain multiple validated segments. Requests cap at 64 KiB; responses at 1 MiB. Plugin publishes its own schemas and authorization. No application-selected service URL.",
         "parameters": [
           {
             "name": "id",
@@ -1448,7 +1448,7 @@
       },
       "delete": {
         "summary": "Invoke an operator-granted plugin-owned JSON API",
-        "description": "Opaque plugin contract; path may contain multiple validated segments. Requests cap at 64 KiB; responses at 1 MiB. Plugin publishes its own schemas and authorization. No application-selected service URL.",
+        "description": "Needs a plugin_access grant on this plugin; 403 without one. Fleet sends the caller ID and the granted level. Opaque plugin contract; path may contain multiple validated segments. Requests cap at 64 KiB; responses at 1 MiB. Plugin publishes its own schemas and authorization. No application-selected service URL.",
         "parameters": [
           {
             "name": "id",
@@ -2667,7 +2667,7 @@
       "managementBearer": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Generated database credential with reader, operator or admin role; agent tokens never authorize this API. Memory development uses LINEA_FLEET_API_TOKEN for read-only access. A delegating client may also send X-Fleet-Acting-ID (required with the others, at most 256 bytes), X-Fleet-Acting-Name (at most 128 bytes) and X-Fleet-Acting-Request (at most 128 bytes), each once, printable UTF-8 without surrounding space, to name the user it acts for; fleet records them on the request's events and forwards them on plugin API calls, never authorizes on them, and refuses malformed values with HTTP 400 invalid_acting_for."
+        "description": "Generated database credential with reader, operator or admin role; agent tokens never authorize this API. Memory development uses LINEA_FLEET_API_TOKEN for read-only access. A credential with delegate set may also send X-Fleet-Acting-ID (required with the others, at most 256 bytes), X-Fleet-Acting-Name (at most 128 bytes) and X-Fleet-Acting-Request (at most 128 bytes), each once, printable UTF-8 without surrounding space, to name the user it acts for; fleet records them on the request's events and forwards them on plugin API calls, never authorizes on them, refuses malformed values with HTTP 400 invalid_acting_for, and refuses them from any other credential with HTTP 400 acting_for_not_delegated."
       }
     },
     "responses": {
@@ -3043,7 +3043,8 @@
           "name",
           "role",
           "created_at",
-          "remote_config"
+          "remote_config",
+          "delegate"
         ],
         "properties": {
           "id": {
@@ -3081,6 +3082,13 @@
           "remote_config": {
             "type": "boolean",
             "description": "Config management may send configuration to agents using this credential. Agent credentials only; default false."
+          },
+          "plugin_access": {
+            "$ref": "#/components/schemas/PluginAccess"
+          },
+          "delegate": {
+            "type": "boolean",
+            "description": "The credential may send acting-for headers. Management credentials only."
           }
         }
       },
@@ -3092,7 +3100,7 @@
           "name",
           "role"
         ],
-        "description": "Caller chooses a unique credential ID for lost-response reconciliation. Agent bearer tokens are reusable across Collectors: no UID binding or pre-registration. An expiry must be future and within 365 days. Agent credentials require one; an admin, operator or reader credential without one is valid until revoked.",
+        "description": "Caller chooses a unique credential ID for lost-response reconciliation. Agent bearer tokens are reusable across Collectors: no UID binding or pre-registration. An expiry must be future and within 365 days. Agent credentials require one; an admin, operator or reader credential without one is valid until revoked. An agent credential gets a second token, plugin_token, for plugins.",
         "properties": {
           "id": {
             "$ref": "#/components/schemas/AgentID"
@@ -3121,6 +3129,14 @@
             "type": "boolean",
             "default": false,
             "description": "Opt agents using this credential in to remote config. Agent role only."
+          },
+          "plugin_access": {
+            "$ref": "#/components/schemas/PluginAccess"
+          },
+          "delegate": {
+            "type": "boolean",
+            "default": false,
+            "description": "Allow acting-for headers from this credential. Management credentials only."
           }
         }
       },
@@ -3138,7 +3154,12 @@
           "token": {
             "type": "string",
             "pattern": "^of1_[0-9a-f]{32}_[0-9a-f]{64}$",
-            "description": "One-time disclosure. Never returned again; revoke/reissue if this response is lost."
+            "description": "One-time disclosure. Authenticates to fleet: the management API, or OpAMP for an agent credential. Never returned again; revoke/reissue if this response is lost."
+          },
+          "plugin_token": {
+            "type": "string",
+            "pattern": "^ofp1_[0-9a-f]{32}_[0-9a-f]{64}$",
+            "description": "Agent credentials only, one-time disclosure. The token a Collector presents to a plugin, such as the live-capture extension; plugins introspect it. Fleet listeners refuse it, and plugins refuse the agent token."
           }
         }
       },
@@ -4437,6 +4458,21 @@
             "$ref": "#/components/schemas/AgentID"
           }
         }
+      },
+      "PluginAccess": {
+        "type": "object",
+        "maxProperties": 16,
+        "propertyNames": {
+          "pattern": "^[a-z0-9-]{1,64}$"
+        },
+        "additionalProperties": {
+          "enum": [
+            "read",
+            "write",
+            "admin"
+          ]
+        },
+        "description": "Plugin ID to access level. Fleet forwards a plugin API or status call only for a granted plugin and sends the level in X-Fleet-Caller-Access; the plugin maps levels to its routes. The role grants no plugin access. Management credentials only."
       }
     }
   }

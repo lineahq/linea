@@ -36,14 +36,14 @@ credential. Build a plugin when you need one of:
                     manifest probe every 1 s ──┘  └── /fleet-host/v4/... ◀─────────────┘
                     (service token)                   (host token, instance, epoch)
                                                                                         ▲
- Collector component (unchanged) ── own protocol, fleet agent token as bearer ─────────┘
+ Collector component (unchanged) ── own protocol, plugin token as bearer ──────────────┘
 ```
 
 | Channel | Direction | Listener | Credential |
 | --- | --- | --- | --- |
 | Manifest, status, public API | fleet to plugin | The plugin's own listener (`endpoint` in the registration) | Service token, sent by fleet |
 | Host services | plugin to fleet | Fleet's private host listener (`--plugin-listen`) | Host token, sent by the plugin |
-| Collector-facing endpoint (optional) | Collector to plugin | Any listener the plugin owns | The Collector's fleet agent credential, checked by introspection |
+| Collector-facing endpoint (optional) | Collector to plugin | Any listener the plugin owns | The plugin token of the Collector's fleet agent credential, checked by introspection |
 
 - Each registration has its own host and service token. Fleet identifies the
   plugin on the host listener by its host token alone.
@@ -100,7 +100,9 @@ internals](../internals/fleet-plugin-host.md).
 The example plugin counts agents and resolves groups. This runs it against
 fleet in memory mode (Git Bash, from the repository root). Memory mode keeps the
 lifecycle in the process, so drain and disable work there but do not survive a
-restart.
+restart. The memory-mode management token gets `read` access on every
+registered plugin, and memory mode issues no plugin tokens, so introspection
+answers inactive.
 
 ```sh
 sh scripts/fleet/new-plugin-secrets.sh .local/agent-summary
@@ -164,7 +166,7 @@ Pass `--plugins-config FILE` to fleet.
 | Permission | Grants |
 | --- | --- |
 | `agents.read` | Agent directory, attribute resolution and group resolution |
-| `credentials.introspect` | Introspection of agent credentials by token hash |
+| `credentials.introspect` | Introspection of agent credentials by plugin token hash |
 
 Tokens and the host listener:
 
@@ -243,8 +245,8 @@ from a plugin and sends no other headers.
 | Route | Fleet sends | Plugin answers |
 | --- | --- | --- |
 | `GET /fleet-plugin/v4/manifest` | Service token only | 200 with the manifest, at most 4 KiB, within 750 ms |
-| `GET /fleet-plugin/v4/status` | Service token, caller ID and role | 200 with a JSON object, at most 32 KiB, within 750 ms |
-| `/fleet-plugin/v4/api/{path}` (only with `api_version`) | Service token, caller ID and role, instance, epoch, `Content-Type: application/json`, optional `If-Match`, the query string | JSON at most 1 MiB, or 204, within 2 s |
+| `GET /fleet-plugin/v4/status` | Service token, caller ID and access level | 200 with a JSON object, at most 32 KiB, within 750 ms |
+| `/fleet-plugin/v4/api/{path}` (only with `api_version`) | Service token, caller ID and access level, instance, epoch, `Content-Type: application/json`, optional `If-Match`, the query string | JSON at most 1 MiB, or 204, within 2 s |
 
 ### Manifest and readiness
 
@@ -322,7 +324,7 @@ Fleet checks before forwarding:
 
 | Check | Rule |
 | --- | --- |
-| Caller | A management credential with role `reader`, `operator` or `admin`. Agent credentials never reach the API |
+| Caller | A management credential with a `plugin_access` grant on this plugin, else 403 (also for an unknown plugin). The role grants no plugin access. Agent credentials never reach the API |
 | Method | GET, POST, PUT, PATCH, DELETE |
 | Body | At most 64 KiB; valid JSON when present |
 | `{path}` | 1 to 512 bytes of segments of 1 to 128 characters from `A-Za-z0-9-_.`. Empty, `.`, `..` and percent-escaped segments are refused |
@@ -337,7 +339,7 @@ Headers the plugin receives:
 | --- | --- |
 | `Authorization` | Service token |
 | `X-Fleet-Caller-ID` | The credential ID |
-| `X-Fleet-Caller-Role` | `reader`, `operator` or `admin` |
+| `X-Fleet-Caller-Access` | The caller's grant on this plugin: `read`, `write` or `admin`. Read both caller headers with `pluginsdk.Caller` |
 | `X-Fleet-Plugin-Instance`, `X-Fleet-Plugin-Epoch` | Check both equal your current session (`pluginsdk.AuthorityMatches`); answer 421 otherwise, never 409 |
 | `Content-Type` | `application/json` |
 | `If-Match` | Optional |
@@ -346,7 +348,8 @@ Headers the plugin receives:
 Fleet never forwards user credentials, cookies or other headers.
 
 **Acting for users.** A management client that acts for its own users, such
-as a shared team service, may send these headers, each once, as printable
+as a shared team service, and whose credential has `delegate` set may send
+these headers, each once, as printable
 UTF-8 without surrounding space:
 
 | Header | Limit |
@@ -355,7 +358,9 @@ UTF-8 without surrounding space:
 | `X-Fleet-Acting-Name` | At most 128 bytes |
 | `X-Fleet-Acting-Request` | At most 128 bytes |
 
-- Fleet refuses malformed values with 400 `invalid_acting_for`, records the
+- Fleet refuses them from a credential without `delegate` with 400
+  `acting_for_not_delegated`, refuses malformed values with 400
+  `invalid_acting_for`, records the
   value on the request's events (`acting_for`), and forwards only the
   validated headers. Copies a client sends are never passed through.
 - Read them with `pluginsdk.ReadActing`.
@@ -378,9 +383,11 @@ free of request data, secrets and upstream text.
 
 ### Authorization inside the plugin
 
-Fleet authenticates the caller and passes its identity. The plugin decides
-what each role may do. Livecapture, for example, lets readers list and
-admins and operators start captures, and scopes captures to the credential that created
+Fleet authenticates the caller, checks its grant and passes its identity
+and access level. An admin grants levels per credential with `plugin_access`
+on `POST /api/v1/credentials`. The plugin decides what each level may do.
+Livecapture, for example, lets `read` list and `write` or `admin` start
+captures, and scopes captures to the credential that created
 them. The caller ID is stable for a credential: use it as the owner of
 records the plugin creates. Document the rules in the plugin's API schema.
 
@@ -436,7 +443,7 @@ Query parameters, each at most once; others are refused:
 | --- | --- | --- |
 | Attributes | `{"credential_id": "...", "attributes": {"k8s.pod.name": "edge-7d9f"}, "limit": 16}` | `{"agent_ids": [...], "more": false}`: connected agents whose attributes equal all 1 to 8 terms, optionally only those that connected with `credential_id`. `limit` defaults to 16, at most 100; `more` says more matched. Link a Collector to an agent only on exactly one match |
 | Group | `{"group_id": "..."}` or `{"selector": "..."}` (exactly one), optional `"connected": true`, `"limit"` (default and maximum 1000) | `{"agent_ids": [...], "revision": 4}`. `revision` is the group's revision (0 for a selector). A set above the limit returns 422, not a truncated list. An unknown group returns 404 |
-| Introspection | `{"token_sha256": "<64 lowercase hex>"}` | `{"active": true, "credential_id": "...", "role": "agent", "labels": {...}, "expires_at": "..."}` for an unrevoked, unexpired agent credential; `{"active": false}` for anything else, including management credentials and unknown hashes |
+| Introspection | `{"token_sha256": "<64 lowercase hex>"}` | `{"active": true, "credential_id": "...", "role": "agent", "labels": {...}, "expires_at": "..."}` for the plugin token of an unrevoked, unexpired agent credential; `{"active": false}` for anything else, including agent and management tokens and unknown hashes |
 
 The plugin hashes the bearer token a Collector presented, so the token itself
 never reaches fleet over the host channel.
@@ -476,12 +483,12 @@ operations small or retry.
 
 A plugin often terminates its own Collector-facing endpoint, such as a gRPC
 stream from a Collector extension. Such components already send configurable
-headers, so the Collector presents its fleet agent credential to the plugin
-unchanged.
+headers, so the Collector presents its fleet agent credential's plugin token
+to the plugin unchanged.
 
 | Step | How |
 | --- | --- |
-| 1. Authenticate | The Collector configures its fleet agent token as the component's `Authorization: Bearer` header. The plugin hashes the token, calls introspection and caches the answer briefly (livecapture: 10 s, rejections 2 s, never past `expires_at`). It re-introspects connected credentials periodically and closes connections whose credential was revoked or expired. It clears the cache when the epoch changes |
+| 1. Authenticate | The Collector configures the plugin token (`plugin_token`, returned once when the agent credential is issued) as the component's `Authorization: Bearer` header. The plugin hashes the token, calls introspection and caches the answer briefly (livecapture: 10 s, rejections 2 s, never past `expires_at`). It re-introspects connected credentials periodically and closes connections whose credential was revoked or expired. It clears the cache when the epoch changes |
 | 2. Authorize with labels | Agent credentials carry up to 16 labels (`labels` on `POST /api/v1/credentials`: key at most 64 bytes of `A-Za-z0-9._-/`, value 1 to 128 bytes). A plugin documents the label it reads, for example livecapture's `capture=edge,gateway`, so operators grant plugin access per credential without a plugin-owned credential store. Config management also matches assignments on labels: choose a label key that names your plugin |
 | 3. Link to fleet agents | To address a connection by fleet agent, group or selector, resolve it with `agents/resolve`, using the introspected `credential_id` and identity attributes the component reports (for example `k8s.pod.name`). Link only a unique match. The Collector's OpAMP extension reports the same attributes through `agent_description.non_identifying_attributes` |
 | 4. Target groups | For a group or selector, call `groups/resolve` with `connected: true` and intersect the agent IDs with linked connections. Resolve once when an operation is admitted and keep that set |
@@ -562,8 +569,9 @@ does not pin stays `incompatible` and receives no traffic.
 
 - Compare the service token in constant time on every route, the manifest
   included.
-- Accept status and API calls only with exactly one caller ID and a role of
-  `reader`, `operator` or `admin`. Enforce your own per-role rules.
+- Accept status and API calls only with exactly one caller ID and an access
+  level of `read`, `write` or `admin` (`pluginsdk.Caller`). Enforce your own
+  per-level rules.
 - On API calls, check instance and epoch against your current session.
 - Stop admitted work and clear host-derived caches when the epoch changes.
 - Bound every request body, page and loop. Refuse rather than queue when busy.

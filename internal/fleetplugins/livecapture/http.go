@@ -142,8 +142,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]string{"status": "ready"})
 		return
 	}
-	caller, roles := r.Header.Values(pluginsdk.CallerIDHeader), r.Header.Values(pluginsdk.CallerRoleHeader)
-	if len(caller) != 1 || len(roles) != 1 || !safeName(caller[0]) || (roles[0] != "admin" && roles[0] != "operator" && roles[0] != "reader") {
+	owner, access, ok := pluginsdk.Caller(r.Header)
+	if !ok || !safeName(owner) {
 		fail(w, ErrForbidden)
 		return
 	}
@@ -191,11 +191,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, page)
 		return
 	}
-	if r.Method != "GET" && roles[0] != "admin" && roles[0] != "operator" {
+	// read lists peers and schemas; write opens channels and runs captures.
+	if r.Method != "GET" && access == pluginsdk.AccessRead {
 		fail(w, ErrForbidden)
 		return
 	}
-	owner := caller[0]
 	if path == "v1/channels" && r.Method == "POST" {
 		var request struct {
 			ExpiresAt time.Time `json:"expires_at"`

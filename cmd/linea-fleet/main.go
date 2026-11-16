@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/lineahq/linea/internal/fleet/app"
+	"github.com/lineahq/linea/internal/fleet/auth"
 	"github.com/lineahq/linea/internal/fleet/postgres"
 	"github.com/lineahq/linea/internal/fleet/translog"
 )
@@ -66,11 +67,22 @@ func run(args []string, stdout, stderr io.Writer) error {
 		name := fs.String("name", "initial-admin", "bootstrap credential name")
 		operatorName := fs.String("operator-name", "linea-server", "operator credential name (bootstrap, with LINEA_FLEET_OPERATOR_TOKEN)")
 		runtimeRole := fs.String("runtime-role", "", "existing runtime role to grant narrow DML privileges (migrate)")
+		adminAccess := fs.String("plugin-access", "", "plugin grants of the first admin, plugin=read|write|admin[,...] (bootstrap)")
+		operatorAccess := fs.String("operator-plugin-access", "", "plugin grants of the operator, plugin=read|write|admin[,...] (bootstrap)")
+		operatorDelegate := fs.Bool("operator-delegate", false, "let the operator send acting-for headers (bootstrap)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
 		if fs.NArg() != 0 {
 			return errors.New("unexpected positional arguments")
+		}
+		adminGrants, err := parsePluginAccess(*adminAccess)
+		if err != nil {
+			return fmt.Errorf("--plugin-access: %w", err)
+		}
+		operatorGrants, err := parsePluginAccess(*operatorAccess)
+		if err != nil {
+			return fmt.Errorf("--operator-plugin-access: %w", err)
 		}
 		database, err := secret("LINEA_FLEET_DATABASE_URL")
 		if err != nil {
@@ -99,7 +111,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 		if token != "" {
 			// The deployment generated the token and keeps it; never print it.
-			created, err := postgres.BootstrapToken(ctx, database, *id, *name, token)
+			created, err := postgres.BootstrapToken(ctx, database, *id, *name, token, adminGrants)
 			if err != nil {
 				return err
 			}
@@ -113,7 +125,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 				return err
 			}
 			if operatorToken != "" {
-				created, err := postgres.InstallOperatorToken(ctx, database, *id, *operatorName, operatorToken)
+				created, err := postgres.InstallOperatorToken(ctx, database, *id, *operatorName, operatorToken, operatorGrants, *operatorDelegate)
 				if err != nil {
 					return err
 				}
@@ -125,7 +137,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			}
 			return nil
 		}
-		issued, err := postgres.Bootstrap(ctx, database, *id, *name)
+		issued, err := postgres.Bootstrap(ctx, database, *id, *name, adminGrants)
 		if err != nil {
 			return err
 		}
@@ -220,4 +232,23 @@ func main() {
 		fmt.Fprintf(os.Stderr, "linea-fleet: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// parsePluginAccess reads plugin=level[,plugin=level...]; empty is no grant.
+func parsePluginAccess(value string) (map[string]string, error) {
+	if value == "" {
+		return nil, nil
+	}
+	access := map[string]string{}
+	for _, item := range strings.Split(value, ",") {
+		id, level, ok := strings.Cut(strings.TrimSpace(item), "=")
+		if _, seen := access[id]; !ok || seen {
+			return nil, errors.New("want plugin=read|write|admin, each plugin once")
+		}
+		access[id] = level
+	}
+	if !auth.ValidPluginAccess(access) {
+		return nil, errors.New(auth.PluginAccessRule)
+	}
+	return access, nil
 }

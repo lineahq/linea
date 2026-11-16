@@ -69,7 +69,7 @@ func TestRequestsReadStorageFlagWithoutPinging(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.Header.Set("Authorization", "Bearer "+s.config.serviceToken)
 		req.Header.Set(pluginsdk.CallerIDHeader, "owner")
-		req.Header.Set(pluginsdk.CallerRoleHeader, "admin")
+		req.Header.Set(pluginsdk.CallerAccessHeader, "write")
 		req.Header.Set(pluginsdk.InstanceHeader, s.instance)
 		req.Header.Set(pluginsdk.EpochHeader, s.epoch)
 		w := httptest.NewRecorder()

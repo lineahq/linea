@@ -50,7 +50,7 @@ func newPluginFixture(t *testing.T, name string) pluginFixture {
 	if err := Migrate(ctx, url); err != nil {
 		t.Fatal("migrate:", err)
 	}
-	issued, err := Bootstrap(ctx, url, name, "bootstrap-admin")
+	issued, err := Bootstrap(ctx, url, name, "bootstrap-admin", nil)
 	if err != nil {
 		t.Fatal("bootstrap:", err)
 	}

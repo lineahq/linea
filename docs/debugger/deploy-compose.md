@@ -508,8 +508,8 @@ lists them all:
 | --- | --- |
 | `fleet_database_url`, `fleet_migrate_database_url` | Full URLs of the roles `fleet_app` and `fleet_migrator` on the database `fleet`, with random hex passwords: `postgres://fleet_app:<password>@postgres:5432/fleet?sslmode=disable` |
 | `capture_database_url`, `capture_migrate_database_url` | The same for `capture_app` and `capture_migrator` on `livecapture` |
-| `fleet_admin_token` | The fleet admin token, `of1_<32 hex>_<64 hex>`. `fleet-bootstrap` installs it as the first fleet admin. It stays with you, to issue fleet credentials and run plugin operations; `linea-server` never gets it. |
-| `fleet_operator_token` | `linea-server`'s fleet token, a different `of1_<32 hex>_<64 hex>`. `fleet-bootstrap` installs it as a fleet operator: admin without the credentials API and plugin lifecycle operations. |
+| `fleet_admin_token` | The fleet admin token, `of1_<32 hex>_<64 hex>`. `fleet-bootstrap` installs it as the first fleet admin, with `livecapture=admin` plugin access. It stays with you, to issue fleet credentials and run plugin operations; `linea-server` never gets it. |
+| `fleet_operator_token` | `linea-server`'s fleet token, a different `of1_<32 hex>_<64 hex>`. `fleet-bootstrap` installs it as a fleet operator (admin without the credentials API and plugin lifecycle operations) with `livecapture=write` plugin access and `delegate`, so it may name the user it acts for. |
 | `capture_host_token`, `capture_service_token`, `capture_metrics_token` | The plugin's tokens |
 | `capture_tls.crt`, `capture_tls.key` | The plugin's TLS certificate and key. Collectors need the certificate as their CA. The plugin runs as uid 65532, so the key must be readable by it (`chmod 644`). |
 

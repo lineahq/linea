@@ -38,7 +38,7 @@ func TestPostgresRuntimeRoleManagesGroups(t *testing.T) {
 	if err := GrantRuntime(ctx, admin, role); err != nil {
 		t.Fatal("grant runtime:", err)
 	}
-	issued, err := Bootstrap(ctx, admin, "grants-fleet", "bootstrap-admin")
+	issued, err := Bootstrap(ctx, admin, "grants-fleet", "bootstrap-admin", nil)
 	if err != nil {
 		t.Fatal("bootstrap:", err)
 	}

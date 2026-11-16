@@ -4,6 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -14,10 +17,19 @@ import (
 type hashRepository struct {
 	CredentialRepository
 	byHash map[[32]byte]Credential
+	byID   map[string]Credential
 }
 
-func (r hashRepository) CredentialByHash(_ context.Context, hash []byte) (Credential, error) {
+func (r hashRepository) CredentialByPluginHash(_ context.Context, hash []byte) (Credential, error) {
 	c, ok := r.byHash[[32]byte(hash)]
+	if !ok {
+		return Credential{}, fleet.ErrNotFound
+	}
+	return c, nil
+}
+
+func (r hashRepository) Credential(_ context.Context, id string) (Credential, error) {
+	c, ok := r.byID[id]
 	if !ok {
 		return Credential{}, fleet.ErrNotFound
 	}
@@ -69,6 +81,9 @@ func TestIntrospection(t *testing.T) {
 		if revoked {
 			i.Credential.RevokedAt = &now
 		}
+		if role == "agent" {
+			return i, sha256.Sum256([]byte(i.PluginToken))
+		}
 		return i, sha256.Sum256([]byte(i.Token))
 	}
 	active, activeHash := mk(strings.Repeat("1", 32), "agent", now.Add(time.Hour), false)
@@ -94,14 +109,89 @@ func TestIntrospection(t *testing.T) {
 
 	token := strings.Repeat("t", 32)
 	b, _ := New(token)
-	if got, _ := (Static{Bearer: b, Role: "agent"}).Introspect(context.Background(), sha256.Sum256([]byte(token))); !got.Active {
-		t.Fatal("static agent token not introspected")
+	if got, _ := (Static{Bearer: b, Role: "agent"}).Introspect(context.Background(), sha256.Sum256([]byte(token))); got.Active {
+		t.Fatal("memory mode's agent token introspected")
 	}
-	if got, _ := (Static{Bearer: b, Role: "admin"}).Introspect(context.Background(), sha256.Sum256([]byte(token))); got.Active {
-		t.Fatal("static admin token introspected")
+}
+
+// An agent credential gets a plugin token of its own. Core authenticates
+// only the agent token; introspection matches only the plugin token.
+func TestPluginTokenIsSeparate(t *testing.T) {
+	now := time.Now()
+	issued, err := Generate(CredentialRequest{ID: strings.Repeat("4", 32), Name: "edge", Role: "agent", ExpiresAt: new(now.Add(time.Hour))}, now)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got, _ := (Static{Bearer: b, Role: "agent"}).Introspect(context.Background(), sha256.Sum256([]byte("other"))); got.Active {
-		t.Fatal("static mismatch introspected")
+	c := issued.Credential
+	if !strings.HasPrefix(issued.PluginToken, "ofp1_"+c.ID+"_") || len(issued.PluginToken) != 102 || issued.PluginToken[5:] == issued.Token[4:] {
+		t.Fatalf("plugin token %q", issued.PluginToken)
+	}
+	if h := sha256.Sum256([]byte(issued.PluginToken)); string(h[:]) != string(c.PluginHash) {
+		t.Fatal("plugin hash does not match the plugin token")
+	}
+	s := &Service{Repository: hashRepository{byID: map[string]Credential{c.ID: c}, byHash: map[[32]byte]Credential{[32]byte(c.PluginHash): c}}}
+	request := func(token string) *http.Request {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.Header.Set("Authorization", "Bearer "+token)
+		return r
+	}
+	if p, err := s.Authenticate(context.Background(), request(issued.Token)); err != nil || p.ID != c.ID {
+		t.Fatalf("agent token: %+v %v", p, err)
+	}
+	if _, err := s.Authenticate(context.Background(), request(issued.PluginToken)); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("plugin token authenticated to core: %v", err)
+	}
+	if got, _ := s.Introspect(context.Background(), sha256.Sum256([]byte(issued.Token))); got.Active {
+		t.Fatal("the agent token introspected")
+	}
+	if got, _ := s.Introspect(context.Background(), sha256.Sum256([]byte(issued.PluginToken))); !got.Active || got.CredentialID != c.ID {
+		t.Fatalf("plugin token: %+v", got)
+	}
+	reader, err := Generate(CredentialRequest{ID: strings.Repeat("5", 32), Name: "ui", Role: "reader"}, now)
+	if err != nil || reader.PluginToken != "" || reader.Credential.PluginHash != nil {
+		t.Fatalf("a management credential got a plugin token: %+v %v", reader, err)
+	}
+}
+
+// Plugin grants and the delegate flag are bounded, kept on management
+// credentials only, and carried into the authenticated principal.
+func TestPluginAccessAndDelegate(t *testing.T) {
+	now := time.Now()
+	access := map[string]string{"livecapture": "write", "agent-summary": "read"}
+	issued, err := Generate(CredentialRequest{ID: strings.Repeat("6", 32), Name: "debugger", Role: "reader", PluginAccess: access, Delegate: true}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	access["livecapture"] = "admin"
+	c := issued.Credential
+	if c.PluginAccess["livecapture"] != "write" || !c.Delegate {
+		t.Fatalf("credential %+v", c)
+	}
+	s := &Service{Repository: hashRepository{byID: map[string]Credential{c.ID: c}}}
+	r := httptest.NewRequest("GET", "/", nil)
+	r.Header.Set("Authorization", "Bearer "+issued.Token)
+	p, err := s.Authenticate(context.Background(), r)
+	if err != nil || p.Access("livecapture") != "write" || p.Access("agent-summary") != "read" || p.Access("other") != "" || !p.Delegate {
+		t.Fatalf("principal %+v %v", p, err)
+	}
+	many := map[string]string{}
+	for i := 0; i <= MaxPluginAccess; i++ {
+		many[fmt.Sprintf("p%d", i)] = "read"
+	}
+	agent := func(r *CredentialRequest) { r.Role, r.ExpiresAt = "agent", new(now.Add(time.Hour)) }
+	for name, mutate := range map[string]func(*CredentialRequest){
+		"level":          func(r *CredentialRequest) { r.PluginAccess = map[string]string{"livecapture": "owner"} },
+		"empty level":    func(r *CredentialRequest) { r.PluginAccess = map[string]string{"livecapture": ""} },
+		"plugin id":      func(r *CredentialRequest) { r.PluginAccess = map[string]string{"Live_Capture": "read"} },
+		"too many":       func(r *CredentialRequest) { r.PluginAccess = many },
+		"agent access":   func(r *CredentialRequest) { agent(r); r.PluginAccess = map[string]string{"livecapture": "read"} },
+		"agent delegate": func(r *CredentialRequest) { agent(r); r.Delegate = true },
+	} {
+		req := CredentialRequest{ID: strings.Repeat("7", 32), Name: "bad", Role: "reader"}
+		mutate(&req)
+		if _, err := Generate(req, now); !errors.Is(err, fleet.ErrInvalid) {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }
 

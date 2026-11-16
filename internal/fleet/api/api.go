@@ -266,6 +266,10 @@ func (h *Handler) ServeHTTP(raw http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "invalid_acting_for", "acting-for headers are malformed or exceed their bounds")
 		return
 	}
+	if acting != nil && !p.Delegate {
+		fail(w, 400, "acting_for_not_delegated", "this credential may not send acting-for headers")
+		return
+	}
 	ctx, base = fleet.WithActing(ctx, acting), fleet.WithActing(base, acting)
 	r = r.WithContext(ctx)
 	if h.draining.Load() && r.Method != "GET" {

@@ -244,7 +244,7 @@ start_collector() { # start_collector POD
         --pids-limit 128 --read-only --cap-drop ALL --security-opt no-new-privileges \
         --mount "type=bind,source=$root/examples/fleet-livecapture/collector.yaml,target=/fixture.yaml,readonly" \
         --mount "type=bind,source=$run/plugin/tls_cert.pem,target=/certs/ca.pem,readonly" \
-        --env LINEA_FLEET_AGENT_TOKEN --env "POD_NAME=$1" -e GOMAXPROCS=2 "$collector_image" --config /fixture.yaml >/dev/null \
+        --env LINEA_FLEET_PLUGIN_TOKEN --env "POD_NAME=$1" -e GOMAXPROCS=2 "$collector_image" --config /fixture.yaml >/dev/null \
         || fail 'Real Collector startup failed'
     children+=("$name")
 }
@@ -263,7 +263,7 @@ for name in ["database", "ingress", "plugins", "capture-database", "capture-ingr
 with open(path, "w") as f:
     f.write(json.dumps({"services": {"livecapture-plugin": {"ports": ["127.0.0.1::8090"]}}, "networks": networks}, indent=2))
 PYEOF
-printf "FLEET_SECRET_DIR='%s/fleet'\nFLEET_LIVECAPTURE_SECRET_DIR='%s/plugin'\nFLEET_SERVER_ID=s4-%s\nFLEET_API_PORT=0\nFLEET_AGENT_PORT=0\nCAPTURE_CONTROL_PORT=0\nCAPTURE_DELIVERY_PORT=0\nFLEET_VERSION=%s\nCAPTURE_VERSION=%s\n" \
+printf "FLEET_SECRET_DIR='%s/fleet'\nFLEET_LIVECAPTURE_SECRET_DIR='%s/plugin'\nFLEET_SERVER_ID=s4-%s\nFLEET_API_PORT=0\nFLEET_AGENT_PORT=0\nCAPTURE_CONTROL_PORT=0\nCAPTURE_DELIVERY_PORT=0\nFLEET_VERSION=%s\nCAPTURE_VERSION=%s\nFLEET_BOOTSTRAP_PLUGIN_ACCESS=livecapture=admin\n" \
     "$run" "$run" "$id" "$image_tag" "$image_tag" > "$env_file"
 
 if [ "$skip_build" = 0 ]; then
@@ -304,18 +304,23 @@ fleet_pg=$(compose ps --quiet postgres)
 capi GET v1/openapi.json '' 401 '' >/dev/null
 [ "$(capi GET v1/openapi.json | json 'd["info"]["title"]')" = 'Optional livecapture plugin API' ] \
     || fail 'Plugin-owned schema was not routed opaquely'
-# The unchanged extension presents a fleet agent credential whose capture
-# label allows the s4 collector group; the plugin introspects it via core.
+# The unchanged extension presents the plugin token of a fleet agent
+# credential whose capture label allows the s4 collector group; the plugin
+# introspects it via core and refuses the credential's OpAMP token.
 unlabeled=$(http POST /api/v1/credentials "$admin" \
-    "{\"id\":\"$(random_hex 16)\",\"name\":\"s4 unlabeled\",\"role\":\"agent\",\"expires_at\":\"$(iso_in 86400)\"}" 201 | json 'd["token"]')
+    "{\"id\":\"$(random_hex 16)\",\"name\":\"s4 unlabeled\",\"role\":\"agent\",\"expires_at\":\"$(iso_in 86400)\"}" 201 | json 'd["plugin_token"]')
 unlabeled_file=$run/unlabeled_token
 write_token_file "$unlabeled_file" "$unlabeled"
 credential=$(random_hex 16)
-agent_token=$(http POST /api/v1/credentials "$admin" \
-    "{\"id\":\"$credential\",\"name\":\"s4 collectors\",\"role\":\"agent\",\"expires_at\":\"$(iso_in 86400)\",\"labels\":{\"capture\":\"s4\"}}" 201 | json 'd["token"]')
-agent_file=$run/agent_token
-write_token_file "$agent_file" "$agent_token"
-export LINEA_FLEET_AGENT_TOKEN=$agent_token
+issued=$(http POST /api/v1/credentials "$admin" \
+    "{\"id\":\"$credential\",\"name\":\"s4 collectors\",\"role\":\"agent\",\"expires_at\":\"$(iso_in 86400)\",\"labels\":{\"capture\":\"s4\"}}" 201)
+opamp_file=$run/opamp_token
+write_token_file "$opamp_file" "$(printf '%s' "$issued" | json 'd["token"]')"
+plugin_token=$(printf '%s' "$issued" | json 'd["plugin_token"]')
+unset issued
+agent_file=$run/plugin_token
+write_token_file "$agent_file" "$plugin_token"
+export LINEA_FLEET_PLUGIN_TOKEN=$plugin_token
 for pod in collector-a collector-b; do start_collector "$pod"; done
 wait_for 40 'TLS/bearer capture peers or catalogs did not register' two_ready_peers
 peers=$(peers_array)
@@ -357,6 +362,7 @@ operation_id=$(printf '%s' "$operation" | json 'd["id"]')
 capture_active "$operation_id"
 ingress_refusal "$run/plugin/host_token" Unauthenticated
 ingress_refusal "$unlabeled_file" Unauthenticated
+ingress_refusal "$opamp_file" Unauthenticated
 ingress_refusal "$agent_file" PermissionDenied
 ingress_refusal "$agent_file" ResourceExhausted '' 1
 ingress_refusal "$agent_file" Unavailable wrong-host
@@ -453,7 +459,7 @@ fi
 # A lost management credential cannot keep a consumer channel alive.
 other_id=$(random_hex 16)
 other_token=$(http POST /api/v1/credentials "$admin" \
-    "{\"id\":\"$other_id\",\"name\":\"s4-other-client\",\"role\":\"admin\",\"expires_at\":\"$(iso_in 3600)\"}" 201 | json 'd["token"]')
+    "{\"id\":\"$other_id\",\"name\":\"s4-other-client\",\"role\":\"admin\",\"plugin_access\":{\"livecapture\":\"write\"},\"expires_at\":\"$(iso_in 3600)\"}" 201 | json 'd["token"]')
 other_file=$run/other_admin_token
 write_token_file "$other_file" "$other_token"
 other_channel=$(channel_id_of "$(new_channel "$other_token")")

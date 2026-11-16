@@ -35,7 +35,7 @@ func TestPostgresReplicas(t *testing.T) {
 	if err := Migrate(ctx, url); err != nil {
 		t.Fatal("fresh migration:", err)
 	}
-	issued, err := Bootstrap(ctx, url, "replica-fleet", "bootstrap-admin")
+	issued, err := Bootstrap(ctx, url, "replica-fleet", "bootstrap-admin", nil)
 	if err != nil {
 		t.Fatal("bootstrap:", err)
 	}
@@ -395,7 +395,7 @@ func TestPostgresReapBudget(t *testing.T) {
 	if err := Migrate(ctx, url); err != nil {
 		t.Fatal(err)
 	}
-	issued, err := Bootstrap(ctx, url, "reap-fleet", "bootstrap-admin")
+	issued, err := Bootstrap(ctx, url, "reap-fleet", "bootstrap-admin", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -41,15 +41,44 @@ const (
 const AgentsPath = "/fleet-host/v4/agents"
 
 // Headers fleet sets on status and API calls: the authenticated management
-// credential ID and its role, "reader", "operator" or "admin".
+// credential ID and the access level an admin granted it on this plugin.
+// Fleet calls a plugin only for a credential with a grant.
 const (
-	CallerIDHeader   = "X-Fleet-Caller-ID"
-	CallerRoleHeader = "X-Fleet-Caller-Role"
+	CallerIDHeader     = "X-Fleet-Caller-ID"
+	CallerAccessHeader = "X-Fleet-Caller-Access"
 )
 
+// Access levels, from least to most. A plugin maps them to its routes.
+const (
+	AccessRead  = "read"
+	AccessWrite = "write"
+	AccessAdmin = "admin"
+)
+
+// ValidAccess accepts the three access levels.
+func ValidAccess(level string) bool {
+	return level == AccessRead || level == AccessWrite || level == AccessAdmin
+}
+
+// Caller returns the credential ID and access level fleet sent, and false
+// when either is missing, repeated or malformed.
+func Caller(h http.Header) (id, access string, ok bool) {
+	ids, levels := h.Values(CallerIDHeader), h.Values(CallerAccessHeader)
+	if len(ids) != 1 || len(levels) != 1 || len(ids[0]) == 0 || len(ids[0]) > 128 || !ValidAccess(levels[0]) {
+		return "", "", false
+	}
+	for _, c := range ids[0] {
+		if c <= ' ' || c > '~' {
+			return "", "", false
+		}
+	}
+	return ids[0], levels[0], true
+}
+
 // Headers a delegating management client may send to name the user it acts
-// for. Fleet validates and records them and forwards them on plugin API
-// calls; neither fleet nor a plugin authorizes on them.
+// for. Fleet accepts them only from a credential with the delegate flag,
+// records them and forwards them on plugin API calls; neither fleet nor a
+// plugin authorizes on them.
 const (
 	ActingIDHeader      = "X-Fleet-Acting-ID"
 	ActingNameHeader    = "X-Fleet-Acting-Name"

@@ -41,7 +41,7 @@ func TestPostgresInventory(t *testing.T) {
 	if err := Migrate(ctx, url); err != nil {
 		t.Fatal("fresh migration:", err)
 	}
-	issued, err := Bootstrap(ctx, url, "inventory-fleet", "bootstrap-admin")
+	issued, err := Bootstrap(ctx, url, "inventory-fleet", "bootstrap-admin", nil)
 	if err != nil {
 		t.Fatal("bootstrap:", err)
 	}
@@ -60,13 +60,16 @@ func TestPostgresInventory(t *testing.T) {
 		t.Fatal(err)
 	}
 	credential := c.Credential.ID
-	byHash, err := s.CredentialByHash(ctx, c.Credential.Hash)
+	byHash, err := s.CredentialByPluginHash(ctx, c.Credential.PluginHash)
 	if err != nil || byHash.ID != credential || byHash.Labels["capture"] != "edge,core" {
-		t.Fatalf("credential by hash: %+v %v", byHash, err)
+		t.Fatalf("credential by plugin hash: %+v %v", byHash, err)
 	}
-	introspected, err := (&auth.Service{Repository: s}).Introspect(ctx, [32]byte(c.Credential.Hash))
+	introspected, err := (&auth.Service{Repository: s}).Introspect(ctx, [32]byte(c.Credential.PluginHash))
 	if err != nil || !introspected.Active || introspected.Labels["capture"] != "edge,core" {
 		t.Fatalf("introspection: %+v %v", introspected, err)
+	}
+	if agentToken, err := (&auth.Service{Repository: s}).Introspect(ctx, [32]byte(c.Credential.Hash)); err != nil || agentToken.Active {
+		t.Fatal("the agent token introspected as active")
 	}
 	if adminView, err := (&auth.Service{Repository: s}).Introspect(ctx, [32]byte(issued.Credential.Hash)); err != nil || adminView.Active {
 		t.Fatal("admin credential introspected as active")
@@ -80,7 +83,7 @@ func TestPostgresInventory(t *testing.T) {
 			t.Fatal("listed credential lost labels")
 		}
 	}
-	if _, err := s.CredentialByHash(ctx, make([]byte, 32)); !errors.Is(err, fleet.ErrNotFound) {
+	if _, err := s.CredentialByPluginHash(ctx, make([]byte, 32)); !errors.Is(err, fleet.ErrNotFound) {
 		t.Fatal("unknown hash found")
 	}
 

@@ -35,8 +35,10 @@ func requireAgent(ctx context.Context, tx pgx.Tx, id string) error {
 	return nil
 }
 
-func Bootstrap(ctx context.Context, url, serverID, name string) (auth.Issued, error) {
-	issued, err := auth.Generate(auth.CredentialRequest{ID: randomID(), Name: name, Role: "admin"}, time.Now())
+// Bootstrap issues the first admin, with plugin grants access, and returns
+// its token once.
+func Bootstrap(ctx context.Context, url, serverID, name string, access map[string]string) (auth.Issued, error) {
+	issued, err := auth.Generate(auth.CredentialRequest{ID: randomID(), Name: name, Role: "admin", PluginAccess: access}, time.Now())
 	if err != nil {
 		return auth.Issued{}, err
 	}
@@ -48,11 +50,12 @@ func Bootstrap(ctx context.Context, url, serverID, name string) (auth.Issued, er
 
 // BootstrapToken installs the first admin with a token the deployment
 // generated, so the deployment can hand the same token to linea-server. It is
-// safe to repeat: when that token's admin is already active it changes
-// nothing and reports created false. It conflicts when another admin is
-// active or the token's credential was revoked or is not an active admin.
-func BootstrapToken(ctx context.Context, url, serverID, name, token string) (created bool, err error) {
-	issued, err := auth.Install(auth.CredentialRequest{Name: name, Role: "admin"}, token, time.Now())
+// safe to repeat: when that token's admin is already active it only sets its
+// plugin access to access and reports created false. It conflicts when
+// another admin is active or the token's credential was revoked or is not an
+// active admin.
+func BootstrapToken(ctx context.Context, url, serverID, name, token string, access map[string]string) (created bool, err error) {
+	issued, err := auth.Install(auth.CredentialRequest{Name: name, Role: "admin", PluginAccess: access}, token, time.Now())
 	if err != nil {
 		return false, err
 	}
@@ -71,7 +74,7 @@ func bootstrap(ctx context.Context, url, serverID string, c auth.Credential) (cr
 		err := tx.QueryRow(ctx, "SELECT token_hash=$2 AND role='admin' AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>clock_timestamp()) FROM fleet.credentials WHERE id=$1", c.ID, c.Hash).Scan(&current)
 		switch {
 		case err == nil && current:
-			return nil
+			return syncScope(ctx, tx, c)
 		case err == nil:
 			return fleet.ErrConflict
 		case !errors.Is(err, pgx.ErrNoRows):
@@ -95,12 +98,13 @@ func bootstrap(ctx context.Context, url, serverID string, c auth.Credential) (cr
 
 // InstallOperatorToken installs an operator credential with a token the
 // deployment generated, so the deployment can hand that token to linea-server
-// while it keeps the admin token. The credential has no expiry. It is safe to
-// repeat: when that token's operator is already active it changes nothing and
-// reports created false. It conflicts when the token's credential exists with
-// another role or token, was revoked or has expired.
-func InstallOperatorToken(ctx context.Context, url, serverID, name, token string) (created bool, err error) {
-	issued, err := auth.Install(auth.CredentialRequest{Name: name, Role: "operator"}, token, time.Now())
+// while it keeps the admin token. The credential has no expiry; access and
+// delegate are its plugin grants and acting-for permission. It is safe to
+// repeat: when that token's operator is already active it only sets access
+// and delegate and reports created false. It conflicts when the token's
+// credential exists with another role or token, was revoked or has expired.
+func InstallOperatorToken(ctx context.Context, url, serverID, name, token string, access map[string]string, delegate bool) (created bool, err error) {
+	issued, err := auth.Install(auth.CredentialRequest{Name: name, Role: "operator", PluginAccess: access, Delegate: delegate}, token, time.Now())
 	if err != nil {
 		return false, err
 	}
@@ -116,7 +120,7 @@ func InstallOperatorToken(ctx context.Context, url, serverID, name, token string
 		err := tx.QueryRow(ctx, "SELECT token_hash=$2 AND role='operator' AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>clock_timestamp()) FROM fleet.credentials WHERE id=$1", c.ID, c.Hash).Scan(&current)
 		switch {
 		case err == nil && current:
-			return nil
+			return syncScope(ctx, tx, c)
 		case err == nil:
 			return fleet.ErrConflict
 		case !errors.Is(err, pgx.ErrNoRows):
@@ -131,38 +135,64 @@ func InstallOperatorToken(ctx context.Context, url, serverID, name, token string
 	return created, err
 }
 
-const credentialColumns = "id,name,role,labels,remote_config,created_at,expires_at,revoked_at"
+// syncScope sets a bootstrap credential's plugin access and delegate flag to
+// what the deployment asks for now, and records a change.
+func syncScope(ctx context.Context, tx pgx.Tx, c auth.Credential) error {
+	access := c.PluginAccess
+	if access == nil {
+		access = map[string]string{}
+	}
+	encoded, err := json.Marshal(access)
+	if err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, "UPDATE fleet.credentials SET plugin_access=$2::jsonb, delegate=$3 WHERE id=$1 AND (plugin_access<>$2::jsonb OR delegate<>$3)", c.ID, string(encoded), c.Delegate)
+	if err != nil || tag.RowsAffected() == 0 {
+		return err
+	}
+	detail, err := json.Marshal(map[string]any{"plugin_access": access, "delegate": c.Delegate})
+	if err != nil {
+		return err
+	}
+	return appendEvent(ctx, tx, "credential.updated", c.ID, "bootstrap", detail)
+}
+
+const credentialColumns = "id,name,role,labels,remote_config,plugin_access,delegate,created_at,expires_at,revoked_at"
 
 func scanCredential(row scanner, withHash bool) (auth.Credential, error) {
 	var c auth.Credential
-	var labels []byte
-	dest := []any{&c.ID, &c.Name, &c.Role, &labels, &c.RemoteConfig, &c.CreatedAt, &c.ExpiresAt, &c.RevokedAt}
+	var labels, access []byte
+	dest := []any{&c.ID, &c.Name, &c.Role, &labels, &c.RemoteConfig, &access, &c.Delegate, &c.CreatedAt, &c.ExpiresAt, &c.RevokedAt}
 	if withHash {
-		dest = append(dest, &c.Hash)
+		dest = append(dest, &c.Hash, &c.PluginHash)
 	}
 	if err := row.Scan(dest...); err != nil {
 		return c, err
 	}
-	if err := json.Unmarshal(labels, &c.Labels); err != nil {
+	if json.Unmarshal(labels, &c.Labels) != nil || json.Unmarshal(access, &c.PluginAccess) != nil {
 		return c, fleet.ErrUnavailable
 	}
 	if len(c.Labels) == 0 {
 		c.Labels = nil
 	}
+	if len(c.PluginAccess) == 0 {
+		c.PluginAccess = nil
+	}
 	return c, nil
 }
 
-// CredentialByHash serves plugin introspection through the unique hash index.
-func (s *Store) CredentialByHash(ctx context.Context, hash []byte) (auth.Credential, error) {
+// CredentialByPluginHash serves plugin introspection through the unique
+// plugin hash index. The agent token's hash never matches.
+func (s *Store) CredentialByPluginHash(ctx context.Context, hash []byte) (auth.Credential, error) {
 	ctx, cancel := bounded(ctx)
 	defer cancel()
-	c, err := scanCredential(s.pool.QueryRow(ctx, "SELECT "+credentialColumns+",token_hash FROM fleet.credentials WHERE token_hash=$1", hash), true)
+	c, err := scanCredential(s.pool.QueryRow(ctx, "SELECT "+credentialColumns+",token_hash,plugin_hash FROM fleet.credentials WHERE plugin_hash=$1", hash), true)
 	return c, normalize(err)
 }
 func (s *Store) Credential(ctx context.Context, id string) (auth.Credential, error) {
 	ctx, cancel := bounded(ctx)
 	defer cancel()
-	c, err := scanCredential(s.pool.QueryRow(ctx, "SELECT "+credentialColumns+",token_hash FROM fleet.credentials WHERE id=$1", id), true)
+	c, err := scanCredential(s.pool.QueryRow(ctx, "SELECT "+credentialColumns+",token_hash,plugin_hash FROM fleet.credentials WHERE id=$1", id), true)
 	return c, normalize(err)
 }
 func (s *Store) ListCredentials(ctx context.Context, after string, limit int) (auth.CredentialPage, error) {
@@ -198,11 +228,20 @@ func insertCredential(ctx context.Context, tx pgx.Tx, c auth.Credential) error {
 	if count >= 1000 {
 		return fleet.ErrCapacity
 	}
-	labels, err := json.Marshal(c.Labels)
-	if err != nil || c.Labels == nil {
-		labels = []byte("{}")
+	var err error
+	labels, access := []byte("{}"), []byte("{}")
+	if c.Labels != nil {
+		if labels, err = json.Marshal(c.Labels); err != nil {
+			return err
+		}
 	}
-	_, err = tx.Exec(ctx, "INSERT INTO fleet.credentials(id,name,role,labels,remote_config,token_hash,created_at,expires_at) VALUES($1,$2,$3,$4::jsonb,$5,$6,$7,$8)", c.ID, c.Name, c.Role, string(labels), c.RemoteConfig, c.Hash, c.CreatedAt, c.ExpiresAt)
+	if c.PluginAccess != nil {
+		if access, err = json.Marshal(c.PluginAccess); err != nil {
+			return err
+		}
+	}
+	_, err = tx.Exec(ctx, "INSERT INTO fleet.credentials(id,name,role,labels,remote_config,plugin_access,delegate,token_hash,plugin_hash,created_at,expires_at) VALUES($1,$2,$3,$4::jsonb,$5,$6::jsonb,$7,$8,$9,$10,$11)",
+		c.ID, c.Name, c.Role, string(labels), c.RemoteConfig, string(access), c.Delegate, c.Hash, c.PluginHash, c.CreatedAt, c.ExpiresAt)
 	return err
 }
 func (s *Store) InsertCredential(ctx context.Context, actor string, c auth.Credential) error {

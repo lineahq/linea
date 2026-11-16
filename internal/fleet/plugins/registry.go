@@ -288,7 +288,8 @@ func (r *Registry) Get(id string) (Info, error) {
 }
 
 func (r *Registry) Status(ctx context.Context, id string, caller auth.Principal) (json.RawMessage, error) {
-	if caller.Role != "reader" && caller.Role != "operator" && caller.Role != "admin" {
+	access := caller.Access(id)
+	if caller.ID == "" || !pluginsdk.ValidAccess(access) {
 		return nil, auth.ErrForbidden
 	}
 	e := r.find(id)
@@ -300,7 +301,7 @@ func (r *Registry) Status(ctx context.Context, id string, caller auth.Principal)
 	}
 	var body json.RawMessage
 	before := e.snapshot()
-	headers := http.Header{pluginsdk.CallerIDHeader: {caller.ID}, pluginsdk.CallerRoleHeader: {caller.Role}}
+	headers := http.Header{pluginsdk.CallerIDHeader: {caller.ID}, pluginsdk.CallerAccessHeader: {access}}
 	if err := r.call(ctx, e, pluginsdk.StatusPath, headers, 32<<10, &body); err != nil {
 		return nil, err
 	}

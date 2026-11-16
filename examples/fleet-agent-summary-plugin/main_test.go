@@ -29,7 +29,7 @@ func TestStaleInstanceOrEpochIs421NotConflict(t *testing.T) {
 		req := httptest.NewRequest("GET", pluginsdk.APIPath+"v1/summary", nil)
 		req.Header.Set("Authorization", "Bearer "+p.serviceToken)
 		req.Header.Set(pluginsdk.CallerIDHeader, "caller")
-		req.Header.Set(pluginsdk.CallerRoleHeader, "admin")
+		req.Header.Set(pluginsdk.CallerAccessHeader, "read")
 		req.Header.Set(pluginsdk.InstanceHeader, instance)
 		req.Header.Set(pluginsdk.EpochHeader, epoch)
 		w := httptest.NewRecorder()

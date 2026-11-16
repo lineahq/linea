@@ -461,15 +461,15 @@ func TestPluginHTTPAuthorizesOwnerAndEpoch(t *testing.T) {
 		req := httptest.NewRequest("POST", pluginsdk.APIPath+"v1/captures", strings.NewReader("{}"))
 		req.Header.Set("Authorization", "Bearer "+s.config.serviceToken)
 		req.Header.Set(pluginsdk.CallerIDHeader, owner)
-		req.Header.Set(pluginsdk.CallerRoleHeader, role)
+		req.Header.Set(pluginsdk.CallerAccessHeader, role)
 		req.Header.Set(pluginsdk.InstanceHeader, s.instance)
 		req.Header.Set(pluginsdk.EpochHeader, epoch)
 		w := httptest.NewRecorder()
 		s.ServeHTTP(w, req)
 		return w
 	}
-	if call("reader", "owner", s.epoch).Code != 403 || call("admin", "owner", strings.Repeat("e", 32)).Code != pluginsdk.StatusMisdirected {
-		t.Fatal("role/epoch not enforced")
+	if call("read", "owner", s.epoch).Code != 403 || call("write", "owner", strings.Repeat("e", 32)).Code != pluginsdk.StatusMisdirected {
+		t.Fatal("access/epoch not enforced")
 	}
 	if _, err := s.Create(context.Background(), "owner", r); err != nil {
 		t.Fatal(err)
@@ -478,7 +478,7 @@ func TestPluginHTTPAuthorizesOwnerAndEpoch(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, pluginsdk.APIPath+"v1/captures", strings.NewReader(string(encoded[:len(encoded)-1])+`,"authorized_raw":true}`))
 	req.Header.Set("Authorization", "Bearer "+s.config.serviceToken)
 	req.Header.Set(pluginsdk.CallerIDHeader, "owner")
-	req.Header.Set(pluginsdk.CallerRoleHeader, "admin")
+	req.Header.Set(pluginsdk.CallerAccessHeader, "write")
 	req.Header.Set(pluginsdk.InstanceHeader, s.instance)
 	req.Header.Set(pluginsdk.EpochHeader, s.epoch)
 	w := httptest.NewRecorder()
@@ -488,26 +488,27 @@ func TestPluginHTTPAuthorizesOwnerAndEpoch(t *testing.T) {
 	}
 }
 
-func TestPluginHTTPRoleWrites(t *testing.T) {
+// Write and admin access may write; read and anything else may not.
+func TestPluginHTTPAccessWrites(t *testing.T) {
 	s, _, _ := fixture(t)
 	call := func(role string) int {
 		req := httptest.NewRequest("POST", pluginsdk.APIPath+"v1/captures", strings.NewReader("{}"))
 		req.Header.Set("Authorization", "Bearer "+s.config.serviceToken)
 		req.Header.Set(pluginsdk.CallerIDHeader, "owner")
-		req.Header.Set(pluginsdk.CallerRoleHeader, role)
+		req.Header.Set(pluginsdk.CallerAccessHeader, role)
 		req.Header.Set(pluginsdk.InstanceHeader, s.instance)
 		req.Header.Set(pluginsdk.EpochHeader, s.epoch)
 		w := httptest.NewRecorder()
 		s.ServeHTTP(w, req)
 		return w.Code
 	}
-	admin := call("admin")
-	if admin == 403 {
-		t.Fatal("admin write was refused")
+	write := call("write")
+	if write == 403 {
+		t.Fatal("write access was refused")
 	}
-	for role, refused := range map[string]bool{"admin": false, "operator": false, "reader": true, "agent": true, "": true} {
-		if got := call(role); (got == 403) != refused || !refused && got != admin {
-			t.Fatalf("role %q answered %d, admin answered %d", role, got, admin)
+	for level, refused := range map[string]bool{"admin": false, "write": false, "read": true, "operator": true, "reader": true, "": true} {
+		if got := call(level); (got == 403) != refused || !refused && got != write {
+			t.Fatalf("access %q answered %d, write answered %d", level, got, write)
 		}
 	}
 }
@@ -539,7 +540,7 @@ func TestCaptureRecordsActingForAndNamesBusyCollector(t *testing.T) {
 		}
 		req.Header.Set("Authorization", "Bearer "+s.config.serviceToken)
 		req.Header.Set(pluginsdk.CallerIDHeader, "owner")
-		req.Header.Set(pluginsdk.CallerRoleHeader, "admin")
+		req.Header.Set(pluginsdk.CallerAccessHeader, "write")
 		req.Header.Set(pluginsdk.InstanceHeader, s.instance)
 		req.Header.Set(pluginsdk.EpochHeader, s.epoch)
 		w := httptest.NewRecorder()

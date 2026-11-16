@@ -7,7 +7,7 @@ The plugin owns everything else about capture.
 | Topic | Detail |
 | --- | --- |
 | Plugin owns | Capture authorization, schemas, execution, gRPC and OTLP listeners, consumer delivery, its own PostgreSQL database |
-| Collector side | Unchanged components. Collectors authenticate with fleet agent credentials, so one core revocation stops both reporting and capture |
+| Collector side | Unchanged components. Collectors authenticate with the plugin token of their fleet agent credential, so one core revocation stops both reporting and capture |
 | Targets | Fleet agents, groups or selectors |
 | Versions | Plugin 0.5.0, API schema 3.0.0, on [host protocol 4](plugins.md) |
 | Without it | Fleet reporting stays independently usable |
@@ -148,8 +148,12 @@ components](../collector-components/README.md#build-a-collector-with-the-compone
 - Enable the extension in `service.extensions`. No local-control listener is
   needed.
 
-Collectors use the same fleet agent credential for OpAMP and capture. Issue
-it with a `capture` label listing the collector groups it may serve, or `*`:
+Collectors use one fleet agent credential for OpAMP and capture. Issue it
+with a `capture` label listing the collector groups it may serve, or `*`.
+The response carries two one-time tokens: `token` for OpAMP
+(`LINEA_FLEET_AGENT_TOKEN`) and `plugin_token` for the livecapture extension
+(`LINEA_FLEET_PLUGIN_TOKEN`). The plugin refuses the agent token, and fleet
+refuses the plugin token:
 
 ```sh
 curl -s -H "$ADMIN" -H 'Content-Type: application/json' -X POST http://127.0.0.1:8080/api/v1/credentials -d '{
@@ -169,7 +173,7 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8080/api/v1/credentials -Headers
 | Item | Detail |
 | --- | --- |
 | Label key | The plugin option `capture_label` selects another key |
-| Collector settings | Provision the plugin CA and the returned token securely. Set matching control and delivery addresses. Supply `LINEA_FLEET_AGENT_TOKEN`, `OTEL_CAPTURE_GROUP`, `POD_NAME`, `CLUSTER_NAME`, `POD_NAMESPACE` |
+| Collector settings | Provision the plugin CA and the returned tokens securely. Set matching control and delivery addresses. Supply `LINEA_FLEET_AGENT_TOKEN`, `LINEA_FLEET_PLUGIN_TOKEN`, `OTEL_CAPTURE_GROUP`, `POD_NAME`, `CLUSTER_NAME`, `POD_NAMESPACE` |
 | Reuse | Every replica can reuse the same credential. No per-pod registration. A Collector instance UID is bound to the credential that registered it while connected: another credential is refused, and pod churn creates new UIDs ([identity](README.md#register-collectors-with-a-deployment-token)) |
 | Registration | The first authenticated control report registers the capture peer and its catalog. The credential's label must include its reported collector group |
 | Refusal | A credential that is not an active agent credential with a valid label is refused (`Unauthenticated`) |
@@ -205,7 +209,7 @@ sequenceDiagram
   participant H as Fleet host services (8081)
   K->>F: OpAMP, agent token, agent description with k8s.pod.name, namespace, cluster
   Note over F: inventory records the agent
-  K->>L: control stream, same agent token, identity (pod, namespace, cluster, group)
+  K->>L: control stream, plugin token of the same credential, identity (pod, namespace, cluster, group)
   L->>H: credentials/introspect (token SHA-256)
   H-->>L: credential_id and labels, capture label must list the group
   L->>H: agents/resolve (credential_id and the same attributes)
@@ -232,7 +236,7 @@ at `v1/openapi.json` through this authenticated ingress.
 
 | Rule | Detail |
 | --- | --- |
-| Credential | A fleet admin or operator credential. Readers can discover peers and schemas but cannot create channels or captures |
+| Credential | A fleet management credential with `plugin_access` `{"livecapture": "write"}` (or `admin`, which acts as `write` for now). `read` can discover peers and schemas but cannot create channels or captures. The fleet role grants no access to the plugin |
 | Ownership | Capture and channel reads and ACKs are owner-only, even between admins |
 | Raw data | Default selection permits only catalog points marked redacted. Operator `raw_principals` is an explicit grant of credential IDs; admin alone never grants raw |
 | Filters on redacted points | Filters run before redaction, so a filter can test a value the copy will not show and reveal whether it matches ([configuration](../collector-components/configuration.md#filters)). Creating a capture on a redacted point is therefore more than reading redacted records |
@@ -562,7 +566,8 @@ never reuse the management, OpAMP or database credential.
 **Rotate a Collector credential** (it lives in core; no plugin restart):
 
 1. Issue a new labeled agent credential.
-2. Roll it out to the Collectors' OpAMP and livecapture headers.
+2. Roll out its `token` to the Collectors' OpAMP header and its
+   `plugin_token` to the livecapture headers.
 3. Revoke the old one with `DELETE /api/v1/credentials/{id}`. OpAMP
    disconnects immediately and capture streams within 10 s.
 

@@ -76,8 +76,8 @@ about 100 lines.
 | `APIPath` | `/fleet-plugin/v4/api/` | Prefix of the plugin's opaque public API |
 | `SessionPath` | `/fleet-host/v4/session` | Host; `HostClient.Session` |
 | `AgentsPath`, `AgentsResolvePath`, `GroupsResolvePath`, `IntrospectPath` | `/fleet-host/v4/...` | Host services |
-| `CallerIDHeader`, `CallerRoleHeader` | `X-Fleet-Caller-ID`, `X-Fleet-Caller-Role` | Fleet sets them on status and API calls |
-| `ActingIDHeader`, `ActingNameHeader`, `ActingRequestHeader` | `X-Fleet-Acting-ID`, `-Name`, `-Request` | Optional, validated; fleet forwards them on API calls. `ReadActing` parses them; attribution only |
+| `CallerIDHeader`, `CallerAccessHeader` | `X-Fleet-Caller-ID`, `X-Fleet-Caller-Access` | Fleet sets them on status and API calls for a caller with a grant on the plugin. `Caller` reads both; `AccessRead`, `AccessWrite`, `AccessAdmin` and `ValidAccess` name the levels |
+| `ActingIDHeader`, `ActingNameHeader`, `ActingRequestHeader` | `X-Fleet-Acting-ID`, `-Name`, `-Request` | Optional, validated; fleet accepts them only from a credential with `delegate` and forwards them on API calls. `ReadActing` parses them; attribution only |
 | `InstanceHeader`, `EpochHeader` | `X-Fleet-Plugin-Instance`, `X-Fleet-Plugin-Epoch` | Plugin sends them to the host; fleet sends them on API calls |
 | `StatusMisdirected` | 421 | A plugin answers it when instance or epoch differ from its session; fleet answers it on the host listener for the same reason and never forwards it to an API caller |
 | `AgentsRead`, `CredentialsIntrospect` | `agents.read`, `credentials.introspect` | Registration permissions |
@@ -102,7 +102,7 @@ about 100 lines.
 | `Agent`, `Health`, `AgentPage`, `AgentQuery` | Directory page and its query (`after`, `limit` 1-100, `selector`, `connected`) |
 | `ResolveRequest`, `ResolveResponse` | `{credential_id?, attributes, limit?}` → `{agent_ids, more}` |
 | `GroupResolveRequest`, `GroupResolveResponse` | `{group_id \| selector, connected?, limit?}` → `{agent_ids, revision}` |
-| `IntrospectRequest`, `Introspection` | `{token_sha256}` → `{active, credential_id, role, labels, expires_at}` |
+| `IntrospectRequest`, `Introspection` | `{token_sha256}` of an agent credential's plugin token → `{active, credential_id, role, labels, expires_at}` |
 
 Every receiver ignores fields it does not know, in both directions: fleet
 decoding the manifest and host requests, and the SDK decoding host answers.

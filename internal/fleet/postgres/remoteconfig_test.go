@@ -32,7 +32,7 @@ func TestPostgresRemoteConfig(t *testing.T) {
 	if err := Migrate(ctx, url); err != nil {
 		t.Fatal("fresh migration:", err)
 	}
-	issued, err := Bootstrap(ctx, url, "remote-config-fleet", "bootstrap-admin")
+	issued, err := Bootstrap(ctx, url, "remote-config-fleet", "bootstrap-admin", nil)
 	if err != nil {
 		t.Fatal("bootstrap:", err)
 	}

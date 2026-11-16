@@ -91,7 +91,7 @@ func TestReadOnlyPluginRoundTripAndIsolation(t *testing.T) {
 	if err != nil || info.State != "ready" {
 		t.Fatal("manifest handshake failed")
 	}
-	body, err := registry.Status(context.Background(), config.ID, auth.Principal{ID: "reader-fixture", Role: "reader"})
+	body, err := registry.Status(context.Background(), config.ID, auth.Principal{ID: "reader-fixture", Role: "reader", PluginAccess: map[string]string{config.ID: "read"}})
 	var status struct{ Returned, Connected int }
 	if err != nil || json.Unmarshal(body, &status) != nil || status.Returned != 1 || status.Connected != 1 {
 		t.Fatal("independent service did not read host inventory")
@@ -144,7 +144,7 @@ func TestManifestFailuresAndBoundedStatus(t *testing.T) {
 			return
 		}
 		if r.URL.Path == pluginsdk.StatusPath {
-			forwarded.Store(r.Header.Get(pluginsdk.CallerRoleHeader) == "reader" && r.Header.Get(pluginsdk.CallerIDHeader) == "caller-id" && r.Header.Get("Cookie") == "")
+			forwarded.Store(r.Header.Get(pluginsdk.CallerAccessHeader) == "read" && r.Header.Get(pluginsdk.CallerIDHeader) == "caller-id" && r.Header.Get("Cookie") == "")
 			switch mode.Load() {
 			case 10:
 				_, _ = w.Write([]byte(`{"payload":"` + strings.Repeat("x", 33<<10) + `"}`))
@@ -193,7 +193,7 @@ func TestManifestFailuresAndBoundedStatus(t *testing.T) {
 			t.Fatalf("mode %d: want %s got %s", tc.mode, tc.want, e.snapshot().State)
 		}
 	}
-	caller := auth.Principal{ID: "caller-id", Role: "reader"}
+	caller := auth.Principal{ID: "caller-id", Role: "reader", PluginAccess: map[string]string{e.config.ID: "read"}}
 	if _, err := registry.Status(context.Background(), e.config.ID, caller); err != nil || !forwarded.Load() {
 		t.Fatal("caller context was not safely propagated")
 	}
@@ -324,7 +324,7 @@ func TestSaturatedStatusCallsDoNotStarveManifestProbe(t *testing.T) {
 		t.Fatal("plugin did not become ready")
 	}
 	epoch := e.snapshot().Epoch
-	caller := auth.Principal{ID: "caller-id", Role: "reader"}
+	caller := auth.Principal{ID: "caller-id", Role: "reader", PluginAccess: map[string]string{e.config.ID: "read"}}
 	results := make(chan error, cap(e.calls))
 	for i := 0; i < cap(e.calls); i++ {
 		go func() {

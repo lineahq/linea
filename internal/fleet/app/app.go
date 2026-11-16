@@ -98,9 +98,14 @@ func runWithStore(ctx context.Context, cfg Config, version string, notify func(m
 		store = fleet.NewStore(cfg.Limits.MaxAgents)
 		apiAuth, _ := auth.New(cfg.APIToken)
 		agentAuth, _ := auth.New(cfg.AgentToken)
-		apiAccess = auth.Static{Bearer: apiAuth, Role: "reader"}
+		// Memory mode's one management token reads every registered plugin.
+		access := make(map[string]string, len(registrations))
+		for _, registration := range registrations {
+			access[registration.ID] = pluginsdk.AccessRead
+		}
+		apiAccess = auth.Static{Bearer: apiAuth, Role: "reader", PluginAccess: access}
 		agentAccess = auth.Static{Bearer: agentAuth, Role: "agent"}
-		introspector = auth.Static{Bearer: agentAuth, Role: "agent"}
+		introspector = auth.Static{}
 		cfg.Limits.MaxEvents = 0
 	}
 	var tlsConfig *tls.Config

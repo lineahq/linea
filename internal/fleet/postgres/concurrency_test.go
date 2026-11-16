@@ -33,7 +33,7 @@ func TestPostgresConcurrentControlWrites(t *testing.T) {
 	if err := Migrate(ctx, url); err != nil {
 		t.Fatal("migration:", err)
 	}
-	first, err := Bootstrap(ctx, url, "concurrency-fleet", "first-admin")
+	first, err := Bootstrap(ctx, url, "concurrency-fleet", "first-admin", nil)
 	if err != nil {
 		t.Fatal("bootstrap:", err)
 	}

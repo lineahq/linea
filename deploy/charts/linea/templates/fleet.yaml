@@ -267,11 +267,12 @@ spec:
           volumeMounts:
             - {name: migrate-url, mountPath: /etc/fleet/migrate, readOnly: true}
         # Installs the admin token as the first admin and the server's token as
-        # an operator; no change once they are.
+        # an operator that may write live captures and act for its users; a
+        # repeat only reapplies those grants.
         - name: bootstrap
           image: {{ include "linea.image" (dict "repository" $d.image.repository "tag" ($d.image.tag | default .Chart.AppVersion)) | quote }}
           imagePullPolicy: {{ $d.image.pullPolicy }}
-          args: [bootstrap, --server-id, {{ $d.serverID | quote }}, --name, deployment-admin, --operator-name, linea-server]
+          args: [bootstrap, --server-id, {{ $d.serverID | quote }}, --name, deployment-admin, --plugin-access, livecapture=admin, --operator-name, linea-server, --operator-plugin-access, livecapture=write, --operator-delegate]
           env:
             - {name: LINEA_FLEET_DATABASE_URL_FILE, value: /etc/fleet/runtime/url}
             - {name: LINEA_FLEET_BOOTSTRAP_TOKEN_FILE, value: /etc/fleet/bootstrap/token}
