@@ -116,6 +116,14 @@ func runWithStore(ctx context.Context, cfg Config, version string, notify func(m
 		}
 		tlsConfig = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}
 	}
+	hostTLS := tlsConfig
+	if cfg.PluginTLSCert != "" {
+		cert, err := tls.LoadX509KeyPair(cfg.PluginTLSCert, cfg.PluginTLSKey)
+		if err != nil {
+			return translog.ReasonTLSIdentity, fmt.Errorf("load plugin host TLS identity: %w", err)
+		}
+		hostTLS = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}
+	}
 	management, err := net.Listen("tcp", cfg.ManagementAddr)
 	if err != nil {
 		return translog.ReasonListenFailed, fmt.Errorf("management listen: %w", err)
@@ -212,7 +220,7 @@ func runWithStore(ctx context.Context, cfg Config, version string, notify func(m
 	errorsCh := make(chan error, 3)
 	serve := func(s *http.Server, l net.Listener) {
 		var err error
-		if tlsConfig != nil {
+		if s.TLSConfig != nil {
 			err = s.ServeTLS(l, "", "")
 		} else {
 			err = s.Serve(l)
@@ -225,6 +233,10 @@ func runWithStore(ctx context.Context, cfg Config, version string, notify func(m
 	if host != nil {
 		host = &limitedListener{Listener: host, slots: make(chan struct{}, 32)}
 		hostServer = makeServer(registry)
+		hostServer.TLSConfig = nil
+		if hostTLS != nil {
+			hostServer.TLSConfig = hostTLS.Clone()
+		}
 		hostServer.ReadHeaderTimeout = pluginsdk.RequestTimeout
 		hostServer.ReadTimeout = pluginsdk.RequestTimeout
 		hostServer.WriteTimeout = 2 * time.Second

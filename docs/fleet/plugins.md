@@ -53,8 +53,8 @@ credential. Build a plugin when you need one of:
   as the plugin toward fleet's host services. Keep both like an admin
   credential, and keep the plugin listener reachable only by fleet.
 - **Transport.** Bearer tokens, no mutual TLS. Use HTTPS to the plugin
-  (`ca_file` for a private CA) and `--tls-cert` on the host listener, with
-  the plugin's own CA option for it, unless the network between them is
+  (`ca_file` for a private CA) and `--tls-cert` or `--plugin-tls-cert` on
+  the host listener, with the plugin's own CA option for it, unless the network between them is
   private: then plain HTTP is acceptable only if no other workload can reach
   or observe that network.
 - **Instance ID:** the plugin picks a random one at every process start and
@@ -188,7 +188,8 @@ Tokens and the host listener:
 - The private host listener (`--plugin-listen`, default `127.0.0.1:8081`)
   exists only when registrations are configured. Keep it private: in Compose,
   use an internal network and publish no host port. `--tls-cert` also
-  protects it.
+  protects it; `--plugin-tls-cert` and `--plugin-tls-key` protect it alone,
+  for a deployment whose other listeners sit behind a TLS ingress.
 - Invalid configuration fails startup. An absent or failing plugin does not.
 - Process separation is not a sandbox against malicious code an operator
   installs. Grant only the permissions a plugin documents.

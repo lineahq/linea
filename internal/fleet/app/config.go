@@ -15,18 +15,22 @@ import (
 )
 
 type Config struct {
-	DrainTimeout        time.Duration
-	Storage             string
-	DatabaseURL         string
-	ManagementAddr      string
-	AgentAddr           string
-	PluginAddr          string
-	PluginsConfig       string
-	ServerID            string
-	APIToken            string
-	AgentToken          string
-	TLSCert             string
-	TLSKey              string
+	DrainTimeout   time.Duration
+	Storage        string
+	DatabaseURL    string
+	ManagementAddr string
+	AgentAddr      string
+	PluginAddr     string
+	PluginsConfig  string
+	ServerID       string
+	APIToken       string
+	AgentToken     string
+	TLSCert        string
+	TLSKey         string
+	// PluginTLSCert and PluginTLSKey serve the plugin host listener over
+	// TLS with their own identity, also when the other listeners are plain.
+	PluginTLSCert       string
+	PluginTLSKey        string
 	AllowInsecureRemote bool
 	Limits              api.Limits
 	// AgentRetention deletes agents disconnected for longer; zero keeps them.
@@ -102,6 +106,9 @@ func (c Config) Validate() error {
 	if (c.TLSCert == "") != (c.TLSKey == "") {
 		return errors.New("tls-cert and tls-key must be supplied together")
 	}
+	if (c.PluginTLSCert == "") != (c.PluginTLSKey == "") {
+		return errors.New("plugin-tls-cert and plugin-tls-key must be supplied together")
+	}
 	if c.Limits.MaxAgents < 1 || c.Limits.MaxAgents > 100000 || c.Limits.MaxConnections < 1 || c.Limits.MaxConnections > 10000 || c.Limits.MaxMessageBytes < 1024 || c.Limits.MaxMessageBytes > 16*1024*1024 {
 		return errors.New("limits must be within supported ranges: agents 1..100000, connections 1..10000, message bytes 1024..16777216")
 	}
@@ -111,17 +118,21 @@ func (c Config) Validate() error {
 	if c.Limits.MaxEvents < 1 || c.Limits.MaxEvents > 1000000 {
 		return errors.New("max-events must be within 1..1000000")
 	}
-	addresses := []string{c.ManagementAddr, c.AgentAddr}
-	if c.PluginsConfig != "" {
-		addresses = append(addresses, c.PluginAddr)
+	type listener struct {
+		address string
+		tls     bool
 	}
-	for _, address := range addresses {
-		host, _, err := net.SplitHostPort(address)
+	listeners := []listener{{c.ManagementAddr, c.TLSCert != ""}, {c.AgentAddr, c.TLSCert != ""}}
+	if c.PluginsConfig != "" {
+		listeners = append(listeners, listener{c.PluginAddr, c.TLSCert != "" || c.PluginTLSCert != ""})
+	}
+	for _, l := range listeners {
+		host, _, err := net.SplitHostPort(l.address)
 		if err != nil {
 			return fmt.Errorf("invalid listener address: %w", err)
 		}
 		ip := net.ParseIP(host)
-		if c.TLSCert == "" && !c.AllowInsecureRemote && (ip == nil || !ip.IsLoopback()) {
+		if !l.tls && !c.AllowInsecureRemote && (ip == nil || !ip.IsLoopback()) {
 			return errors.New("plain HTTP listeners must use literal loopback addresses; configure TLS or explicitly allow an insecure remote ingress")
 		}
 	}

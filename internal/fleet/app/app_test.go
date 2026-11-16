@@ -43,6 +43,13 @@ func TestConfigurationExposurePolicy(t *testing.T) {
 		{"unbounded-message", func(c *Config) { c.Limits.MaxMessageBytes = -1 }, false},
 		{"no-plugin-listener", func(c *Config) { c.PluginAddr = "unused-invalid-address" }, true},
 		{"remote-plugin-host", func(c *Config) { c.PluginsConfig = "operator.json"; c.PluginAddr = "0.0.0.0:8081" }, false},
+		{"remote-plugin-host-tls", func(c *Config) {
+			c.PluginsConfig, c.PluginAddr, c.PluginTLSCert, c.PluginTLSKey = "operator.json", "0.0.0.0:8081", "cert.pem", "key.pem"
+		}, true},
+		{"partial-plugin-tls", func(c *Config) { c.PluginTLSKey = "key.pem" }, false},
+		{"plugin-tls-not-for-core", func(c *Config) {
+			c.AgentAddr, c.PluginTLSCert, c.PluginTLSKey = "0.0.0.0:4320", "cert.pem", "key.pem"
+		}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := testConfig()
@@ -315,4 +322,78 @@ func TestAuthenticatedConnectionFreesItsSlot(t *testing.T) {
 	if got, open := len(l.slots), l.open.Load(); got != 0 || open != 0 {
 		t.Fatalf("after close: slots %d, open %d", got, open)
 	}
+}
+
+func TestPluginHostServesItsOwnTLS(t *testing.T) {
+	free := func() string {
+		t.Helper()
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		addr := l.Addr().String()
+		_ = l.Close()
+		return addr
+	}
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "host"), []byte(strings.Repeat("a", 64)), 0600)
+	_ = os.WriteFile(filepath.Join(dir, "service"), []byte(strings.Repeat("b", 64)), 0600)
+	registration := plugins.Config{ID: "offline", Version: "0.1.0", Endpoint: "http://127.0.0.1:8090", Enabled: false, Permissions: []string{}, HostTokenFile: "host", ServiceTokenFile: "service"}
+	body, _ := json.Marshal(map[string]any{"plugins": []plugins.Config{registration}})
+	fixture := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	secure := fixture.Client()
+	secure.Timeout = 3 * time.Second
+	identity := fixture.TLS.Certificates[0]
+	fixture.Close()
+	c := testConfig()
+	var err error
+	c.PluginTLSCert, c.PluginTLSKey, err = writeTLSFixture(t, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.PluginsConfig = filepath.Join(dir, "plugins.json")
+	_ = os.WriteFile(c.PluginsConfig, body, 0600)
+	c.ManagementAddr, c.AgentAddr, c.PluginAddr = free(), free(), free()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	started := make(chan struct{})
+	go func() { done <- Run(ctx, c, "test", func(net.Addr, net.Addr) { close(started) }) }()
+	select {
+	case <-started:
+	case err := <-done:
+		t.Fatalf("startup: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("startup timeout")
+	}
+	defer func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(6 * time.Second):
+			t.Error("shutdown timeout")
+		}
+	}()
+	plain := &http.Client{Timeout: 3 * time.Second}
+	// The management listener stays plain HTTP.
+	resp, err := plain.Get("http://" + c.ManagementAddr + "/api/v1/server")
+	if err != nil {
+		t.Fatal("management over HTTP:", err)
+	}
+	_ = resp.Body.Close()
+	// The plugin host answers over TLS with its own identity, and refuses
+	// plain HTTP.
+	resp, err = secure.Get("https://" + c.PluginAddr + "/")
+	if err != nil {
+		t.Fatal("plugin host over TLS:", err)
+	}
+	_ = resp.Body.Close()
+	resp, err = plain.Get("http://" + c.PluginAddr + "/")
+	if err == nil {
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("plugin host answered plain HTTP with %d", resp.StatusCode)
+		}
+	}
+	secure.CloseIdleConnections()
+	plain.CloseIdleConnections()
 }

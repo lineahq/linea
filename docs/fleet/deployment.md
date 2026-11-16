@@ -142,7 +142,8 @@ Optional Compose variables (environment or a protected env file):
 | --- | --- | --- |
 | `--storage` | `postgres` | `postgres` (durable) or `memory` (development) |
 | `--server-id` | required | Stable operator-assigned identity |
-| `--tls-cert`, `--tls-key` | none | Serve both listeners over HTTPS/WSS |
+| `--tls-cert`, `--tls-key` | none | Serve every listener over HTTPS/WSS |
+| `--plugin-tls-cert`, `--plugin-tls-key` | none | Serve the plugin host listener alone over HTTPS with this identity, in place of `--tls-cert` there; the other listeners keep theirs |
 | `--max-agents` | | Inventory capacity (1 to 100,000). At the limit, registration evicts the longest-disconnected agent before refusing |
 | `--max-connections` | | Agent sessions per replica (1 to 10,000), and separately agent TCP connections that have not yet presented an agent credential. A replica holds at most twice this many agent connections |
 | `--max-message-bytes` | 1 MiB | Largest OpAMP message an agent may send (1 KiB to 16 MiB); a larger one closes the session. Fleet sends up to the larger of this and 1,029 KiB, the largest remote config (8 layers of 128 KiB) |

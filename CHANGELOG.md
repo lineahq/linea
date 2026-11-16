@@ -345,6 +345,9 @@ the first item below.
   way; opting out is never refused.
 - Fleet serializes group, config, credential and plugin row creations that a
   row cap bounds, so concurrent creations can no longer pass the cap together.
+- Fleet's `--plugin-tls-cert` and `--plugin-tls-key` serve the plugin host
+  listener over HTTPS with its own identity while the other listeners stay
+  plain behind a TLS ingress.
 - The live capture plugin introspects the credential of every new control
   stream instead of reusing a cached admission, so a revoked credential cannot
   reconnect from the cache. Delivery requests still use the cache.
