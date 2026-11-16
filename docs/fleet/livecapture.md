@@ -387,9 +387,13 @@ Instead of `targets`, a request may name exactly one of:
 - A Collector serves one capture at a time.
 - A named peer or agent already serving one, or a group or selector whose
   eligible peers are all busy, is refused with HTTP 409 and error code
-  `collector_busy`. Other conflicts keep `capture_request_refused`.
+  `collector_busy`. That holds also after a stop, a reconnect or a plugin
+  restart, while the earlier capture still reserves the Collector. Other
+  conflicts keep `capture_request_refused`.
 - The Collector is free again once its target reports terminal, or 5 s after
-  the operation's expiry.
+  the operation's expiry. A capture stopped before its session was sent to a
+  Collector never ran there: the stop releases that target at once, and an
+  operation with no other target ends `stopped` in the stop's answer.
 
 ### Outcomes and retries
 

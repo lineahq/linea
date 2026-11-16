@@ -353,12 +353,10 @@ func TestFleetTargeting(t *testing.T) {
 	if seen.GroupID != group || seen.Connected == nil || !*seen.Connected {
 		t.Fatalf("group resolve request %+v", seen)
 	}
-	if _, err := s.Stop(context.Background(), "owner", op.ID, op.Revision); err != nil {
-		t.Fatal(err)
+	// Never sent, so the stop frees the peer at once.
+	if stopped, err := s.Stop(context.Background(), "owner", op.ID, op.Revision); err != nil || stopped.State != "stopped" {
+		t.Fatal(stopped.State, err)
 	}
-	s.mu.Lock()
-	s.applyReportLocked(p, report{Statuses: []collectorStatus{{SessionID: s.operations[op.ID].op.Targets[0].WireID, State: "completed"}}})
-	s.mu.Unlock()
 
 	op, err = s.Create(context.Background(), "owner", request(func(c *CreateRequest) { c.Agents = []string{agent} }))
 	if err != nil || len(op.Targets) != 1 || op.Targets[0].AgentID != agent {

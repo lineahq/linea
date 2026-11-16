@@ -312,6 +312,10 @@ func (s *Server) desiredLocked(p *peer) (*controlpb.DesiredState, error) {
 						return nil, err
 					}
 					message.Sessions = append(message.Sessions, session)
+					if a.sent == nil {
+						a.sent = map[string]bool{}
+					}
+					a.sent[t.WireID] = true
 				}
 			}
 		}
@@ -401,42 +405,22 @@ func (s *Server) applyReportLocked(p *peer, r report) {
 				a.op.Reason = "collector_rejected"
 			}
 			s.stopLocked(a, "stopping")
+			if s.operations[a.op.ID] != a {
+				continue // the stop settled it
+			}
 		}
 		// A target that already ended counts as started, so a capture
 		// whose first Collector finishes before the last one starts
 		// still leaves starting.
-		allActive, allDone := true, true
+		allActive := true
 		for _, t := range a.op.Targets {
 			allActive = allActive && (t.State == "active" || t.Released)
-			allDone = allDone && t.Released
 		}
 		if allActive && a.op.State == "starting" {
 			a.op.State = "active"
 		}
-		if allDone {
-			if a.op.State == "stopping" {
-				a.op.State = "stopped"
-			} else {
-				a.op.State = "completed"
-			}
-			for _, t := range a.op.Targets {
-				if t.State == "expired" {
-					a.op.State = "expired"
-					if a.op.Reason == "" {
-						a.op.Reason = "absolute_expiry"
-					}
-				}
-				if t.State == "failed" || t.State == "disabled" {
-					a.op.State = "failed"
-					if a.op.Reason == "" {
-						a.op.Reason = "collector_rejected"
-					}
-				}
-			}
-		}
-		s.saveLocked(a)
-		if allDone {
-			delete(s.operations, a.op.ID)
+		if !s.settleLocked(a) {
+			s.saveLocked(a)
 		}
 	}
 }

@@ -42,6 +42,10 @@ type activeOperation struct {
 	// inserted it.
 	inserting bool
 	inserted  chan struct{}
+	// sent holds the wire IDs of the targets whose session went into a
+	// desired state. Only those can run at a Collector; a stop releases the
+	// others at once.
+	sent map[string]bool
 }
 type Server struct {
 	mu           sync.Mutex
@@ -177,7 +181,16 @@ func (s *Server) stopLocked(a *activeOperation, state string) {
 		if state == "expired" {
 			expireTargets(a.op.Targets)
 		}
-		s.saveLocked(a)
+		if state == "stopping" {
+			for i, t := range a.op.Targets {
+				if !t.Released && !a.sent[t.WireID] {
+					a.op.Targets[i].Released = true
+				}
+			}
+		}
+		if state == "expired" || !s.settleLocked(a) {
+			s.saveLocked(a)
+		}
 	}
 	for _, t := range a.op.Targets {
 		if p := s.peers[t.PeerID]; p != nil && p.info.Generation == t.Generation && p.operation == a.op.ID {
@@ -185,6 +198,38 @@ func (s *Server) stopLocked(a *activeOperation, state string) {
 			p.wakeup()
 		}
 	}
+}
+
+// settleLocked ends an operation once every target is released: it decides
+// the final state from the targets, saves it and forgets the operation.
+func (s *Server) settleLocked(a *activeOperation) bool {
+	for _, t := range a.op.Targets {
+		if !t.Released {
+			return false
+		}
+	}
+	if a.op.State == "stopping" {
+		a.op.State = "stopped"
+	} else {
+		a.op.State = "completed"
+	}
+	for _, t := range a.op.Targets {
+		if t.State == "expired" {
+			a.op.State = "expired"
+			if a.op.Reason == "" {
+				a.op.Reason = "absolute_expiry"
+			}
+		}
+		if t.State == "failed" || t.State == "disabled" {
+			a.op.State = "failed"
+			if a.op.Reason == "" {
+				a.op.Reason = "collector_rejected"
+			}
+		}
+	}
+	s.saveLocked(a)
+	delete(s.operations, a.op.ID)
+	return true
 }
 
 // expireTargets ends targets with the operation's absolute expiry, which every

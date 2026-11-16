@@ -428,8 +428,14 @@ func (s *Store) Insert(ctx context.Context, op Operation) error {
 			if gen != t.Generation {
 				return ErrConflict
 			}
-			if _, err = tx.Exec(ctx, "INSERT INTO capture.leases(peer_id,operation_id,expires_at) VALUES($1,$2,$3)", t.PeerID, op.ID, op.ExpiresAt.Add(5*time.Second)); err != nil {
+			// A lease left by an earlier operation, not yet released or
+			// expired, means the Collector may still run that capture.
+			leased, err := tx.Exec(ctx, "INSERT INTO capture.leases(peer_id,operation_id,expires_at) VALUES($1,$2,$3) ON CONFLICT (peer_id) DO NOTHING", t.PeerID, op.ID, op.ExpiresAt.Add(5*time.Second))
+			if err != nil {
 				return err
+			}
+			if leased.RowsAffected() == 0 {
+				return ErrPeerBusy
 			}
 		}
 		return tx.Commit(ctx)

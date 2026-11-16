@@ -110,7 +110,7 @@ func (r *memoryRepo) Insert(_ context.Context, op Operation) error {
 	}
 	for _, t := range op.Targets {
 		if r.leases[t.PeerID] != "" {
-			return ErrConflict
+			return ErrPeerBusy
 		}
 	}
 	r.ops[op.ID] = cloneOperation(op)
@@ -197,6 +197,7 @@ func TestAdmissionOwnerRawGenerationAndIdempotency(t *testing.T) {
 	if _, err := s.Stop(context.Background(), "owner", op.ID, 100); !errors.Is(err, ErrPrecondition) {
 		t.Fatal("stale stop admitted")
 	}
+	send(t, s, p)
 	stop, err := s.Stop(context.Background(), "owner", op.ID, 1)
 	if err != nil || stop.State != "stopping" || p.operation != "" {
 		t.Fatal("stop did not fence desired start")
@@ -209,8 +210,8 @@ func TestAdmissionOwnerRawGenerationAndIdempotency(t *testing.T) {
 	}
 	r.ID = pluginsdk.RandomID()
 	r.Limits.TotalRecords = 0
-	if _, err := s.Create(context.Background(), "owner", r); !errors.Is(err, ErrConflict) {
-		t.Fatal("uncertain stop released durable reservation")
+	if _, err := s.Create(context.Background(), "owner", r); !errors.Is(err, ErrPeerBusy) {
+		t.Fatal("uncertain stop released durable reservation", err)
 	}
 	wire := s.operations[op.ID].op.Targets[0].WireID
 	s.mu.Lock()
@@ -423,11 +424,12 @@ func TestDeliveryDropsAndCountsWhatDoesNotFit(t *testing.T) {
 }
 
 func TestStoppingTargetDrainsUntilReleased(t *testing.T) {
-	s, r, _ := fixture(t)
+	s, r, p := fixture(t)
 	op, err := s.Create(context.Background(), "owner", r)
 	if err != nil {
 		t.Fatal(err)
 	}
+	send(t, s, p)
 	attributes := pcommon.NewMap()
 	for key, value := range map[string]string{"capture.session.id": s.operations[op.ID].op.Targets[0].WireID, "capture.point": "egress", "capture.pipeline": "traces", "capture.collector.pod": "pod", "capture.cluster": "cluster"} {
 		attributes.PutStr(key, value)
@@ -609,5 +611,42 @@ func TestStartingLeavesWhenOneTargetEndsFirst(t *testing.T) {
 	s.mu.Unlock()
 	if state != "active" {
 		t.Fatalf("state %q after the last target started, want active", state)
+	}
+}
+
+// send builds p's desired state as its sender would, so the sessions in it
+// count as sent.
+func send(t *testing.T, s *Server, p *peer) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.desiredLocked(p); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A capture stopped before its session went into a desired state never ran,
+// so the stop ends it at once and frees the Collector.
+func TestStopBeforeSendReleasesTheCollector(t *testing.T) {
+	s, request, p := fixture(t)
+	op, err := s.Create(context.Background(), "owner", request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped, err := s.Stop(context.Background(), "owner", op.ID, op.Revision)
+	if err != nil || stopped.State != "stopped" || !stopped.Targets[0].Released {
+		t.Fatalf("stop before send: %+v %v", stopped, err)
+	}
+	s.mu.Lock()
+	_, held := s.operations[op.ID]
+	message, err := s.desiredLocked(p)
+	s.mu.Unlock()
+	if held || err != nil || len(message.GetSessions()) != 0 {
+		t.Fatal("stopped capture kept or sent", held, err)
+	}
+	s.saves.waitSettled()
+	request.ID = pluginsdk.RandomID()
+	if _, err := s.Create(context.Background(), "owner", request); err != nil {
+		t.Fatal("collector still reserved after a stop before send", err)
 	}
 }

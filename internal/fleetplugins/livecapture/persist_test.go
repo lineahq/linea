@@ -70,6 +70,7 @@ func TestSavesAreWrittenBehindTheLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	send(t, s, p)
 	drain(repo.entered)
 	wire := op.Targets[0].WireID
 	repo.hold.Lock()

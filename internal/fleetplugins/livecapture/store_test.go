@@ -115,7 +115,7 @@ func TestPostgresReservationRecoveryAndGrants(t *testing.T) {
 		t.Fatal("admission failed", err)
 	}
 	overlap := makeOp()
-	if err := store.Insert(ctx, overlap); !errors.Is(err, ErrConflict) {
+	if err := store.Insert(ctx, overlap); !errors.Is(err, ErrPeerBusy) {
 		t.Fatal("overlapping clients admitted", err)
 	}
 	if _, err := store.Get(ctx, overlap.ID); !errors.Is(err, ErrNotFound) {
@@ -126,7 +126,7 @@ func TestPostgresReservationRecoveryAndGrants(t *testing.T) {
 	if err := store.Save(ctx, op, 1); err != nil {
 		t.Fatal("stop persistence failed")
 	}
-	if err := store.Insert(ctx, overlap); !errors.Is(err, ErrConflict) {
+	if err := store.Insert(ctx, overlap); !errors.Is(err, ErrPeerBusy) {
 		t.Fatal("unconfirmed stop released reservation")
 	}
 	store.Close()

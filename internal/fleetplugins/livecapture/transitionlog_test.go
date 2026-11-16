@@ -41,6 +41,7 @@ func TestOperationTransitionsAreLogged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	send(t, s, p)
 	wire := op.Targets[0].WireID
 	s.mu.Lock()
 	s.applyReportLocked(p, report{Statuses: []collectorStatus{{SessionID: wire, State: "active"}}})
