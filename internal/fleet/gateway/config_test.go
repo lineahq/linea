@@ -212,9 +212,14 @@ func (a *agent) quiet(caps uint64) {
 
 func serve(t *testing.T, src *source, hs *holds) (*Gateway, string, string) {
 	t.Helper()
+	return serveLimited(t, src, hs, 1<<20)
+}
+
+func serveLimited(t *testing.T, src *source, hs *holds, maxMessageBytes int64) (*Gateway, string, string) {
+	t.Helper()
 	token := strings.Repeat("a", 32)
 	a, _ := auth.New(token)
-	g, err := New(fleet.NewStore(4), a, 4, 1<<20)
+	g, err := New(fleet.NewStore(4), a, 4, maxMessageBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -528,5 +533,20 @@ func TestUnmanagedCredentialResolvesNoBuild(t *testing.T) {
 	a.exchange(&protobufs.AgentToServer{Capabilities: reportsComponents, AvailableComponents: build(hash, "otlp")})
 	if _, err := hs.ComponentSet(context.Background(), hex.EncodeToString(hash)); err == nil {
 		t.Fatal("component set stored for a credential without the opt-in")
+	}
+}
+
+// TestRemoteConfigAboveTheReceiveLimitIsSent covers the largest remote
+// config: it exceeds what agents may send and still reaches them.
+func TestRemoteConfigAboveTheReceiveLimitIsSent(t *testing.T) {
+	uid := bytes.Repeat([]byte{5}, 16)
+	body := "receivers: {otlp: {}}\n# " + strings.Repeat("x", 4096) + "\n"
+	src := &source{bodies: map[int]string{1: body}, credentials: map[string]map[string]string{"memory-agent": nil}}
+	src.assign(t, hex.EncodeToString(uid), 1)
+	g, url, token := serveLimited(t, src, &holds{held: map[string]string{}}, 1024)
+	a := &agent{t: t, g: g, c: dial(t, url, token), uid: uid}
+	r := a.report(acceptsRemoteConfig, nil)
+	if r.RemoteConfig == nil || string(r.RemoteConfig.Config.ConfigMap["10-base"].Body) != body {
+		t.Fatal("remote config above the receive limit was not sent")
 	}
 }

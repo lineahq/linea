@@ -26,6 +26,7 @@ import (
 	"github.com/open-telemetry/opamp-go/protobufs"
 	"github.com/open-telemetry/opamp-go/server"
 	"github.com/open-telemetry/opamp-go/server/types"
+	"google.golang.org/protobuf/proto"
 )
 
 type session struct {
@@ -113,7 +114,9 @@ func refuse(w http.ResponseWriter, message string, code int) {
 
 type handshakeKey struct{}
 type Gateway struct {
-	store            fleet.Repository
+	store fleet.Repository
+	// maxMessageBytes bounds what agents send; see NewAuthorized.
+	maxMessageBytes  int64
 	access           auth.Authorizer
 	verifyGrace      atomic.Int64 // nanoseconds
 	idleTimeout      atomic.Int64 // nanoseconds
@@ -156,9 +159,11 @@ func NewAuthorized(store fleet.Repository, access auth.Authorizer, ingest *inven
 		ingest, _ = inventory.New(nil, false)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	g := &Gateway{store: store, access: access, ingest: ingest, maxConnections: maxConnections, connections: make(map[types.Connection]*session), agents: map[string]agentEntry{}, admission: newAdmission(DefaultPendingSessions), ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	g := &Gateway{store: store, access: access, ingest: ingest, maxConnections: maxConnections, maxMessageBytes: maxMessageBytes, connections: make(map[types.Connection]*session), agents: map[string]agentEntry{}, admission: newAdmission(DefaultPendingSessions), ctx: ctx, cancel: cancel, done: make(chan struct{})}
 	s := server.New(nil)
-	h, _, err := s.Attach(server.Settings{MaxMessageSize: maxMessageBytes, Callbacks: types.Callbacks{OnConnecting: g.connecting}})
+	// opamp-go applies one limit to both directions. Its limit admits the
+	// largest remote config; message() enforces the receive limit.
+	h, _, err := s.Attach(server.Settings{MaxMessageSize: max(maxMessageBytes, configmgmt.MaxRemoteConfigBytes), Callbacks: types.Callbacks{OnConnecting: g.connecting}})
 	if err != nil {
 		cancel()
 		return nil, err
@@ -318,6 +323,10 @@ func (g *Gateway) message(_ context.Context, c types.Connection, m *protobufs.Ag
 	closed := g.closed
 	g.mu.Unlock()
 	if !ok || closed {
+		disconnect(c)
+		return nil
+	}
+	if int64(proto.Size(m)) > g.maxMessageBytes {
 		disconnect(c)
 		return nil
 	}

@@ -15,14 +15,20 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// Bounds keep one RemoteConfig within the agent message limit (1 MiB).
+// Bounds of one RemoteConfig. The largest one exceeds the default 1 MiB
+// receive limit, so the gateway sends up to MaxRemoteConfigBytes whatever
+// --max-message-bytes allows agents to send.
 const (
-	MaxBodyBytes   = 128 * 1024
-	MaxLayers      = 8
-	MaxAssignments = 1000
-	MaxLayer       = 99
-	maxDepth       = 32
-	maxNodes       = 20000
+	MaxBodyBytes = 128 * 1024
+	MaxLayers    = 8
+	// MaxRemoteConfigBytes bounds a server message carrying the largest
+	// RemoteConfig: every body, plus room per entry for its name and
+	// content type and for the hash, flags and framing.
+	MaxRemoteConfigBytes = MaxLayers*(MaxBodyBytes+512) + 1024
+	MaxAssignments       = 1000
+	MaxLayer             = 99
+	maxDepth             = 32
+	maxNodes             = 20000
 )
 
 // ValidationError names where a version body is rejected. It never carries

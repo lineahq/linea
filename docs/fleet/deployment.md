@@ -145,6 +145,7 @@ Optional Compose variables (environment or a protected env file):
 | `--tls-cert`, `--tls-key` | none | Serve both listeners over HTTPS/WSS |
 | `--max-agents` | | Inventory capacity (1 to 100,000). At the limit, registration evicts the longest-disconnected agent before refusing |
 | `--max-connections` | | Agent sessions per replica (1 to 10,000), and separately agent TCP connections that have not yet presented an agent credential. A replica holds at most twice this many agent connections |
+| `--max-message-bytes` | 1 MiB | Largest OpAMP message an agent may send (1 KiB to 16 MiB); a larger one closes the session. Fleet sends up to the larger of this and 1,029 KiB, the largest remote config (8 layers of 128 KiB) |
 | `--max-pending-sessions` | 400 | Handshakes per replica between admission and first commit (1 to 10,000) |
 | `--max-events` | 100,000 | Retained events (1 to 1,000,000); keep at least two per agent |
 | `--drain-timeout` | 20 s | Window for closing agent sockets on stop (0 to 30 s) |
