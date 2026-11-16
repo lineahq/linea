@@ -122,6 +122,27 @@ func (w *writer) submit(ctx context.Context, o *op) opResult {
 	}
 }
 
+// maxAgentWrites bounds the writes agents cause outside the writer queue
+// (failure holds and component sets), so a storm of them can take at most
+// this many of the pool's sessions.
+const maxAgentWrites = 2
+
+// agentWrite admits one write an agent caused. It refuses with ErrBusy while
+// the writer is backlogged or maxAgentWrites are running, so these writes
+// yield to the reports that keep agents connected; the gateway retries with
+// a later evaluation.
+func (s *Store) agentWrite() (release func(), err error) {
+	if s.writer.Busy() {
+		return nil, fleet.ErrBusy
+	}
+	select {
+	case s.agentWrites <- struct{}{}:
+		return func() { <-s.agentWrites }, nil
+	default:
+		return nil, fleet.ErrBusy
+	}
+}
+
 // Busy estimates whether new sessions would wait longer than the budget.
 // overflowRelease defers a release instead of dropping it: a lost release
 // would leave the agent owned by this live replica.

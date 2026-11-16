@@ -334,6 +334,9 @@ per build, and only of agents whose credential has `remote_config`.
   never arrives within 10 s, or the store holds its 1,000 builds), nothing
   is sent to it: the config is withheld with reason `unverified_components`.
   Its rollout targets stay released until the wave times out.
+- Writes that agents cause (a failure hold, a new component set) yield to
+  agent reports: at most two run at once per replica, none while the report
+  writer is backlogged, and a refused write is retried with a later message.
 
 - A version using a type the build lacks is not released to that build's
   agents. Their rollout targets end `incompatible`, which neither blocks
