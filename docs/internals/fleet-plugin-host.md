@@ -97,8 +97,9 @@ store returns `SeenAge` (negative when unseen) computed in SQL.
   clock (`fleet.Store.SetClock`), so memory mode now has a lifecycle store
   too; it does not survive a restart, and it checks no actor (the registry
   checks the caller's role). It sends no hint; one process needs none.
-- `internal/fleet/fleettest` holds the contract suite for both stores
-  (`RunPluginState`). PostgreSQL also has tests for the hints, for a probe,
+- `internal/fleet/fleettest` holds the contract suites for both stores:
+  `RunPluginState`, and `RunInventory` for agent generation fencing, the
+  binding of a connected UID to its credential and paging. PostgreSQL also has tests for the hints, for a probe,
   a fence and lifecycle changes racing on one row, and for the migration of
   existing rows (`scripts/fleet/test-postgres.sh`).
 
