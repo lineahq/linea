@@ -67,7 +67,7 @@ func TestIncompatibleTargetsDoNotBlockWaves(t *testing.T) {
 	now := time.Now()
 	r := Rollout{State: Running, CurrentWave: 0, WaveCount: 2, PhaseStartedAt: now, Policy: DefaultPolicy()}
 	open := []Observation{{AgentID: "a", Wave: 0, Outcome: OutcomeReleased, Connected: true, Incompatible: true}}
-	step := Evaluate(r, open, nil, now)
+	step := Evaluate(r, open, map[int]Tally{0: {Settled: 1, Succeeded: 1}}, now)
 	if len(step.Updates) != 1 || step.Updates[0].Outcome != OutcomeIncompatible || step.Action != ReleaseWave {
 		t.Fatalf("step %+v", step)
 	}

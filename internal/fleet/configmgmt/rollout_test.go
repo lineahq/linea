@@ -263,7 +263,7 @@ func TestEvaluateFailureThresholdPausesOrRollsBack(t *testing.T) {
 		t.Fatal("unhealthy target is not a failure", step)
 	}
 	// Failures accepted on resume do not count again.
-	if step := Evaluate(r, nil, map[int]Tally{0: {Settled: 1}}, c.now); step.Action != Complete {
+	if step := Evaluate(r, nil, map[int]Tally{0: {Settled: 1, Accepted: 1}}, c.now); step.Action != Complete {
 		t.Fatal("accepted failure blocked the rollout", step)
 	}
 	// The total threshold applies across waves.
@@ -280,7 +280,8 @@ func TestEvaluateOfflineAndTimeouts(t *testing.T) {
 	r := Rollout{State: Running, CurrentWave: 1, WaveCount: 3, PhaseStartedAt: c.now, Policy: DefaultPolicy()}
 	gone := released("a", 1)
 	gone.Connected = false
-	step := Evaluate(r, []Observation{gone}, nil, c.advance(time.Second))
+	succeeded := map[int]Tally{1: {Settled: 1, Succeeded: 1}}
+	step := Evaluate(r, []Observation{gone}, succeeded, c.advance(time.Second))
 	if step.Action != ReleaseWave || step.Updates[0].Outcome != OutcomeOffline {
 		t.Fatal("offline target blocked its wave", step)
 	}
@@ -295,7 +296,7 @@ func TestEvaluateOfflineAndTimeouts(t *testing.T) {
 	}
 	// An earlier wave's straggler never times out or blocks.
 	late := released("c", 0)
-	if step := Evaluate(r, []Observation{late}, nil, c.now); step.Action != ReleaseWave || len(step.Updates) != 0 {
+	if step := Evaluate(r, []Observation{late}, succeeded, c.now); step.Action != ReleaseWave || len(step.Updates) != 0 {
 		t.Fatal("earlier wave straggler blocked", step)
 	}
 	// A target baking at the timeout is not timed out.
@@ -309,7 +310,7 @@ func TestEvaluateOfflineAndTimeouts(t *testing.T) {
 	// A target that no longer receives remote config is settled, not failed.
 	none := released("e", 1)
 	none.Desired = nil
-	if step := Evaluate(r, []Observation{none}, nil, c.now); step.Action != ReleaseWave || step.Updates[0].Outcome != OutcomeUnmatched {
+	if step := Evaluate(r, []Observation{none}, succeeded, c.now); step.Action != ReleaseWave || step.Updates[0].Outcome != OutcomeUnmatched {
 		t.Fatal("unmatched target", step)
 	}
 }
@@ -394,5 +395,34 @@ func TestMatchAppliesRolloutOverride(t *testing.T) {
 	}
 	if got := Match([]Target{created}, b, nil, nil); len(got) != 0 {
 		t.Fatal("unreleased target got the new layer", got)
+	}
+}
+
+// A wave passes only once one of its targets succeeded or an operator
+// accepted its failures. A wave of offline or incompatible agents waits for
+// the wave timeout and then pauses.
+func TestEvaluateWaveNeedsOneSuccess(t *testing.T) {
+	c := &clock{now: time.Unix(1_000_000, 0)}
+	r := Rollout{State: Running, CurrentWave: 0, WaveCount: 2, PhaseStartedAt: c.now, Policy: DefaultPolicy()}
+	gone := released("a", 0)
+	gone.Connected = false
+	odd := released("b", 0)
+	odd.Incompatible = true
+	if step := Evaluate(r, []Observation{gone, odd}, nil, c.advance(time.Minute)); step.Action != NoAction {
+		t.Fatal("a wave without a success advanced", step)
+	}
+	if step := Evaluate(r, []Observation{gone, odd}, map[int]Tally{0: {Settled: 1}}, c.now); step.Action != NoAction {
+		t.Fatal("an unmatched target counted as a success", step)
+	}
+	if step := Evaluate(r, []Observation{gone, odd}, nil, c.advance(r.Policy.WaveTimeout())); step.Action != PauseAction {
+		t.Fatal("a wave without a success did not pause at the timeout", step)
+	}
+	// An earlier wave's success does not carry over.
+	r.CurrentWave = 1
+	if step := Evaluate(r, nil, map[int]Tally{0: {Settled: 1, Succeeded: 1}}, c.now); step.Action != PauseAction {
+		t.Fatal("an earlier wave's success passed an empty wave", step)
+	}
+	if step := Evaluate(r, nil, map[int]Tally{1: {Settled: 1, Succeeded: 1}}, c.now); step.Action != Complete {
+		t.Fatal("a successful last wave did not complete", step)
 	}
 }

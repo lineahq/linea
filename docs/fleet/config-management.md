@@ -262,17 +262,22 @@ curl -s -H "$ADMIN" -H 'Content-Type: application/json' -X POST $API/rollouts -d
 | `waves` | 1 agent, 5 %, 25 %, 100 % | Cumulative boundaries by `count` or `percent`, up to 10 |
 | `canary_group_id` | none | This group's targets form wave 0, before the waves |
 | `bake_seconds` | 120 | How long a target must stay applied and healthy to succeed |
-| `wave_timeout_seconds` | 900 | Connected targets of the current wave that have not applied by then time out |
+| `wave_timeout_seconds` | 900 | Connected targets of the current wave that have not applied by then time out. A wave with no `succeeded` target by then pauses the rollout |
 | `max_failures`, `max_failure_percent` | 0, 5 | The rollout breaches when failures exceed the larger of the two, per wave or in total |
 | `on_failure` | `pause` | `pause` or `rollback` on a breach |
 
-The target set is fixed when the rollout starts. Target outcomes:
+The target set is fixed when the rollout starts. A wave passes only once at
+least one of its targets `succeeded`, or an operator accepted its failures
+with `:resume`. A wave whose agents are all offline, incompatible or
+unmatched proves nothing about the version: it waits for the wave timeout,
+in case an agent comes back, and then pauses with reason `threshold`.
+Target outcomes:
 
 | Outcome | Meaning | Counts against thresholds |
 | --- | --- | --- |
 | `succeeded` | Applied and stayed healthy | no |
 | `failed`, `unhealthy`, `timed_out` | Failure | yes |
-| `offline` | Disconnected | no, and does not block waves |
+| `offline` | Disconnected | no, and does not block waves that have a success |
 | `unmatched` | No longer targeted | no |
 | `incompatible` | Build lacks a component type ([below](#component-compatibility)) | no |
 
@@ -283,7 +288,7 @@ Watch with `GET $API/rollouts/{id}` and
 | Action | Effect |
 | --- | --- |
 | `:pause` | Stops releasing waves |
-| `:resume` | Continues; accepts the failures seen so far |
+| `:resume` | Continues; accepts the failures seen so far and restarts the current wave's timeout |
 | `:rollback` | Returns every released target to the assignment's previous version at once; ends `rolled_back` when they report it |
 | `:cancel` | Ends the rollout at once with the same desired state |
 
@@ -323,7 +328,8 @@ per build.
 
 - A version using a type the build lacks is not released to that build's
   agents. Their rollout targets end `incompatible`, which neither blocks
-  waves nor counts as a failure. Nothing is sent to fail on the host.
+  waves nor counts as a failure, though a wave needs one other target to
+  succeed. Nothing is sent to fail on the host.
 - `GET $API/agents/{id}/config` lists `missing_components`, for example
   `receiver:kafka`.
 - Agents that do not report components are not checked. The supervisor's own
@@ -373,5 +379,5 @@ inventory.
 | Rollout target `incompatible` | `missing_components` in the agent view: deploy a build with those types, or change the version |
 | Target `failed` | `reported.status` and, with `--store-health-errors`, `reported.error`. Fix the version and roll out again, or `:retry` |
 | Target `timed_out` | The Collector did not stay healthy for the supervisor's `config_apply_timeout` within `wave_timeout_seconds` |
-| Rollout `paused` with reason `threshold` | `targets?outcome=failed`, then `:resume` to accept or `:rollback` |
+| Rollout `paused` with reason `threshold` | `targets?outcome=failed`, then `:resume` to accept or `:rollback`. With no failures, no target of the wave succeeded: check `targets?outcome=offline` and `incompatible`, bring an agent back and `:resume`, or `:cancel` |
 | Config routes return 404 `config_management_disabled` | Fleet runs without `--config-management` |

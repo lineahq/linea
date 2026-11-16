@@ -452,7 +452,9 @@ func (s *Store) ControlRollout(ctx context.Context, actor, id string, action con
 		case configmgmt.Paused:
 			_, err = tx.Exec(ctx, "UPDATE fleet.rollouts SET state='paused',reason='operator',updated_at=now() WHERE id=$1", id)
 		case configmgmt.Running:
-			if _, err = tx.Exec(ctx, "UPDATE fleet.rollouts SET state='running',reason=NULL,updated_at=now() WHERE id=$1", id); err == nil {
+			// Resuming restarts the wave timeout, so a wave still waiting
+			// for its first success gets a full window again.
+			if _, err = tx.Exec(ctx, "UPDATE fleet.rollouts SET state='running',reason=NULL,phase_started_at=now(),updated_at=now() WHERE id=$1", id); err == nil {
 				_, err = tx.Exec(ctx, "UPDATE fleet.rollout_targets SET accepted=true WHERE rollout_id=$1 AND outcome IN ('failed','unhealthy','timed_out') AND NOT accepted", id)
 			}
 		case configmgmt.RollingBack:
@@ -772,11 +774,14 @@ func decodeHex(s string) []byte {
 	return b
 }
 
-// tallies counts settled targets and unaccepted failures per wave.
+// tallies counts settled targets, unaccepted failures, successes and
+// accepted failures per wave.
 func tallies(ctx context.Context, tx pgx.Tx, id string) (map[int]configmgmt.Tally, error) {
 	rows, err := tx.Query(ctx, `SELECT wave,
 		count(*) FILTER (WHERE outcome IN ('succeeded','unmatched','failed','unhealthy','timed_out')),
-		count(*) FILTER (WHERE outcome IN ('failed','unhealthy','timed_out') AND NOT accepted)
+		count(*) FILTER (WHERE outcome IN ('failed','unhealthy','timed_out') AND NOT accepted),
+		count(*) FILTER (WHERE outcome='succeeded'),
+		count(*) FILTER (WHERE outcome IN ('failed','unhealthy','timed_out') AND accepted)
 		FROM fleet.rollout_targets WHERE rollout_id=$1 AND released_at IS NOT NULL GROUP BY wave`, id)
 	if err != nil {
 		return nil, err
@@ -786,7 +791,7 @@ func tallies(ctx context.Context, tx pgx.Tx, id string) (map[int]configmgmt.Tall
 	for rows.Next() {
 		var wave int
 		var t configmgmt.Tally
-		if err := rows.Scan(&wave, &t.Settled, &t.Failures); err != nil {
+		if err := rows.Scan(&wave, &t.Settled, &t.Failures, &t.Succeeded, &t.Accepted); err != nil {
 			return nil, err
 		}
 		out[wave] = t

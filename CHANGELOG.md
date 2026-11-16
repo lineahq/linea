@@ -212,6 +212,12 @@ the first item below.
     `scripts/debugger/compose-fleet.sh` and restart `linea`. If you set
     `raw_principals` to the server's credential ID, change it to the second
     `_`-separated field of the operator token.
+- Fleet rollouts: a wave passes only once one of its targets succeeded or an
+  operator accepted its failures with `:resume`. A wave whose agents are all
+  offline, incompatible or unmatched waits for the wave timeout and then
+  pauses with reason `threshold`; before, it advanced at once and could
+  complete a rollout no agent had applied. `:resume` restarts the current
+  wave's timeout.
 - Live capture: a Collector still reserved by an earlier capture is refused
   with `collector_busy` also after a stop, reconnect or restart (it was a
   plain `capture_request_refused`). A stop before the session was sent frees

@@ -32,6 +32,7 @@ type Principal struct {
 
 // Access returns the credential's access level on a plugin, or "".
 func (p Principal) Access(plugin string) string { return p.PluginAccess[plugin] }
+
 type Authorizer interface {
 	Authenticate(context.Context, *http.Request) (Principal, error)
 	Active(context.Context, []Principal) (map[string]bool, error)
@@ -154,6 +155,7 @@ type Introspection struct {
 type Introspector interface {
 	Introspect(ctx context.Context, tokenSHA256 [32]byte) (Introspection, error)
 }
+
 // Issued discloses a new credential's tokens once. An agent credential has
 // two: Token for OpAMP, and PluginToken, the only one plugins accept.
 type Issued struct {
