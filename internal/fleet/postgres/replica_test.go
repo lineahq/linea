@@ -220,13 +220,16 @@ func TestPostgresReplicas(t *testing.T) {
 	if err := a.RevokeCredential(ctx, issued.Credential.ID, other); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case got := <-revoked:
-		if got != other {
-			t.Fatal("revocation hint for wrong credential")
+	// The intruder's revocation above sent its own hint first.
+	for _, want := range []string{intruder, other} {
+		select {
+		case got := <-revoked:
+			if got != want {
+				t.Fatalf("revocation hint for %s, want %s", got, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("revocation hint for %s missing", want)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("revocation hint missing")
 	}
 
 	// Event readers wake on commits from another replica.
@@ -283,7 +286,7 @@ func TestPostgresReplicas(t *testing.T) {
 	for _, e := range all.Items {
 		kinds[e.Kind]++
 	}
-	if kinds["agent.registered"] != 3 || kinds["agent.identity_conflict"] != 1 || kinds["replica.started"] != 0 || kinds["credential.revoked"] != 1 {
+	if kinds["agent.registered"] != 3 || kinds["agent.identity_conflict"] != 1 || kinds["replica.started"] != 0 || kinds["credential.revoked"] != 2 {
 		t.Fatalf("unexpected event stream: %v", kinds)
 	}
 
