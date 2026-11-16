@@ -145,6 +145,7 @@ const (
 	ReasonController
 	// Config withheld.
 	ReasonIncompatibleComponents
+	ReasonUnverifiedComponents
 	ReasonAgentReportedFailure
 	// Credentials.
 	ReasonRemoteConfigEnabled
@@ -187,6 +188,7 @@ var reasonNames = [numReasons]string{
 	ReasonThreshold:              "threshold",
 	ReasonController:             "controller",
 	ReasonIncompatibleComponents: "incompatible_components",
+	ReasonUnverifiedComponents:   "unverified_components",
 	ReasonAgentReportedFailure:   "agent_reported_failure",
 	ReasonRemoteConfigEnabled:    "remote_config_enabled",
 	ReasonRemoteConfigDisabled:   "remote_config_disabled",

@@ -324,7 +324,16 @@ Limits and rules:
 
 Supervisors with `reports_available_components: true` report which component
 types their Collector build contains. The server asks for the full list once
-per build.
+per build, and only of agents whose credential has `remote_config`.
+
+- The server stores a list for its build only when the list hashes to the
+  reported build hash, computed as the Collector's OpAMP extension does
+  (verified against opampextension v0.162.0). A list that does not match is
+  refused and counted.
+- While an agent's reported build is unresolved (the list does not match,
+  never arrives within 10 s, or the store holds its 1,000 builds), nothing
+  is sent to it: the config is withheld with reason `unverified_components`.
+  Its rollout targets stay released until the wave times out.
 
 - A version using a type the build lacks is not released to that build's
   agents. Their rollout targets end `incompatible`, which neither blocks
@@ -356,6 +365,7 @@ On `/metrics` (fleet read access):
 | `linea_fleet_config_sends_total{path}` | Configs sent, in replies to reports or pushed asynchronously (at most 200/s per replica) |
 | `linea_fleet_config_holds_total` | Failure holds set |
 | `linea_fleet_config_incompatible_total` | Sends withheld for a build that lacks a component type |
+| `linea_fleet_config_unverified_total`, `linea_fleet_config_component_sets_unmatched_total` | Sends withheld for an unresolved build, and component lists refused because they do not match their build hash |
 | `linea_fleet_config_component_sets_requested_total`, `..._stored_total` | Builds asked for and stored |
 | `linea_fleet_config_reconcile_errors_total`, `linea_fleet_config_storage_errors_total` | Decisions or hold writes that failed; nothing is sent then |
 | `linea_fleet_config_body_cache_bytes` | Version bodies cached per replica (64 MiB bound) |

@@ -160,6 +160,9 @@ type Decision struct {
 	// Missing lists component types the agent's build lacks; the plan is
 	// not sent.
 	Missing []string
+	// Unverified: the plan is not sent because the agent's build is not
+	// resolved.
+	Unverified bool
 }
 
 // Decide applies the send rule. desired is the plan from Desired with its ok

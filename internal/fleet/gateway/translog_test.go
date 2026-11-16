@@ -72,7 +72,7 @@ func TestWithheldConfigIsLoggedOncePerSessionAndPlan(t *testing.T) {
 	log := translog.New(&out)
 	g, url, token := serveLogged(t, src, hs, log)
 	a := &agent{t: t, g: g, c: dial(t, url, token), uid: uid}
-	hash := []byte{0xab, 0xcd}
+	hash := buildHash("filelog")
 	a.exchange(&protobufs.AgentToServer{Capabilities: reportsComponents, AvailableComponents: build(hash)})
 	for range 3 {
 		a.exchange(&protobufs.AgentToServer{Capabilities: reportsComponents, AvailableComponents: build(hash, "filelog")})

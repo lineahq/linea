@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -371,6 +372,19 @@ func build(hash []byte, receivers ...string) *protobufs.AvailableComponents {
 	return ac
 }
 
+// buildHash is the Collector's OpAMP extension hash of a build that build
+// describes: these receivers and the debug exporter, without modules.
+func buildHash(receivers ...string) []byte {
+	sorted := slices.Sorted(slices.Values(receivers))
+	s := "receiver:"
+	for _, r := range sorted {
+		s += r + "=;"
+	}
+	s += "processor:exporter:debug=;extension:connector:"
+	sum := sha256.Sum256([]byte(s))
+	return sum[:]
+}
+
 func TestIncompatibleBuildIsWithheld(t *testing.T) {
 	uid, other := bytes.Repeat([]byte{5}, 16), bytes.Repeat([]byte{4}, 16)
 	src := &source{bodies: map[int]string{1: "receivers: {otlp: {}}\n", 2: "receivers: {filelog: {}}\n"},
@@ -379,7 +393,7 @@ func TestIncompatibleBuildIsWithheld(t *testing.T) {
 	hs := &holds{held: map[string]string{}}
 	g, url, token := serve(t, src, hs)
 	a := &agent{t: t, g: g, c: dial(t, url, token), uid: uid}
-	hash := []byte{0xab, 0xcd}
+	hash := buildHash("filelog")
 	asked := uint64(protobufs.ServerToAgentFlags_ServerToAgentFlags_ReportAvailableComponents)
 
 	// An unknown build is asked for in full, and nothing is sent until the
@@ -393,7 +407,7 @@ func TestIncompatibleBuildIsWithheld(t *testing.T) {
 	if r := a.exchange(&protobufs.AgentToServer{Capabilities: reportsComponents, AvailableComponents: build(hash, "filelog")}); r.RemoteConfig != nil || r.Flags&asked != 0 {
 		t.Fatal("config sent to an incompatible build")
 	}
-	if set, _ := hs.ComponentSet(context.Background(), "abcd"); len(set["receivers"]) != 1 || set["receivers"][0] != "filelog" || set["exporters"][0] != "debug" {
+	if set, _ := hs.ComponentSet(context.Background(), hex.EncodeToString(hash)); len(set["receivers"]) != 1 || set["receivers"][0] != "filelog" || set["exporters"][0] != "debug" {
 		t.Fatalf("component set not stored: %v", set)
 	}
 	a.quiet(reportsComponents)
@@ -473,5 +487,46 @@ func TestClearedHoldOwesOneRetry(t *testing.T) {
 			// Nothing more is sent, now or on later sweeps.
 			a.quiet(acceptsRemoteConfig)
 		})
+	}
+}
+
+func TestUnverifiedBuildIsWithheld(t *testing.T) {
+	uid := bytes.Repeat([]byte{5}, 16)
+	src := &source{bodies: map[int]string{1: "receivers: {otlp: {}}\n"}, credentials: map[string]map[string]string{"memory-agent": nil}}
+	src.assign(t, hex.EncodeToString(uid), 1)
+	hs := &holds{held: map[string]string{}}
+	g, url, token := serve(t, src, hs)
+	a := &agent{t: t, g: g, c: dial(t, url, token), uid: uid}
+	// The list claims the hash of a build with otlp but describes another:
+	// it is not stored, and nothing is sent while the build is unresolved.
+	hash := buildHash("otlp")
+	a.exchange(&protobufs.AgentToServer{Capabilities: reportsComponents, AvailableComponents: build(hash)})
+	if r := a.exchange(&protobufs.AgentToServer{Capabilities: reportsComponents, AvailableComponents: build(hash, "otlp", "filelog")}); r.RemoteConfig != nil {
+		t.Fatal("config sent to an unverified build")
+	}
+	if _, err := hs.ComponentSet(context.Background(), hex.EncodeToString(hash)); err == nil {
+		t.Fatal("a list that does not match its hash was stored")
+	}
+	a.quiet(reportsComponents)
+	if g.config.unmatched.Load() != 1 || g.config.unverified.Load() == 0 {
+		t.Fatalf("unmatched %d, unverified %d", g.config.unmatched.Load(), g.config.unverified.Load())
+	}
+}
+
+func TestUnmanagedCredentialResolvesNoBuild(t *testing.T) {
+	uid := bytes.Repeat([]byte{5}, 16)
+	src := &source{bodies: map[int]string{1: "receivers: {otlp: {}}\n"}}
+	src.assign(t, hex.EncodeToString(uid), 1)
+	hs := &holds{held: map[string]string{}}
+	g, url, token := serve(t, src, hs)
+	a := &agent{t: t, g: g, c: dial(t, url, token), uid: uid}
+	hash := buildHash("otlp")
+	asked := uint64(protobufs.ServerToAgentFlags_ServerToAgentFlags_ReportAvailableComponents)
+	if r := a.exchange(&protobufs.AgentToServer{Capabilities: reportsComponents, AvailableComponents: build(hash)}); r.Flags&asked != 0 {
+		t.Fatal("build asked of a credential without the opt-in")
+	}
+	a.exchange(&protobufs.AgentToServer{Capabilities: reportsComponents, AvailableComponents: build(hash, "otlp")})
+	if _, err := hs.ComponentSet(context.Background(), hex.EncodeToString(hash)); err == nil {
+		t.Fatal("component set stored for a credential without the opt-in")
 	}
 }
