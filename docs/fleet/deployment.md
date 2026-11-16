@@ -340,6 +340,14 @@ docker compose $ha exec postgres-standby psql -U postgres -d fleet -c "SELECT pg
 Never start the old primary beside the promoted one. Rebuild it as a new
 standby from an empty volume.
 
+The standby in `compose.ha.yaml` replicates asynchronously: a failover can
+lose the writes the old primary committed in its last moments, a credential
+revocation among them, and the revoked token then works again. After a
+failover, revoke again any credential revoked shortly before it; the lost
+`credential.revoked` event is gone too, so compare against your own record. To lose no committed write, set
+`synchronous_standby_names` on the primary; every write then waits for the
+standby, and writes stop while the standby is down.
+
 Plugins behind replicas: every replica probes each plugin directly and keeps
 its state in one shared row, so all replicas show one epoch. The plugin must
 reach the host listener through the load balancer, whose `plugin_host`
