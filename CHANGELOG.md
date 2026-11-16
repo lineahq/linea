@@ -258,9 +258,12 @@ the first item below.
   same UID is refused with an OpAMP error response and recorded as
   `agent.credential_refused` (and in
   `linea_fleet_agent_credential_refused_total`). Once the agent is
-  disconnected, another credential may take the UID over, and fleet records
-  `agent.credential_changed`. Collectors that share a UID across credentials
-  (cloned identities) now see one of them refused.
+  disconnected, another credential may take the UID over only when the
+  holding credential is revoked or expired, or when the new one has the same
+  labels and remote config opt-in (a rotation); fleet then records
+  `agent.credential_changed`. Any other connection is refused as for a held
+  UID. Collectors that share a UID across credentials (cloned identities) now
+  see one of them refused.
 
 - Plugin host protocol 4 replaces protocol 3 without a fallback. The routes
   move from `/fleet-plugin/v3/...` and `/fleet-host/v3/...` to `v4`, and a
@@ -313,6 +316,63 @@ the first item below.
   Secret `<release>-linea-livecapture-tls` first and give Collectors the new
   `tls.crt`.
 
+- Fleet keeps administrative changes in an audit record: credential, group,
+  config, assignment, rollout and plugin lifecycle changes are written to
+  `fleet.audit` (migration 015) in the same transaction as their event. The
+  leader keeps it for 400 days and at most one million rows, so agent churn
+  that trims events cannot evict a revocation. Admins read it through
+  `GET /api/v1/audit`.
+- Fleet deletes agent and reader credentials revoked more than 30 days ago,
+  in bounded batches with a `credential.deleted` event each, so revoked
+  metadata no longer counts against the 1,000-credential cap. Admin and
+  operator credentials stay. **Upgrading:** the runtime role gains DELETE on
+  `fleet.credentials`; rerun the migration job's grant.
+- A config assignment must name at least one credential label, because agent
+  attributes are self-reported. An assignment stored without labels matches
+  no agent, and the debugger's fleet config path refuses a label-less
+  assignment. **Upgrading:** add `credential_labels` to every assignment that
+  should keep reaching agents.
+- A group edit that changes the desired config of more connected agents than
+  `--config-unstaged-limit` (default 10) is refused with 409
+  `too_many_affected`, unless the request carries `max_affected` at least that
+  large. Group edits are not staged by rollouts; the docs list what a rollout
+  cannot stage.
+- Fleet stores a Collector build's component set only from credentials with
+  remote config, and only when the list hashes to the reported build hash as
+  the Collector's OpAMP extension computes it. An agent whose build stays
+  unresolved gets no config (reason `unverified_components`); new counters
+  report withheld sends and refused lists. The agent simulator reports
+  hashes in the same scheme.
+- The agent listener bounds unauthenticated connections apart from sessions:
+  a slot is freed once the peer presents an agent credential, so
+  `--max-connections` bounds both separately. Every gateway refusal closes the
+  connection, the listener offers HTTP/1.1 only, and a new
+  `tcp_unauthenticated_connections` gauge reports slot use
+  (`tcp_connections` now counts all open connections).
+- Fleet can send the largest allowed remote config: opamp-go checks sent
+  messages against the receive limit, so the gateway gives it the larger of
+  `--max-message-bytes` and the largest remote config and enforces
+  `--max-message-bytes` on received messages itself.
+- Fleet's replica heartbeat owns one database session outside the pool and
+  the leader jobs run apart from it, so an exhausted pool or a slow reap no
+  longer fences a healthy replica. Each replica opens at most nine sessions.
+- Failure holds and component sets that agents cause run only while the
+  report writer is not backlogged, at most two at a time per replica; a
+  refused write is retried with a later message.
+- A restore rewrites retained events in its own transaction with a 4-minute
+  statement and lock timeout before registration, so a restore with many
+  events can register. Migrations and offline administration get a 5-minute
+  statement timeout, a 10 s lock timeout and a 10-minute overall bound.
+- Fleet applies migrations 013 and 014: the schema version is now derived
+  from the migration list, which had stayed at 12.
+- Live capture `admin` access lists every owner's running captures
+  (`GET v1/captures`), reads their metadata and stops them; channel reads and
+  ACKs stay owner-only. `max_operations_per_owner` and
+  `max_channels_per_owner` bound one credential's share and default to the
+  plugin's limit of 32.
+- A reconnecting Collector replaces its live capture peer once that peer has
+  gone 3 s without a report, instead of being refused as a duplicate until
+  the stale sweep retires it. A duplicate that still reports is refused.
 - `linea-fleet` writes a transition log: one JSON line on stderr per state
   change and none per request, with `time`, `level`, `msg` (the event name),
   `component` (`fleet`) and fields from a closed set of IDs, enumerated
