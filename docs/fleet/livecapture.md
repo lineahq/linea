@@ -404,7 +404,9 @@ Instead of `targets`, a request may name exactly one of:
   revision, and are saved with each state change, so a terminal outcome keeps
   the final report.
 - 202 confirms admission, not Collector activation. Read operation and target
-  outcomes until active or terminal.
+  outcomes until active or terminal. An operation becomes `active` once every
+  target is active or already ended, so a target that finishes early does not
+  hold it in `starting`.
 - A stop is also asynchronous. Retry with the latest revision on 412 and
   reconcile the terminal outcome.
 - After an uncertain transport response, GET or retry with the same ID and an

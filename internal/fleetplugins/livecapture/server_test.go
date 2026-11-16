@@ -573,3 +573,41 @@ func TestCaptureRecordsActingForAndNamesBusyCollector(t *testing.T) {
 		t.Fatalf("busy collector = %d %s", w.Code, w.Body)
 	}
 }
+
+// A capture leaves starting once every target has started, also when one
+// target already ended before the last one reported active.
+func TestStartingLeavesWhenOneTargetEndsFirst(t *testing.T) {
+	s, request, p := fixture(t)
+	q := &peer{credential: p.credential, info: p.info, lastSeen: time.Now(), wake: make(chan struct{}, 1), done: make(chan struct{})}
+	q.info.ID = strings.Repeat("e", 64)
+	q.info.Identity.Pod = "pod-2"
+	s.peers[q.info.ID] = q
+	request.Targets = append(request.Targets, TargetRequest{q.info.ID, 1})
+	op, err := s.Create(context.Background(), "owner", request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire := func(peerID string) string {
+		for _, target := range s.operations[op.ID].op.Targets {
+			if target.PeerID == peerID {
+				return target.WireID
+			}
+		}
+		t.Fatal("no target for", peerID)
+		return ""
+	}
+	s.mu.Lock()
+	s.applyReportLocked(p, report{Statuses: []collectorStatus{{SessionID: wire(p.info.ID), State: "completed"}}})
+	state := s.operations[op.ID].op.State
+	s.mu.Unlock()
+	if state != "starting" {
+		t.Fatalf("state %q after one target ended, want starting", state)
+	}
+	s.mu.Lock()
+	s.applyReportLocked(q, report{Statuses: []collectorStatus{{SessionID: wire(q.info.ID), State: "active"}}})
+	state = s.operations[op.ID].op.State
+	s.mu.Unlock()
+	if state != "active" {
+		t.Fatalf("state %q after the last target started, want active", state)
+	}
+}

@@ -402,9 +402,12 @@ func (s *Server) applyReportLocked(p *peer, r report) {
 			}
 			s.stopLocked(a, "stopping")
 		}
+		// A target that already ended counts as started, so a capture
+		// whose first Collector finishes before the last one starts
+		// still leaves starting.
 		allActive, allDone := true, true
 		for _, t := range a.op.Targets {
-			allActive = allActive && t.State == "active"
+			allActive = allActive && (t.State == "active" || t.Released)
 			allDone = allDone && t.Released
 		}
 		if allActive && a.op.State == "starting" {
