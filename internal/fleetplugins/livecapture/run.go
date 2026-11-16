@@ -42,6 +42,18 @@ func connectionBounds(age time.Duration) []grpc.ServerOption {
 	return []grpc.ServerOption{grpc.KeepaliveParams(params), grpc.MaxHeaderListSize(maxHeaderList), grpc.ConnectionTimeout(2 * time.Second)}
 }
 
+// apiListener bounds the plugin API's connections and, with httpTLS, serves
+// them over TLS with the gRPC listeners' certificate, offering HTTP/1.1 only.
+func apiListener(l net.Listener, budget *connectionBudget, tlsConfig *tls.Config, httpTLS bool) net.Listener {
+	var served net.Listener = &boundedListener{Listener: l, budget: budget}
+	if httpTLS {
+		config := tlsConfig.Clone()
+		config.NextProtos = []string{"http/1.1"}
+		served = tls.NewListener(served, config)
+	}
+	return served
+}
+
 // Run serves until ctx ends or a fatal cause arises. Every error it returns
 // carries an enum cause (CauseOf); log receives the transition log.
 func Run(ctx context.Context, config Config, repo Repository, log *translog.Logger) (result error) {
@@ -97,13 +109,7 @@ func Run(ctx context.Context, config Config, repo Repository, log *translog.Logg
 	defer listener.Close()
 	httpServer := &http.Server{Handler: s, ReadHeaderTimeout: time.Second, ReadTimeout: 2 * time.Second, WriteTimeout: 3 * time.Second, IdleTimeout: 10 * time.Second, MaxHeaderBytes: 16 << 10}
 	defer httpServer.Close()
-	var served net.Listener = &boundedListener{Listener: listener, budget: s.budgets[2]}
-	if config.HTTPTLS {
-		httpTLS := tlsConfig.Clone()
-		httpTLS.NextProtos = []string{"http/1.1"}
-		served = tls.NewListener(served, httpTLS)
-	}
-	go func() { failures <- httpServer.Serve(served) }()
+	go func() { failures <- httpServer.Serve(apiListener(listener, s.budgets[2], tlsConfig, config.HTTPTLS)) }()
 	s.Start()
 	defer s.Close()
 	select {
