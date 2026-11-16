@@ -153,7 +153,7 @@ try{
     $captureDenied=Invoke-WebRequest "http://127.0.0.1:$captureMetricsPort/metrics" -Headers @{Authorization="Bearer $captureAdmin"} -SkipHttpErrorCheck
     if($captureDenied.StatusCode -ne 401){throw 'General API token crossed private metrics credential scope'}
     $captureCoreMetrics=Invoke-WebRequest "$captureBase/metrics" -Headers @{Authorization="Bearer $captureAdmin"}
-    if($captureCoreMetrics.Content -notmatch 'linea_fleet_database_owner_wait_seconds_count' -or $captureCoreMetrics.Content -notmatch 'linea_fleet_plugins\{state="ready"\} 1' -or $captureCoreMetrics.Content -match 'linea_fleet_livecapture_'){throw 'Core operational metrics missing or capture boundary crossed'}
+    if($captureCoreMetrics.Content -notmatch 'linea_fleet_http_requests_total ' -or $captureCoreMetrics.Content -notmatch 'linea_fleet_plugins\{state="ready"\} 1' -or $captureCoreMetrics.Content -match 'linea_fleet_livecapture_'){throw 'Core operational metrics missing or capture boundary crossed'}
     Write-Output 'PASS S6.1 public cursor pages, private/read-only scrape credentials, plugin effective limits and domain-free core metrics.'
     if(@((Capture-Request GET /api/v1/agents $captureAdmin).items).Count -ne 0){throw 'Capture peer identities were invented as OpAMP UIDs'}
     $captureChannel=Capture-NewChannel
@@ -260,7 +260,9 @@ try{
     $captureOtherConsumer=Capture-StartConsumer $captureOtherChannel.id $captureOtherFile
     $captureOwned=Capture-API POST v1/captures (Capture-Body $captureOtherChannel.id @($capturePeers[0]) 14) 202 $captureOtherKey.token
     Capture-Active $captureOwned.id $captureOtherKey.token
-    $null=Capture-API GET "v1/captures/$($captureOwned.id)" '' 403
+    # An admin reads and may stop another owner's capture, never its records.
+    $null=Capture-API GET "v1/captures/$($captureOwned.id)"
+    $null=Capture-API GET "v1/channels/$($captureOtherChannel.id)/next" '' 403
     $null=Capture-Request DELETE "/api/v1/credentials/$captureOtherID" $captureAdmin '' 204
     $null=Capture-API GET "v1/channels/$($captureOtherChannel.id)/next" '' 401 $captureOtherKey.token
     Capture-Wait {$captureOwnerOutcome=& docker exec $capturePluginPG psql -U postgres -d livecapture -At -c "SELECT state FROM capture.operations WHERE id='$($captureOwned.id)'";return $captureOwnerOutcome -in @('stopped','expired')} 'Revoked client retained capture execution'
@@ -347,7 +349,7 @@ try{
     $null=& docker exec $captureRestore pg_restore -U postgres --exit-on-error --dbname livecapture /tmp/plugin.dump
     if($LASTEXITCODE -ne 0){throw 'Fresh plugin restore failed'}
     $captureRestoreMetadata=& docker exec $captureRestore psql -U postgres -d livecapture -At -c "SELECT authority_id FROM capture.metadata; SELECT count(*) FROM capture.schema_version; SELECT state FROM capture.operations WHERE id='$($captureCrashOperation.id)'"
-    if($LASTEXITCODE -ne 0 -or $captureRestoreMetadata[0] -ne $capturePersistedAuthority -or $captureRestoreMetadata[1] -ne '2' -or $captureRestoreMetadata[2] -ne 'interrupted'){throw 'Restored plugin lost authority, schema or interrupted metadata'}
+    if($LASTEXITCODE -ne 0 -or $captureRestoreMetadata[0] -ne $capturePersistedAuthority -or $captureRestoreMetadata[1] -ne [string]@(Get-ChildItem (Join-Path $captureFleetRoot 'internal/fleetplugins/livecapture/migrations') -Filter *.sql).Count -or $captureRestoreMetadata[2] -ne 'interrupted'){throw 'Restored plugin lost authority, schema or interrupted metadata'}
     $captureRuntimeFile=Join-Path $captureRunDir 'plugin/runtime_url'
     $captureRuntimeValue=[System.IO.File]::ReadAllText($captureRuntimeFile)
     [System.IO.File]::WriteAllText($captureRuntimeFile,$captureRuntimeValue.Replace('@capture-postgres:5432/',"@${captureRestore}:5432/"))
@@ -356,7 +358,10 @@ try{
     if((Capture-API GET "v1/captures/$($captureCrashOperation.id)").state -ne 'interrupted'){throw 'Runtime did not reopen restored operation metadata'}
     $null=& docker stop --time 5 $captureRestore
     if($LASTEXITCODE -ne 0){throw 'Plugin database outage injection failed'}
-    Capture-Wait {return (& docker inspect $capturePlugin --format '{{.State.Running}}') -eq 'false'} 'Plugin stayed active after losing its database authority'
+    # The plugin exits on the loss; Compose restarts it (unless-stopped), and
+    # each restart refuses to run without its database.
+    Capture-Wait {return ((& docker logs $capturePlugin 2>&1|Out-String) -match '"msg":"plugin_fatal".*"cause":"storage_lost"')} 'Plugin stayed active after losing its database authority'
+    Capture-Wait {return (Capture-Request GET /api/v1/plugins/livecapture $captureAdmin).state -ne 'ready'} 'Core still shows the plugin ready without its database'
     if((Capture-Request GET /readyz '').status -ne 'ready'){throw 'Plugin database outage affected core reporting'}
     Write-Output 'PASS core credential revocation, fresh-database metadata restore, and plugin database-outage failure isolation.'
     Write-Output "Real Collector source revision: $captureRevision"

@@ -70,7 +70,8 @@ consumer_sequence=0
 consumer_name=
 admin=
 base=
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/linea-capture-smoke-XXXXXX")
+# A native path: MSYS_NO_PATHCONV keeps /tmp from reaching a Windows curl.
+tmp=$(winpath "$(mktemp -d "${TMPDIR:-/tmp}/linea-capture-smoke-XXXXXX")")
 main=$$
 trap 'exit 1' USR1 INT TERM
 
@@ -90,6 +91,7 @@ cleanup() {
         done
     fi
     if [ "$created" = 1 ]; then
+        docker compose "${compose_args[@]}" logs --no-color --timestamps fleet livecapture-plugin > "$run/compose.log" 2>&1
         docker compose "${compose_args[@]}" down --volumes --remove-orphans --timeout 5
     fi
     rm -rf "$tmp"
@@ -131,7 +133,10 @@ http_try() {
         echo "S4 $method $path returned $code, expected $expected (body omitted)" >&2
         return 1
     fi
-    if [ "$expected" != 204 ]; then cat "$tmp/resp"; fi
+    if [ "$expected" != 204 ]; then
+        cat "$tmp/resp" 2>/dev/null || { echo "S4 $method $path returned $code without a body" >&2; return 1; }
+    fi
+    rm -f "$tmp/resp"
 }
 http() { http_try "$@" || fail 'request assertion failed'; }
 # capi_try / capi METHOD PATH [BODY] [EXPECTED] [TOKEN] [IF-MATCH]: the plugin's public API.
@@ -346,7 +351,7 @@ if ! { [ "$(scrape "http://127.0.0.1:$metrics_port/metrics" "$metrics_bearer")" 
 fi
 [ "$(scrape "http://127.0.0.1:$metrics_port/metrics" "$admin")" = 401 ] || fail 'General API token crossed private metrics credential scope'
 if ! { [ "$(scrape "$base/metrics" "$admin")" = 200 ] \
-    && grep -q 'linea_fleet_database_owner_wait_seconds_count' "$tmp/scrape" \
+    && grep -q 'linea_fleet_http_requests_total ' "$tmp/scrape" \
     && grep -q 'linea_fleet_plugins{state="ready"} 1' "$tmp/scrape" \
     && ! grep -q 'linea_fleet_livecapture_' "$tmp/scrape"; }; then
     fail 'Core operational metrics missing or capture boundary crossed'
@@ -467,7 +472,9 @@ start_consumer "$other_channel" "$other_file"
 other_consumer=$consumer_name
 owned_id=$(capi POST v1/captures "$(capture_body "$other_channel" "$first" 14)" 202 "$other_token" | json 'd["id"]')
 capture_active "$owned_id" "$other_token"
-capi GET "v1/captures/$owned_id" '' 403 >/dev/null
+# An admin reads and may stop another owner's capture, never its records.
+capi GET "v1/captures/$owned_id" >/dev/null
+capi GET "v1/channels/$other_channel/next" '' 403 >/dev/null
 http DELETE "/api/v1/credentials/$other_id" "$admin" '' 204 >/dev/null
 capi GET "v1/channels/$other_channel/next" '' 401 "$other_token" >/dev/null
 wait_for 40 'Revoked client retained capture execution' op_state_is "$owned_id" stopped expired
@@ -559,11 +566,12 @@ dump_host=$run/plugin.dump
 docker cp "$plugin_pg:$dump" "$dump_host" >/dev/null || fail 'Fixture backup copy failed'
 docker cp "$dump_host" "$restore:/tmp/plugin.dump" >/dev/null || fail 'Restore archive copy failed'
 docker exec "$restore" pg_restore -U postgres --exit-on-error --dbname livecapture /tmp/plugin.dump >/dev/null || fail 'Fresh plugin restore failed'
+migrations=$(find "$root/internal/fleetplugins/livecapture/migrations" -name '*.sql' | wc -l | tr -d ' ')
 restored=$(docker exec "$restore" psql -U postgres -d livecapture -At \
     -c "SELECT authority_id FROM capture.metadata; SELECT count(*) FROM capture.schema_version; SELECT state FROM capture.operations WHERE id='$crash_id'" | tr -d '\r') \
     || fail 'Restored plugin lost authority, schema or interrupted metadata'
 if ! { [ "$(printf '%s\n' "$restored" | sed -n 1p)" = "$persisted_authority" ] \
-    && [ "$(printf '%s\n' "$restored" | sed -n 2p)" = 2 ] \
+    && [ "$(printf '%s\n' "$restored" | sed -n 2p)" = "$migrations" ] \
     && [ "$(printf '%s\n' "$restored" | sed -n 3p)" = interrupted ]; }; then
     fail 'Restored plugin lost authority, schema or interrupted metadata'
 fi
@@ -575,7 +583,11 @@ compose up --detach --wait livecapture-plugin
 wait_for 40 'Revoked fleet credential reconnected after plugin restart' capi_is v1/peers 'len(d["items"]) == 0'
 [ "$(capi GET "v1/captures/$crash_id" | json 'd["state"]')" = interrupted ] || fail 'Runtime did not reopen restored operation metadata'
 docker stop --time 5 "$restore" >/dev/null || fail 'Plugin database outage injection failed'
-plugin_stopped() { [ "$(docker inspect "$plugin" --format '{{.State.Running}}')" = false ]; }
-wait_for 40 'Plugin stayed active after losing its database authority' plugin_stopped
+# The plugin exits on the loss; Compose restarts it (unless-stopped), and
+# each restart refuses to run without its database.
+plugin_lost() { docker logs "$plugin" 2>&1 | grep -q '"msg":"plugin_fatal".*"cause":"storage_lost"'; }
+wait_for 40 'Plugin stayed active after losing its database authority' plugin_lost
+plugin_withdrawn() { [ "$(http GET /api/v1/plugins/livecapture "$admin" | json 'd["state"]')" != ready ]; }
+wait_for 40 'Core still shows the plugin ready without its database' plugin_withdrawn
 [ "$(http GET /readyz '' | json 'd["status"]')" = ready ] || fail 'Plugin database outage affected core reporting'
 echo 'PASS core credential revocation, fresh-database metadata restore, and plugin database-outage failure isolation.'
