@@ -62,15 +62,13 @@ func Run(ctx context.Context, config Config, repo Repository, log *translog.Logg
 	defer s.host.SessionHTTP.CloseIdleConnections()
 	controlOptions := append(connectionBounds(0), grpc.MaxRecvMsgSize(1<<20), grpc.MaxSendMsgSize(64<<10), grpc.MaxConcurrentStreams(1))
 	dataOptions := append(connectionBounds(dataConnectionAge), grpc.MaxRecvMsgSize(256<<10), grpc.MaxConcurrentStreams(8), grpc.InTapHandle(s.preauthenticate))
-	if !config.TestInsecure {
-		cert, err := tls.LoadX509KeyPair(config.CertFile, config.KeyFile)
-		if err != nil {
-			return WithCause(translog.ReasonTLSInvalid, ErrInvalid)
-		}
-		tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}
-		controlOptions = append(controlOptions, grpc.Creds(credentials.NewTLS(tlsConfig)))
-		dataOptions = append(dataOptions, grpc.Creds(credentials.NewTLS(tlsConfig.Clone())))
+	cert, err := tls.LoadX509KeyPair(config.CertFile, config.KeyFile)
+	if err != nil {
+		return WithCause(translog.ReasonTLSInvalid, ErrInvalid)
 	}
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}
+	controlOptions = append(controlOptions, grpc.Creds(credentials.NewTLS(tlsConfig)))
+	dataOptions = append(dataOptions, grpc.Creds(credentials.NewTLS(tlsConfig.Clone())))
 	control, data := grpc.NewServer(controlOptions...), grpc.NewServer(dataOptions...)
 	defer control.Stop()
 	defer data.Stop()

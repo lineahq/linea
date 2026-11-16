@@ -58,7 +58,6 @@ write config.json '{
   "delivery_listen": "0.0.0.0:4341",
   "tls_cert_file": "/run/secrets/capture_tls_cert",
   "tls_key_file": "/run/secrets/capture_tls_key",
-  "test_insecure": false,
   "capture_label": "capture",
   "raw_principals": [],
   "max_peers": 256,

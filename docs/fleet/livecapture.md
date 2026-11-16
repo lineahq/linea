@@ -130,8 +130,8 @@ ingress or load balancer.
 - For remote deployment use managed PKI, matching DNS names and protected
   ingress.
 - Collectors verify the server certificate and present their fleet agent
-  credential as a bearer token. This is not mutual TLS. Keep verification
-  enabled; `test_insecure` is a fixture option.
+  credential as a bearer token. This is not mutual TLS. The plugin always
+  serves TLS on both gRPC listeners; there is no plaintext option.
 - The private host and service HTTP links explicitly allow protected
   plaintext. Remote links need a protected transport.
 

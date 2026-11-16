@@ -33,7 +33,6 @@ type Config struct {
 	DeliveryListen          string   `json:"delivery_listen"`
 	CertFile                string   `json:"tls_cert_file"`
 	KeyFile                 string   `json:"tls_key_file"`
-	TestInsecure            bool     `json:"test_insecure"`
 	CaptureLabel            string   `json:"capture_label,omitempty"`
 	RawPrincipals           []string `json:"raw_principals"`
 	MaxPeers                int      `json:"max_peers,omitempty"`
@@ -79,7 +78,7 @@ func LoadConfig(path string) (Config, error) {
 	if c.DrainSeconds < 0 || c.DrainSeconds > 30 {
 		return c, ErrInvalid
 	}
-	if !c.TestInsecure && (c.CertFile == "" || c.KeyFile == "") {
+	if c.CertFile == "" || c.KeyFile == "" {
 		return c, ErrInvalid
 	}
 	c.HostEndpoint, err = pluginsdk.Endpoint(c.HostEndpoint, c.AllowInsecureHost)

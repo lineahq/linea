@@ -212,6 +212,10 @@ the first item below.
     `scripts/debugger/compose-fleet.sh` and restart `linea`. If you set
     `raw_principals` to the server's credential ID, change it to the second
     `_`-separated field of the operator token.
+- The live-capture plugin always serves TLS on its control and delivery
+  listeners: the `test_insecure` setting is removed, and a configuration that
+  still names it is refused. **Upgrading:** delete `test_insecure` from the
+  plugin's JSON configuration.
 - Fleet scopes management credentials to plugins. A credential reaches a
   plugin's status and API only with a `plugin_access` grant for that plugin
   (`read`, `write` or `admin`, at most 16 plugins); the role grants none, and

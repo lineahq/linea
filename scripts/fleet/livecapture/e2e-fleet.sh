@@ -61,7 +61,7 @@ cat > "$p/config.json" <<'EOF'
 {"id":"livecapture","version":"0.5.0","host_endpoint":"http://fleet:8081","allow_insecure_host":true,
  "host_token_file":"/run/secrets/capture_host_token","service_token_file":"/run/secrets/capture_service_token",
  "http_listen":"0.0.0.0:8090","control_listen":"0.0.0.0:4340","delivery_listen":"0.0.0.0:4341",
- "tls_cert_file":"/run/secrets/capture_tls_cert","tls_key_file":"/run/secrets/capture_tls_key","test_insecure":false,
+ "tls_cert_file":"/run/secrets/capture_tls_cert","tls_key_file":"/run/secrets/capture_tls_key",
  "capture_label":"capture","raw_principals":[],"max_peers":256,"metrics_token_file":"/run/secrets/capture_metrics_token"}
 EOF
 chmod 444 "$p"/*
