@@ -47,7 +47,7 @@ server sends are in [fleet-config-layers.md](fleet-config-layers.md).
 | Pool | At most eight connections per replica, one held by the LISTEN session |
 | Writer | A batched writer commits session changes in short transactions |
 | Heartbeats | Unchanged heartbeats cause no writes. One bulk `last_seen` update per replica every 10 s |
-| Backpressure | A full write queue (4,096) answers new sessions 503 with `Retry-After` |
+| Backpressure | The writer is busy above 75 % of its queue (4,096) or when the queued work would take more than 500 ms at the last batch's speed; new sessions are then answered 503 with `Retry-After` |
 | Handshakes | `--max-pending-sessions` (default 400) bounds handshakes between admission and first commit, before authentication, so admission follows the database's actual speed. It keeps up to two writer batches in flight per replica. A handshake waits up to 25 s for a slot, so opamp-go clients do not fall into long exponential backoff |
 | Event bound | `--max-events` (default 100,000) must cover at least two events per agent so a full reconnect storm does not expire cursors |
 | Pooling | Direct PostgreSQL or a session pooler. Transaction pooling is unsupported: the server relies on LISTEN/NOTIFY |

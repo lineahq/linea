@@ -377,7 +377,7 @@ func (s *Service) ListFleetConfigVersions(ctx context.Context, caller Caller, id
 }
 
 // GetFleetConfigVersion returns one version with its body, which fleet
-// returns to an admin credential only.
+// returns to an operator or admin credential only.
 func (s *Service) GetFleetConfigVersion(ctx context.Context, caller Caller, id string, version int) (_ *FleetConfigVersion, err error) {
 	defer s.audit(&caller, "GetFleetConfigVersion", &err)()
 	if err := s.fleetBegin(ctx, caller, authz.FleetRead); err != nil {

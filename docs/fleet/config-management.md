@@ -247,9 +247,10 @@ curl -s -H "$ADMIN" -H 'Content-Type: application/json' -X POST $API/config-assi
   "rollout": {"waves": [{"percent": 5}, {"percent": 25}, {"percent": 100}]}}'
 ```
 
-`POST $API/config-assignments/{id}:preview` lists the agents an assignment
-targets now, with the desired config each would receive, before or after you
-create it.
+`POST $API/config-assignments/{id}:preview` lists the agents an existing
+assignment targets now, with the desired config each would receive. It
+needs the assignment to exist; for a new one, list the agents its group or
+selector matches and narrow them by its credential labels.
 
 ### Changes a rollout cannot stage
 

@@ -35,8 +35,9 @@ const (
 type Config struct {
 	// Endpoint is fleet's management API base URL, such as https://fleet:8080.
 	Endpoint string
-	// Token is a fleet admin credential. Captures and channels are owned by
-	// it, so every debugger caller shares them.
+	// Token is a fleet operator credential with write access to the live
+	// capture plugin and delegate, so requests can name the user they are
+	// made for (WithActing).
 	Token string
 	// AllowHTTP permits plaintext to a non-loopback host on a protected network.
 	AllowHTTP bool

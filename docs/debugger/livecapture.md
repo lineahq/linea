@@ -100,7 +100,7 @@ linea-server --config config.yaml --mcp --fleet-url https://fleet.example:8080 -
 | Helm chart | Sets these flags from `fleet.url` and `fleet.existingSecret` (a Secret with the key `token`); with `fleet.deploy.enabled` it runs fleet and the plugin in the release and connects them on its own ([Fleet and live capture](deploy-kubernetes.md#fleet-and-live-capture)). |
 | Compose stack | Has no fleet connection; the overlay `compose.fleet.yaml` adds fleet and the plugin on the stack's PostgreSQL and sets these flags ([Fleet and live capture](deploy-compose.md#fleet-and-live-capture)). |
 | Token file | One fleet API token, at most 4 KiB, surrounding whitespace trimmed. Read once at startup; never accepted as an argument, logged or returned in errors. |
-| Credential | Needs fleet admin permission to create captures and channels; a reader credential can only discover. |
+| Credential | A fleet operator credential with `livecapture=write` plugin access creates captures and channels, and with `delegate` names the user each request is made for; without plugin access it can only discover inventory. |
 | Transport | HTTPS unless the fleet URL is loopback. On a protected network `--fleet-allow-http` permits plaintext HTTP to another host. |
 | Changes | Changing the fleet or token needs a restart. |
 | Without `--fleet-url` | Inventory reports `enabled: false`, capture creation is refused and recorded captures stay readable. |
