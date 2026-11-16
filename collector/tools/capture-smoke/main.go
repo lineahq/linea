@@ -241,8 +241,11 @@ func run(binary, config string) (result error) {
 					if !ok || id.Str() != "docker-capture" {
 						return errors.New("session metadata missing")
 					}
-					if _, ok := record.resource.Get("http.request.header.authorization"); ok {
-						return errors.New("capture redaction failed")
+					// The fixture's ingress point is raw and its egress point
+					// redacted: only the redacted copy drops the denied header.
+					_, kept := record.resource.Get("http.request.header.authorization")
+					if kept != (point.Str() == "ingress") {
+						return fmt.Errorf("%s copy of %s: authorization header kept=%t", point.Str(), record.signal, kept)
 					}
 					if record.count != 1 {
 						return errors.New("unexpected captured record count")
