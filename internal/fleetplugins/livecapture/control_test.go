@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/lineahq/linea/collector/livecapture/controlpb"
@@ -202,5 +204,44 @@ func TestDecodeReportFilterLimits(t *testing.T) {
 		if err != nil || r.Identity.FilterLimits != c.want {
 			t.Fatalf("%v decoded as %+v, %v", c.wire, r.Identity.FilterLimits, err)
 		}
+	}
+}
+
+// A Collector that reconnects before its old stream was noticed dead replaces
+// the old peer once that peer missed a report; a duplicate that still reports
+// is refused.
+func TestReconnectReplacesASilentPeer(t *testing.T) {
+	setResendInterval(t, time.Hour)
+	s, _, _ := fixture(t)
+	first, _, send := watch(t, s)
+	send(&controlpb.CollectorReport{})
+	if _, err := first.Recv(); err != nil {
+		t.Fatal(err)
+	}
+	id := identityKey("credential", Identity{Cluster: "cluster", Pod: "typed", Group: "test"})
+	s.mu.Lock()
+	old := s.peers[id]
+	s.mu.Unlock()
+	duplicate, _, sendDuplicate := watch(t, s)
+	sendDuplicate(&controlpb.CollectorReport{})
+	if _, err := duplicate.Recv(); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("live duplicate: %v", err)
+	}
+	s.mu.Lock()
+	old.lastSeen = time.Now().Add(-replaceAfter - time.Second)
+	s.mu.Unlock()
+	again, _, sendAgain := watch(t, s)
+	sendAgain(&controlpb.CollectorReport{})
+	if _, err := again.Recv(); err != nil {
+		t.Fatalf("reconnect refused: %v", err)
+	}
+	s.mu.Lock()
+	replaced := s.peers[id]
+	s.mu.Unlock()
+	if replaced == nil || replaced == old || old.alive() || replaced.info.Generation <= old.info.Generation {
+		t.Fatal("silent peer was not replaced")
+	}
+	if _, err := first.Recv(); err == nil {
+		t.Fatal("replaced stream stayed open")
 	}
 }

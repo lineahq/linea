@@ -224,8 +224,11 @@ services, using the shared credential.*
 Trust model: a bearer credential proves membership in the credential's
 Collectors. Reported pod, cluster, group and catalog fields are assertions by
 those Collectors, not independently verified workload identity. A
-simultaneous duplicate identity is refused. After disconnection, reconnecting
-advances a durable generation and withdraws old execution. No old desired
+simultaneous duplicate identity is refused while the connected one still
+reports (Collectors report every 2 s). A stream of the same identity whose
+peer missed reports for 3 s replaces it, so a Collector that reconnects
+before its old stream was noticed dead is admitted. After disconnection,
+reconnecting advances a durable generation and withdraws old execution. No old desired
 capture set is restored.
 
 ## Use the public API

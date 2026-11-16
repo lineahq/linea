@@ -24,6 +24,7 @@ type peer struct {
 	linkNext     time.Time
 	linkFailures int
 	stream       grpc.ServerStream
+	connected    time.Time
 	lastSeen     time.Time
 	operation    string
 	// closeReason is why the plugin retired the connection (Server.retirePeerLocked);
@@ -162,6 +163,13 @@ func (s *Server) Watch(stream grpc.ServerStream) error {
 		s.mu.Unlock()
 		return status.Error(codes.Unavailable, "capture authority draining")
 	}
+	// A Collector that reconnects before its old stream was noticed dead takes
+	// the old peer's place once that peer missed a report; a duplicate that
+	// still reports is refused.
+	if old := s.peers[id]; old != nil && time.Since(old.lastSeen) > replaceAfter {
+		s.retirePeerLocked(old, translog.ReasonPeerStale)
+		s.dropPeerLocked(old, translog.ReasonPeerStale)
+	}
 	if len(s.peers)+len(s.joining) >= s.config.peerLimit() || s.peers[id] != nil || s.joining[id] {
 		s.mu.Unlock()
 		return status.Error(codes.ResourceExhausted, "capture connection capacity")
@@ -181,10 +189,9 @@ func (s *Server) Watch(stream grpc.ServerStream) error {
 		s.mu.Unlock()
 		return status.Error(codes.Unavailable, "capture authority draining")
 	}
-	p := &peer{info: PeerInfo{AuthorityID: s.repo.AuthorityID(), PluginInstance: s.instance, ID: id, Generation: gen, CredentialID: credential.id, Link: PeerLink{State: linkPending}, Identity: r.Identity}, credential: credential.hash, stream: stream, lastSeen: time.Now(), wake: make(chan struct{}, 1), done: make(chan struct{})}
+	p := &peer{info: PeerInfo{AuthorityID: s.repo.AuthorityID(), PluginInstance: s.instance, ID: id, Generation: gen, CredentialID: credential.id, Link: PeerLink{State: linkPending}, Identity: r.Identity}, credential: credential.hash, stream: stream, connected: time.Now(), lastSeen: time.Now(), wake: make(chan struct{}, 1), done: make(chan struct{})}
 	s.peers[id] = p
 	s.mu.Unlock()
-	connected := time.Now()
 	s.log.Log(translog.EventPeerConnected, translog.Peer(id), translog.Credential(credential.id), translog.LinkState(translog.LinkPending))
 	s.wakeLinker()
 	// exit is why the stream ended; the final select below sets it.
@@ -193,28 +200,7 @@ func (s *Server) Watch(stream grpc.ServerStream) error {
 		p.close()
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		if s.peers[id] != p {
-			return
-		}
-		delete(s.peers, id)
-		if p.closeReason != translog.ReasonNone {
-			exit = p.closeReason
-		}
-		s.log.Log(translog.EventPeerDisconnected, translog.Peer(id), translog.Why(exit), translog.Elapsed(time.Since(connected)))
-		for _, a := range s.operations {
-			for i, t := range a.op.Targets {
-				if t.PeerID == id && t.Generation == gen && !t.Released {
-					a.op.Targets[i].State = "unknown"
-					if a.op.Reason == "" {
-						a.op.Reason = "peer_disconnected"
-					}
-					if a.op.State == "stopping" {
-						s.saveLocked(a)
-					}
-					s.stopLocked(a, "stopping")
-				}
-			}
-		}
+		s.dropPeerLocked(p, exit)
 	}()
 	// Full empty desired state is always sent first. Reconnect never replays starts.
 	p.wakeup()
@@ -292,6 +278,39 @@ func (s *Server) Watch(stream grpc.ServerStream) error {
 		return stream.Context().Err()
 	case <-failures:
 		return status.Error(codes.Unavailable, "capture control disconnected")
+	}
+}
+
+// replaceAfter is how long a peer may go without a report before a new
+// stream of the same identity replaces it. Collectors report every 2 s.
+const replaceAfter = 3 * time.Second
+
+// dropPeerLocked removes a peer whose stream ended and ends its targets;
+// exit is why, unless the plugin retired it with a reason of its own. A peer
+// already dropped or replaced is left alone.
+func (s *Server) dropPeerLocked(p *peer, exit translog.Reason) {
+	id := p.info.ID
+	if s.peers[id] != p {
+		return
+	}
+	delete(s.peers, id)
+	if p.closeReason != translog.ReasonNone {
+		exit = p.closeReason
+	}
+	s.log.Log(translog.EventPeerDisconnected, translog.Peer(id), translog.Why(exit), translog.Elapsed(time.Since(p.connected)))
+	for _, a := range s.operations {
+		for i, t := range a.op.Targets {
+			if t.PeerID == id && t.Generation == p.info.Generation && !t.Released {
+				a.op.Targets[i].State = "unknown"
+				if a.op.Reason == "" {
+					a.op.Reason = "peer_disconnected"
+				}
+				if a.op.State == "stopping" {
+					s.saveLocked(a)
+				}
+				s.stopLocked(a, "stopping")
+			}
+		}
 	}
 }
 
