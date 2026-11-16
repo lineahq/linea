@@ -177,6 +177,11 @@ type CollectorGroupSave struct {
 	Name     string   `json:"name"`
 	AgentIDs []string `json:"agent_ids,omitempty"`
 	Selector string   `json:"selector,omitempty"`
+	// MaxAffected accepts a change that gives up to this many connected
+	// agents a new config at once. Unset, fleet's unstaged limit applies and
+	// a larger change fails with a conflict that names the count in
+	// Error.Affected.
+	MaxAffected *int `json:"max_affected,omitempty"`
 }
 
 // CollectorGroupDelete deletes a fleet group at Revision.
@@ -474,8 +479,15 @@ func (s *Service) SaveCollectorGroup(ctx context.Context, caller Caller, req Col
 	} else {
 		body["agent_ids"] = req.AgentIDs
 	}
+	var q url.Values
+	if req.MaxAffected != nil {
+		if *req.MaxAffected < 0 {
+			return nil, captureInvalid("max_affected is a count of agents")
+		}
+		q = url.Values{"max_affected": {strconv.Itoa(*req.MaxAffected)}}
+	}
 	var g fleetcapture.Group
-	if err := s.manage(ctx, caller, http.MethodPut, "/api/v1/groups/"+req.ID, nil, req.Revision, body, &g); err != nil {
+	if err := s.manage(ctx, caller, http.MethodPut, "/api/v1/groups/"+req.ID, q, req.Revision, body, &g); err != nil {
 		return nil, err
 	}
 	v := fleetGroup(g)

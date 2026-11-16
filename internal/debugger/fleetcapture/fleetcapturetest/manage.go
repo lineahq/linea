@@ -207,6 +207,14 @@ func (f *Server) mount(mux *http.ServeMux) {
 			refuse(w, 400, "invalid_argument", "name and exactly one of agent_ids or selector")
 			return
 		}
+		// WideSelector reconfigures WideAffected connected agents, above the
+		// unstaged limit of 10, so it needs max_affected.
+		if req.Selector == WideSelector {
+			if n, err := strconv.Atoi(r.URL.Query().Get("max_affected")); err != nil || n < WideAffected {
+				send(w, 409, doc{"error": doc{"code": "too_many_affected", "message": "the change gives 12 connected agents a new config, above 10", "affected": WideAffected}})
+				return
+			}
+		}
 		g := doc{"id": id, "name": req.Name, "revision": revisionOf(old) + 1}
 		if req.Selector != "" {
 			g["kind"], g["selector"] = "selector", req.Selector

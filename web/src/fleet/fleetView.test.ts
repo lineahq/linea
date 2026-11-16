@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  agentName, agentPlace, configChip, eventActor, eventText, groupDraft, groupSave, healthChip, isFleetName, parseAgentIDs, problemText,
+  affectedCount, agentName, agentPlace, configChip, eventActor, eventText, groupDraft, groupSave, healthChip, isFleetName, parseAgentIDs, problemText,
   relTime, rolloutActions, selectorSuggestions, selectorTail, quoteSelectorValue, attributeKeys, agentSuggestions, rolloutChip, rolloutMove, rolloutPolicy, rolloutTally, shortHex, wavesText, DEFAULT_ROLLOUT,
 } from './fleetView';
 
@@ -40,6 +40,14 @@ describe('groups', () => {
     const g = { id: ID, revision: 3, name: 'pinned', kind: 'static', agent_ids: [ID, ID2] };
     expect(groupSave(groupDraft(g), g)).toEqual({ id: ID, revision: 3, name: 'pinned', agent_ids: [ID, ID2] });
     expect(groupSave({ ...groupDraft(g), agents: 'x' }, g)).toMatch(/Not an agent ID: x/);
+  });
+
+  it('reads the agent count of a change that needs confirming', () => {
+    expect(affectedCount({ status: 409, body: { code: 'conflict', affected: 12 } })).toBe(12);
+    expect(affectedCount({ status: 409, body: { code: 'conflict' } })).toBe(0);
+    expect(affectedCount({ status: 400, body: { affected: 12 } })).toBe(0);
+    expect(affectedCount({ status: 409, body: { affected: '12' } })).toBe(0);
+    expect(affectedCount(undefined)).toBe(0);
   });
 });
 

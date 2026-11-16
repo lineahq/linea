@@ -1322,8 +1322,11 @@ with "Configure capture"), Groups (create, edit at the loaded revision,
 delete after an inline confirmation; the selector field suggests attribute
 keys from fleet's first 100 agents and, after `key=`, the key's values with
 their agent counts from fleet's overview, and fixed groups pick agents by
-name; on a fleet without the livecapture plugin members list no Collectors
-and the group offers no capture), Configs and a config's page
+name; a save fleet refuses because it would reconfigure more connected
+agents at once than its unstaged limit shows the count from the error's
+`affected` (`affectedCount`, tested) in an inline confirmation that resends
+with that `max_affected`; on a fleet without the livecapture plugin members
+list no Collectors and the group offers no capture), Configs and a config's page
 (`/fleet/configs/<id>`: versions, each version read-only with its change from
 the one before, a new version drafted from the version in view, which asks
 before a dirty draft is discarded, rename and delete), Assignments

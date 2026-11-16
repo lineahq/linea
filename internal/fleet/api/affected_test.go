@@ -48,7 +48,7 @@ func TestGroupChangeAboveUnstagedLimitIsRefused(t *testing.T) {
 	path := "/api/v1/groups/" + group
 	edge := map[string]any{"name": "g", "selector": "service.name=edge"}
 	// Three connected agents would get the layer at once.
-	if w := call(t, h, "PUT", path, "admin", edge); w.Code != 409 || errorCode(t, w) != "too_many_affected" || !strings.Contains(w.Body.String(), "max_affected=3") {
+	if w := call(t, h, "PUT", path, "admin", edge); w.Code != 409 || errorCode(t, w) != "too_many_affected" || !strings.Contains(w.Body.String(), "max_affected=3") || !strings.Contains(w.Body.String(), `"affected":3`) {
 		t.Fatalf("unstaged change: %d %s", w.Code, w.Body)
 	}
 	if w := call(t, h, "PUT", path+"?max_affected=2", "admin", edge); w.Code != 409 {

@@ -56,6 +56,9 @@ type Error struct {
 	Status  int
 	Code    string
 	Message string
+	// Affected is how many connected agents a group change refused with
+	// too_many_affected would give a new config.
+	Affected int
 }
 
 func (e *Error) Error() string {
@@ -188,9 +191,12 @@ func refusal(status int, data []byte) error {
 		Error json.RawMessage `json:"error"`
 	}
 	if json.Unmarshal(data, &structured) == nil && len(structured.Error) > 0 {
-		var detail struct{ Code, Message string }
+		var detail struct {
+			Code, Message string
+			Affected      int
+		}
 		if json.Unmarshal(structured.Error, &detail) == nil {
-			e.Code, e.Message = detail.Code, detail.Message
+			e.Code, e.Message, e.Affected = detail.Code, detail.Message, detail.Affected
 		} else {
 			_ = json.Unmarshal(structured.Error, &e.Message)
 		}

@@ -2279,6 +2279,9 @@
           "id": {
             "type": "string"
           },
+          "max_affected": {
+            "type": "integer"
+          },
           "name": {
             "type": "string"
           },
@@ -5582,6 +5585,9 @@
       },
       "OperationError": {
         "properties": {
+          "affected": {
+            "type": "integer"
+          },
           "code": {
             "type": "string"
           },

@@ -2417,6 +2417,7 @@ export interface components {
         CollectorGroupSave: {
             agent_ids?: string[];
             id?: string;
+            max_affected?: number;
             name: string;
             revision: number;
             selector?: string;
@@ -3329,6 +3330,7 @@ export interface components {
             scenario_yaml?: string;
         };
         OperationError: {
+            affected?: number;
             code: string;
             current_statement?: string;
             diagnostics?: components["schemas"]["Diagnostic"][];

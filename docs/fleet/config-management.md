@@ -259,9 +259,10 @@ Some changes reach agents at once, without waves:
 - **Group edits.** Replacing a group's selector or members changes which
   agents its assignments target. The server counts the connected agents
   whose desired config the edit changes and refuses the edit with 409
-  `too_many_affected` when they exceed `--config-unstaged-limit` (default 10).
-  Resend it with `?max_affected=N`, N at least the count the error names, to
-  accept that many. The count is taken just before the write, so agents that
+  `too_many_affected` when they exceed `--config-unstaged-limit` (default 10);
+  the error's `affected` field holds the count. Resend it with
+  `?max_affected=N`, N at least that count, to accept that many. The
+  debugger's group save takes the same `max_affected` in its body. The count is taken just before the write, so agents that
   connect in between are not in it.
 - **Agent attributes.** An agent that reports new attributes may enter or
   leave a selector at once. Nothing can stage that; required credential

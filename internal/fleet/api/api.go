@@ -170,7 +170,9 @@ func failure(w http.ResponseWriter, err error) {
 	case errors.Is(err, fleet.ErrCursorExpired):
 		fail(w, 410, "cursor_expired", "refresh inventory and groups, then poll without a cursor")
 	case errors.As(err, new(*errTooManyAffected)):
-		fail(w, 409, "too_many_affected", err.Error())
+		var e *errTooManyAffected
+		errors.As(err, &e)
+		writeJSON(w, 409, map[string]any{"error": map[string]any{"code": "too_many_affected", "message": err.Error(), "affected": e.affected}})
 	case errors.Is(err, fleet.ErrInvalid):
 		message := "invalid request"
 		var invalid *fleet.InvalidError

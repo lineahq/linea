@@ -21,6 +21,13 @@ const Token = "fleet-token"
 // Group is the ID of the server's one static group, holding Peer's agent.
 const Group = "edge"
 
+// WideSelector is a group selector the fake fleet refuses as reconfiguring
+// WideAffected connected agents unless the request carries max_affected.
+const (
+	WideSelector = "service.name=everyone"
+	WideAffected = 12
+)
+
 // Peer is the server's one Collector: logs egress, redacted.
 var Peer = fleetcapture.Peer{
 	AuthorityID: strings.Repeat("a", 32), PluginInstance: strings.Repeat("b", 32), ID: strings.Repeat("1", 64), Generation: 1,
