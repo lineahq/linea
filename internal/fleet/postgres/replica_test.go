@@ -125,7 +125,8 @@ func TestPostgresReplicas(t *testing.T) {
 
 	// The UID is bound to its credential while connected: another credential
 	// is refused without touching the row, the holder's own credential still
-	// takes over, and a disconnected UID changes hands with an event.
+	// takes over, and a disconnected UID changes hands with an event to a
+	// credential with the same labels and opt-in (a rotation).
 	intruder := credential("00000000000000000000000000000034")
 	bindingStart, err := a.Events(ctx, "", 500)
 	if err != nil {
@@ -187,6 +188,31 @@ func TestPostgresReplicas(t *testing.T) {
 	}
 	if len(changed) != 1 || changed[0].SubjectID != twin || changed[0].ActorID != intruder || !jsonEqual(changed[0].Detail, `{"previous_credential":"`+agent+`"}`) {
 		t.Fatalf("change events = %+v", changed)
+	}
+
+	// A disconnected UID does not change hands to a credential with other
+	// labels while its own credential is active; once that is revoked, it does.
+	labelled, err := auth.Generate(auth.CredentialRequest{ID: "00000000000000000000000000000035", Name: "other-team", Role: "agent", Labels: map[string]string{"team": "b"}, ExpiresAt: new(time.Now().Add(time.Hour))}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.InsertCredential(ctx, issued.Credential.ID, labelled.Credential); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.DisconnectAgent(ctx, twin, held, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := a.ConnectAgent(ctx, twin, labelled.Credential.ID, fleet.Report{}, time.Now()); !errors.Is(err, fleet.ErrUIDHeld) {
+		t.Fatalf("a credential with other labels adopted the UID: %v", err)
+	}
+	if got, err := a.GetAgent(ctx, twin); err != nil || got.CredentialID != intruder || got.Connected {
+		t.Fatalf("refused adoption changed the agent: %+v %v", got, err)
+	}
+	if err := a.RevokeCredential(ctx, issued.Credential.ID, intruder); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := a.ConnectAgent(ctx, twin, labelled.Credential.ID, fleet.Report{}, time.Now()); err != nil {
+		t.Fatalf("UID of a revoked credential was not adopted: %v", err)
 	}
 
 	// Revocation reaches every replica as a hint.

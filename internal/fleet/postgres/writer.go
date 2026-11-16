@@ -556,6 +556,22 @@ func (w *writer) connect(ctx context.Context, tx pgx.Tx, o *op, state *batchStat
 			state.refused = append(state.refused, refusal{agent: o.id, credential: o.credential})
 			return 0, fleet.Report{}, fleet.ErrUIDHeld
 		}
+		if changed {
+			// A disconnected UID changes hands only when its credential is no
+			// longer active, or for a rotation: a credential with the same
+			// labels and remote config opt-in. Otherwise a credential could
+			// adopt another's agent and its config eligibility.
+			var adopt bool
+			if err := tx.QueryRow(ctx, `SELECT NOT EXISTS(SELECT 1 FROM fleet.credentials WHERE id=$1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now()))
+				OR EXISTS(SELECT 1 FROM fleet.credentials p, fleet.credentials n WHERE p.id=$1 AND n.id=$2 AND p.labels=n.labels AND p.remote_config=n.remote_config)`,
+				*holder, o.credential).Scan(&adopt); err != nil {
+				return 0, fleet.Report{}, err
+			}
+			if !adopt {
+				state.refused = append(state.refused, refusal{agent: o.id, credential: o.credential})
+				return 0, fleet.Report{}, fleet.ErrUIDHeld
+			}
+		}
 		stored := fleet.Report{Capabilities: o.report.Capabilities}
 		var status, healthError, hash *string
 		var rcHash, rcStatus, rcError, rcHeld, available *string

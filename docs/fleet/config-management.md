@@ -135,9 +135,10 @@ curl -s -H "$ADMIN" -H 'Content-Type: application/json' -X POST $API/credentials
 - A Collector's instance UID is also self-reported, but fleet binds it to the
   credential that holds it: another credential cannot take over a connected
   UID, so a credential outside the label match cannot displace a managed
-  Collector. A disconnected UID can change credentials, which
-  `agent.credential_changed` records. Labels still decide who receives a
-  configuration.
+  Collector. A disconnected UID changes credentials only when its credential
+  is no longer active, or to a credential with the same labels and opt-in
+  (a rotation); `agent.credential_changed` records it. Labels still decide
+  who receives a configuration.
 
 ## Connect supervised Collectors
 

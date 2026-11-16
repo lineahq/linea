@@ -228,9 +228,13 @@ Identity:
     the agent, actor: the refused credential; at most one per agent and
     credential per minute on each replica) and counts the refusal in
     `linea_fleet_agent_credential_refused_total`.
-  - Another credential can take a disconnected UID. The inventory then shows
-    the new credential, and `agent.credential_changed` records the previous
-    credential ID in its detail.
+  - Another credential can take a disconnected UID only when the credential
+    that holds it is revoked or expired, or when both have the same labels
+    and the same `remote_config` opt-in (a rotation). The inventory then
+    shows the new credential, and `agent.credential_changed` records the
+    previous credential ID in its detail. Any other credential is refused as
+    for a connected UID. The in-memory store, which knows no credentials,
+    does not apply this rule.
   - On Kubernetes, pod churn creates new UIDs, so replicas of one deployment
     do not collide. A restarted pod that keeps its UID reconnects with the
     same credential and takes over. Only a pod holding a different
