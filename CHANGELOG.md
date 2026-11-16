@@ -348,6 +348,10 @@ the first item below.
 - Fleet's `--plugin-tls-cert` and `--plugin-tls-key` serve the plugin host
   listener over HTTPS with its own identity while the other listeners stay
   plain behind a TLS ingress.
+- The Helm chart serves fleet's plugin host API over TLS with a certificate
+  it generates once for the internal Service (Secret
+  `<release>-linea-fleet-host-tls`), and the live capture plugin trusts it.
+  The plugin's host token no longer crosses the pod network in clear text.
 - The live capture plugin introspects the credential of every new control
   stream instead of reusing a cached admission, so a revoked credential cannot
   reconnect from the cache. Delivery requests still use the cache.

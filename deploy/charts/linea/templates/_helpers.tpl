@@ -212,6 +212,28 @@ app.kubernetes.io/component: livecapture
 {{- toYaml (index $cache $name) -}}
 {{- end -}}
 
+{{- define "linea.fleetHostTLSSecret" -}}
+{{- printf "%s-host-tls" (include "linea.fleetName" .) -}}
+{{- end -}}
+
+{{/* Fleet's generated plugin host certificate for the <fleet>-internal Service, kept across upgrades: tls.crt and tls.key as YAML. */}}
+{{- define "linea.fleetHostCertificate" -}}
+{{- $name := include "linea.fleetHostTLSSecret" . -}}
+{{- $cache := .Values._generated | default dict -}}
+{{- if not (hasKey $cache $name) -}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $name -}}
+{{- if and $existing $existing.data (hasKey $existing.data "tls.crt") (hasKey $existing.data "tls.key") -}}
+{{- $_ := set $cache $name (dict "tls.crt" (b64dec (index $existing.data "tls.crt")) "tls.key" (b64dec (index $existing.data "tls.key"))) -}}
+{{- else -}}
+{{- $svc := printf "%s-internal" (include "linea.fleetName" .) -}}
+{{- $cert := genSelfSignedCert $svc nil (list $svc (printf "%s.%s" $svc .Release.Namespace) (printf "%s.%s.svc" $svc .Release.Namespace)) 825 -}}
+{{- $_ := set $cache $name (dict "tls.crt" $cert.Cert "tls.key" $cert.Key) -}}
+{{- end -}}
+{{- $_ := set .Values "_generated" $cache -}}
+{{- end -}}
+{{- toYaml (index $cache $name) -}}
+{{- end -}}
+
 {{/* The server accepts workers when the chart deploys the pool or a worker, or is given a registration token. */}}
 {{- define "linea.acceptsWorkers" -}}
 {{- if or .Values.pool.enabled .Values.worker.enabled .Values.worker.token .Values.worker.existingSecret }}true{{ end -}}

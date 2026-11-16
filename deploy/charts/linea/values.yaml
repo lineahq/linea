@@ -147,7 +147,8 @@ fleet:
         # Serve the plugin API that fleet calls (port 8090, carrying the
         # service token) over TLS with this certificate, which must then name
         # the <name>-plugin Service; fleet trusts its tls.crt. Fleet's plugin
-        # host API stays plain HTTP inside the cluster.
+        # host API, which the plugin calls, is always TLS with a certificate
+        # the chart generates for the <fleet>-internal Service.
         pluginAPI: false
       resources:
         requests:

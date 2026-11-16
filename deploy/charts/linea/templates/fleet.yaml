@@ -22,7 +22,7 @@ uses, so it connects on its own.
 {{- $_ := set $registration "allow_insecure_http" true }}
 {{- end }}
 {{- $pluginsJSON := dict "plugins" (list $registration) | toJson }}
-{{- $configJSON := dict "id" "livecapture" "version" "0.5.0" "host_endpoint" (printf "http://%s-internal:8081" $fleet) "http_tls" $pluginTLS "allow_insecure_host" true "host_token_file" "/etc/livecapture/host-token" "service_token_file" "/etc/livecapture/service-token" "metrics_token_file" "/etc/livecapture/metrics-token" "http_listen" "0.0.0.0:8090" "control_listen" "0.0.0.0:4340" "delivery_listen" "0.0.0.0:4341" "tls_cert_file" "/etc/livecapture/tls.crt" "tls_key_file" "/etc/livecapture/tls.key" "capture_label" "capture" "raw_principals" (ternary (list (index (splitList "_" (include "linea.fleetOperatorToken" .)) 1)) (list) (eq (toString $lc.rawCapture) "true")) "max_peers" 256 | toJson }}
+{{- $configJSON := dict "id" "livecapture" "version" "0.5.0" "host_endpoint" (printf "https://%s-internal:8081" $fleet) "host_ca_file" "/etc/livecapture/host-ca.crt" "http_tls" $pluginTLS "host_token_file" "/etc/livecapture/host-token" "service_token_file" "/etc/livecapture/service-token" "metrics_token_file" "/etc/livecapture/metrics-token" "http_listen" "0.0.0.0:8090" "control_listen" "0.0.0.0:4340" "delivery_listen" "0.0.0.0:4341" "tls_cert_file" "/etc/livecapture/tls.crt" "tls_key_file" "/etc/livecapture/tls.key" "capture_label" "capture" "raw_principals" (ternary (list (index (splitList "_" (include "linea.fleetOperatorToken" .)) 1)) (list) (eq (toString $lc.rawCapture) "true")) "max_peers" 256 | toJson }}
 # The fleet admin token (token) stays with the operator of the release: it
 # issues credentials and runs plugin operations, and the server never gets it.
 # The server's fleet operator token (operator-token) is the server's credential.
@@ -173,6 +173,20 @@ stringData:
   service-token: {{ $serviceToken | quote }}
   metrics-token: {{ $metricsToken | quote }}
 ---
+{{- $hostCert := include "linea.fleetHostCertificate" . | fromYaml }}
+# Fleet's self-signed certificate for the plugin host API on the internal
+# Service, generated once and kept. The plugin trusts tls.crt.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "linea.fleetHostTLSSecret" . }}
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  tls.crt: {{ index $hostCert "tls.crt" | b64enc }}
+  tls.key: {{ index $hostCert "tls.key" | b64enc }}
+---
 {{- if not $lc.tls.secretName }}
 {{- $cert := include "linea.livecaptureCertificate" . | fromYaml }}
 # The plugin's self-signed certificate, generated once and kept. Collectors
@@ -317,6 +331,10 @@ spec:
             - --allow-insecure-remote
             - --plugins-config=/etc/fleet/plugins/plugins.json
             - --plugin-listen=0.0.0.0:8081
+            # The plugin host API carries the host token: TLS even inside
+            # the cluster.
+            - --plugin-tls-cert=/etc/fleet/host-tls/tls.crt
+            - --plugin-tls-key=/etc/fleet/host-tls/tls.key
             - --config-management={{ $d.configManagement | default false }}
           env:
             - {name: LINEA_FLEET_DATABASE_URL_FILE, value: /etc/fleet/runtime/url}
@@ -342,8 +360,13 @@ spec:
           volumeMounts:
             - {name: runtime-url, mountPath: /etc/fleet/runtime, readOnly: true}
             - {name: plugins, mountPath: /etc/fleet/plugins, readOnly: true}
+            - {name: host-tls, mountPath: /etc/fleet/host-tls, readOnly: true}
             - {name: tmp, mountPath: /tmp}
       volumes:
+        - name: host-tls
+          secret:
+            secretName: {{ include "linea.fleetHostTLSSecret" . }}
+            items: [{key: tls.crt, path: tls.crt}, {key: tls.key, path: tls.key}]
         - name: migrate-url
           secret:
             secretName: {{ $dbSecret }}
@@ -526,6 +549,10 @@ spec:
                   items:
                     - {key: tls.crt, path: tls.crt}
                     - {key: tls.key, path: tls.key}
+              # The plugin trusts fleet's plugin host certificate.
+              - secret:
+                  name: {{ include "linea.fleetHostTLSSecret" . }}
+                  items: [{key: tls.crt, path: host-ca.crt}]
               - secret:
                   name: {{ $dbSecret }}
                   items: [{key: capture-runtime-url, path: runtime-url}]
