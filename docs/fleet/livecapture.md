@@ -137,7 +137,8 @@ ingress or load balancer.
   `host_endpoint`, with `host_ca_file` (a PEM bundle of at most 16 KiB)
   when fleet's host listener has a certificate from a private CA, and the
   registration's [`ca_file`](plugins.md#register-a-plugin) for the plugin's
-  own HTTP listener, which serves TLS with `http_tls`.
+  own HTTP listener, which serves TLS with `http_tls`. The Helm chart turns
+  this on for the plugin API with `fleet.deploy.livecapture.tls.pluginAPI`.
 
 ## Connect existing Collectors
 

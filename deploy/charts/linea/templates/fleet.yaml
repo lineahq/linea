@@ -14,8 +14,15 @@ uses, so it connects on its own.
 {{- $hostToken := include "linea.livecaptureToken" (list . "host-token") }}
 {{- $serviceToken := include "linea.livecaptureToken" (list . "service-token") }}
 {{- $metricsToken := include "linea.livecaptureToken" (list . "metrics-token") }}
-{{- $pluginsJSON := dict "plugins" (list (dict "id" "livecapture" "version" "0.5.0" "api_version" "3" "endpoint" (printf "http://%s-plugin:8090" $capture) "enabled" true "allow_insecure_http" true "permissions" (list "agents.read" "credentials.introspect") "host_token_file" "/etc/fleet/plugins/host-token" "service_token_file" "/etc/fleet/plugins/service-token")) | toJson }}
-{{- $configJSON := dict "id" "livecapture" "version" "0.5.0" "host_endpoint" (printf "http://%s:8081" $fleet) "allow_insecure_host" true "host_token_file" "/etc/livecapture/host-token" "service_token_file" "/etc/livecapture/service-token" "metrics_token_file" "/etc/livecapture/metrics-token" "http_listen" "0.0.0.0:8090" "control_listen" "0.0.0.0:4340" "delivery_listen" "0.0.0.0:4341" "tls_cert_file" "/etc/livecapture/tls.crt" "tls_key_file" "/etc/livecapture/tls.key" "capture_label" "capture" "raw_principals" (ternary (list (index (splitList "_" (include "linea.fleetOperatorToken" .)) 1)) (list) (eq (toString $lc.rawCapture) "true")) "max_peers" 256 | toJson }}
+{{- $pluginTLS := eq (toString $lc.tls.pluginAPI) "true" }}
+{{- $registration := dict "id" "livecapture" "version" "0.5.0" "api_version" "3" "endpoint" (printf "%s://%s-plugin:8090" (ternary "https" "http" $pluginTLS) $capture) "enabled" true "permissions" (list "agents.read" "credentials.introspect") "host_token_file" "/etc/fleet/plugins/host-token" "service_token_file" "/etc/fleet/plugins/service-token" }}
+{{- if $pluginTLS }}
+{{- $_ := set $registration "ca_file" "/etc/fleet/plugins/ca.crt" }}
+{{- else }}
+{{- $_ := set $registration "allow_insecure_http" true }}
+{{- end }}
+{{- $pluginsJSON := dict "plugins" (list $registration) | toJson }}
+{{- $configJSON := dict "id" "livecapture" "version" "0.5.0" "host_endpoint" (printf "http://%s-internal:8081" $fleet) "http_tls" $pluginTLS "allow_insecure_host" true "host_token_file" "/etc/livecapture/host-token" "service_token_file" "/etc/livecapture/service-token" "metrics_token_file" "/etc/livecapture/metrics-token" "http_listen" "0.0.0.0:8090" "control_listen" "0.0.0.0:4340" "delivery_listen" "0.0.0.0:4341" "tls_cert_file" "/etc/livecapture/tls.crt" "tls_key_file" "/etc/livecapture/tls.key" "capture_label" "capture" "raw_principals" (ternary (list (index (splitList "_" (include "linea.fleetOperatorToken" .)) 1)) (list) (eq (toString $lc.rawCapture) "true")) "max_peers" 256 | toJson }}
 # The fleet admin token (token) stays with the operator of the release: it
 # issues credentials and runs plugin operations, and the server never gets it.
 # The server's fleet operator token (operator-token) is the server's credential.
@@ -208,8 +215,23 @@ spec:
   selector:
     {{- include "linea.fleetSelector" . | nindent 4 }}
   ports:
-    - {name: management, port: {{ $d.service.managementPort }}, targetPort: management}
     - {name: opamp, port: {{ $d.service.agentPort }}, targetPort: opamp}
+---
+# The management API for the server and the plugin host API, never exposed
+# outside the cluster whatever type the OpAMP Service has.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fleet }}-internal
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fleet
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "linea.fleetSelector" . | nindent 4 }}
+  ports:
+    - {name: management, port: {{ $d.service.managementPort }}, targetPort: management}
     - {name: plugin-host, port: 8081, targetPort: plugin-host}
 ---
 apiVersion: apps/v1
@@ -345,6 +367,12 @@ spec:
                   items:
                     - {key: host-token, path: host-token}
                     - {key: service-token, path: service-token}
+              {{- if $pluginTLS }}
+              # Fleet trusts the plugin's certificate for its API.
+              - secret:
+                  name: {{ include "linea.livecaptureTLSSecret" . }}
+                  items: [{key: tls.crt, path: ca.crt}]
+              {{- end }}
         - {name: tmp, emptyDir: {sizeLimit: 16Mi}}
       {{- with $d.nodeSelector }}
       nodeSelector:

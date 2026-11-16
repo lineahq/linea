@@ -299,6 +299,20 @@ the first item below.
   failed command no longer prints its error text: it logs one line with an enum
   `cause`. The fields are in `docs/fleet/livecapture.md`.
 
+- The Helm chart's fleet Service `<release>-linea-fleet` carries OpAMP
+  only, and `fleet.deploy.service.type` applies to it alone. The management
+  API and the plugin host API move to `<release>-linea-fleet-internal`, which
+  is always `ClusterIP`, so exposing OpAMP no longer exposes them. The server
+  reaches fleet there. `fleet.deploy.livecapture.tls.pluginAPI: true` serves
+  the plugin's API to fleet over TLS; the chart's generated certificate now
+  also names `<release>-linea-livecapture-plugin`.
+
+  **Upgrading:** anything that reached the management API through
+  `<release>-linea-fleet` uses `<release>-linea-fleet-internal`. To turn on
+  `tls.pluginAPI` with a certificate the chart generated earlier, delete the
+  Secret `<release>-linea-livecapture-tls` first and give Collectors the new
+  `tls.crt`.
+
 - `linea-fleet` writes a transition log: one JSON line on stderr per state
   change and none per request, with `time`, `level`, `msg` (the event name),
   `component` (`fleet`) and fields from a closed set of IDs, enumerated

@@ -153,7 +153,7 @@ app.kubernetes.io/component: livecapture
 {{/* The URL the server reaches fleet's management API at. */}}
 {{- define "linea.fleetURL" -}}
 {{- if include "linea.fleetDeployed" . -}}
-{{- printf "http://%s:%v" (include "linea.fleetName" .) .Values.fleet.deploy.service.managementPort -}}
+{{- printf "http://%s-internal:%v" (include "linea.fleetName" .) .Values.fleet.deploy.service.managementPort -}}
 {{- else -}}
 {{- .Values.fleet.url -}}
 {{- end -}}
@@ -202,7 +202,8 @@ app.kubernetes.io/component: livecapture
 {{- $_ := set $cache $name (dict "tls.crt" (b64dec (index $existing.data "tls.crt")) "tls.key" (b64dec (index $existing.data "tls.key"))) -}}
 {{- else -}}
 {{- $svc := include "linea.livecaptureName" . -}}
-{{- $hosts := concat (list $svc (printf "%s.%s" $svc .Release.Namespace) (printf "%s.%s.svc" $svc .Release.Namespace)) .Values.fleet.deploy.livecapture.tls.extraHosts -}}
+{{- $plugin := printf "%s-plugin" $svc -}}
+{{- $hosts := concat (list $svc (printf "%s.%s" $svc .Release.Namespace) (printf "%s.%s.svc" $svc .Release.Namespace) $plugin (printf "%s.%s" $plugin .Release.Namespace) (printf "%s.%s.svc" $plugin .Release.Namespace)) .Values.fleet.deploy.livecapture.tls.extraHosts -}}
 {{- $cert := genSelfSignedCert $svc nil $hosts 825 -}}
 {{- $_ := set $cache $name (dict "tls.crt" $cert.Cert "tls.key" $cert.Key) -}}
 {{- end -}}

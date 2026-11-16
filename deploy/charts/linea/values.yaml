@@ -101,9 +101,11 @@ fleet:
       # The runtime roles that migrations grant their privileges to.
       fleetRuntimeRole: fleet_app
       captureRuntimeRole: capture_app
-    # OpAMP for Collectors on agentPort (ws://, plain), the management API on
-    # managementPort for the server. Collectors outside the cluster need a
-    # LoadBalancer or NodePort type, or an ingress you add.
+    # OpAMP for Collectors on agentPort (ws://, plain) in the Service named
+    # after fleet; type applies to it alone. Collectors outside the cluster
+    # need a LoadBalancer or NodePort type, or an ingress you add. The
+    # management API on managementPort and the plugin host API are in the
+    # <fleet>-internal Service, which is always ClusterIP.
     service:
       type: ClusterIP
       annotations: {}
@@ -138,10 +140,15 @@ fleet:
       tls:
         # A kubernetes.io/tls Secret for the control and delivery endpoints.
         # Empty: the chart generates a self-signed certificate once, for the
-        # Service's names and extraHosts, and keeps it; Collectors trust the
-        # Secret's tls.crt.
+        # Service's names, the <name>-plugin Service's names and extraHosts,
+        # and keeps it; Collectors trust the Secret's tls.crt.
         secretName: ""
         extraHosts: []
+        # Serve the plugin API that fleet calls (port 8090, carrying the
+        # service token) over TLS with this certificate, which must then name
+        # the <name>-plugin Service; fleet trusts its tls.crt. Fleet's plugin
+        # host API stays plain HTTP inside the cluster.
+        pluginAPI: false
       resources:
         requests:
           cpu: 100m

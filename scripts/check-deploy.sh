@@ -16,6 +16,7 @@ helm lint --strict "$chart" "${bundled[@]}"
 echo "== helm template $chart"
 helm template linea "$chart" "${bundled[@]}" >/dev/null
 helm template linea "$chart" "${bundled[@]}" --set fleet.deploy.enabled=true >/dev/null
+helm template linea "$chart" "${bundled[@]}" --set fleet.deploy.enabled=true --set fleet.deploy.livecapture.tls.pluginAPI=true >/dev/null
 
 # Missing secret files do not fail `config`; only the YAML and its
 # interpolation are checked.
