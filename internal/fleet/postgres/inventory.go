@@ -298,6 +298,34 @@ func expire(ctx context.Context, tx pgx.Tx, before *time.Time, limit int, reason
 }
 
 // retain removes agents disconnected longer than the retention period.
+// revokedRetention is how long a revoked credential's metadata stays.
+// Admin and operator credentials stay: offline bootstrap recognizes their
+// tokens and must keep refusing a revoked one.
+const revokedRetention = "30 days"
+
+// pruneCredentials deletes agent and reader credentials revoked longer than
+// revokedRetention, in one bounded batch with one event each.
+func (s *Store) pruneCredentials(ctx context.Context) error {
+	return s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `DELETE FROM fleet.credentials WHERE id IN (
+			SELECT id FROM fleet.credentials WHERE role IN ('agent','reader')
+			AND revoked_at < now() - interval '`+revokedRetention+`' ORDER BY revoked_at, id LIMIT $1) RETURNING id`, expireBatch)
+		if err != nil {
+			return err
+		}
+		ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return err
+		}
+		for _, id := range ids {
+			if err := s.event(ctx, tx, "credential.deleted", id, "server", nil); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (s *Store) retain(ctx context.Context) error {
 	if s.options.Retention <= 0 {
 		return nil

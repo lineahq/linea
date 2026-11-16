@@ -159,6 +159,7 @@ func (s *Store) lead(ctx context.Context) {
 	_, _ = s.reapAll(ctx, s.options.Heartbeat/2)
 	_ = s.trimEvents(ctx, s.options.MaxEvents)
 	_ = s.retain(ctx)
+	_ = s.pruneCredentials(ctx)
 	_ = s.pruneComponentSets(ctx)
 }
 

@@ -248,6 +248,7 @@ Credential rules:
 | Rotation | Issue another agent credential, update the deployment's secrets (agent and plugin token), then revoke the old one |
 | Plugin token | Agent credentials only. Issued with the agent token and never returned again. Credentials issued before plugin tokens existed have none: reissue them for plugins |
 | Capacity | At most 1,000 credentials, revoked metadata included |
+| Revoked metadata | The leader deletes agent and reader credentials 30 days after revocation and records `credential.deleted`. Admin and operator credentials stay, so offline bootstrap keeps refusing a revoked deployment token |
 
 ## Groups
 
