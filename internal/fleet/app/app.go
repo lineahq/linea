@@ -184,18 +184,24 @@ func runWithStore(ctx context.Context, cfg Config, version string, notify func(m
 			MaxHeaderBytes: 16 * 1024, TLSConfig: serverTLS}
 	}
 	managementServer, agentServer := makeServer(apiHandler), makeServer(gw)
+	// OpAMP over WebSocket cannot use HTTP/2, and one HTTP/2 connection
+	// would carry many unauthenticated requests past the TCP bound.
+	agentServer.TLSNextProto = map[string]func(*http.Server, *tls.Conn, http.Handler){}
+	agentServer.ConnContext = agentConnContext
 	// Bound all TCP peers, including incomplete TLS/HTTP handshakes, not only
-	// agents that have completed their first OpAMP message.
+	// agents that have completed their first OpAMP message. On the agent
+	// listener the bound covers peers until they authenticate, so peers
+	// without a credential cannot take the sessions of real agents.
 	managementLimit := &limitedListener{Listener: management, slots: make(chan struct{}, 128)}
 	agentLimit := &limitedListener{Listener: agent, slots: make(chan struct{}, cfg.Limits.MaxConnections)}
 	management, agent = managementLimit, agentLimit
 	writers := []func(io.Writer){gw.WriteMetrics, registry.WriteMetrics, func(w io.Writer) {
-		fmt.Fprint(w, "# TYPE linea_fleet_tcp_connections gauge\n# TYPE linea_fleet_tcp_refused_total counter\n# TYPE linea_fleet_tcp_connection_limit gauge\n")
+		fmt.Fprint(w, "# TYPE linea_fleet_tcp_connections gauge\n# TYPE linea_fleet_tcp_unauthenticated_connections gauge\n# TYPE linea_fleet_tcp_refused_total counter\n# TYPE linea_fleet_tcp_connection_limit gauge\n")
 		for _, entry := range []struct {
 			name string
 			l    *limitedListener
 		}{{"management", managementLimit}, {"agent", agentLimit}} {
-			fmt.Fprintf(w, "linea_fleet_tcp_connections{listener=\"%s\"} %d\nlinea_fleet_tcp_refused_total{listener=\"%s\"} %d\nlinea_fleet_tcp_connection_limit{listener=\"%s\"} %d\n", entry.name, len(entry.l.slots), entry.name, entry.l.refused.Load(), entry.name, cap(entry.l.slots))
+			fmt.Fprintf(w, "linea_fleet_tcp_connections{listener=\"%s\"} %d\nlinea_fleet_tcp_unauthenticated_connections{listener=\"%s\"} %d\nlinea_fleet_tcp_refused_total{listener=\"%s\"} %d\nlinea_fleet_tcp_connection_limit{listener=\"%s\"} %d\n", entry.name, entry.l.open.Load(), entry.name, len(entry.l.slots), entry.name, entry.l.refused.Load(), entry.name, cap(entry.l.slots))
 		}
 	}}
 	if database, ok := store.(interface{ WriteMetrics(io.Writer) }); ok {
@@ -294,15 +300,21 @@ func runWithStore(ctx context.Context, cfg Config, version string, notify func(m
 	return reason, err
 }
 
+// limitedListener bounds the connections that hold a slot. A connection
+// holds its slot until it closes, or until the handler calls authenticated:
+// on the agent listener, slots bound only peers that have not yet presented
+// an agent credential, and the gateway's session limit bounds the rest.
 type limitedListener struct {
 	net.Listener
 	slots   chan struct{}
 	refused atomic.Uint64
+	open    atomic.Int64
 }
 type limitedConn struct {
 	net.Conn
-	once    sync.Once
-	release func()
+	l      *limitedListener
+	held   atomic.Bool
+	closed sync.Once
 }
 
 func (l *limitedListener) Accept() (net.Conn, error) {
@@ -313,7 +325,10 @@ func (l *limitedListener) Accept() (net.Conn, error) {
 		}
 		select {
 		case l.slots <- struct{}{}:
-			return &limitedConn{Conn: c, release: func() { <-l.slots }}, nil
+			l.open.Add(1)
+			lc := &limitedConn{Conn: c, l: l}
+			lc.held.Store(true)
+			return lc, nil
 		default:
 			l.refused.Add(1)
 			_ = c.Close()
@@ -321,8 +336,30 @@ func (l *limitedListener) Accept() (net.Conn, error) {
 	}
 }
 
+// authenticated frees the connection's slot while it stays open.
+func (c *limitedConn) authenticated() {
+	if c.held.CompareAndSwap(true, false) {
+		<-c.l.slots
+	}
+}
+
 func (c *limitedConn) Close() error {
 	err := c.Conn.Close()
-	c.once.Do(c.release)
+	c.closed.Do(func() {
+		c.authenticated()
+		c.l.open.Add(-1)
+	})
 	return err
+}
+
+// agentConnContext lets the gateway free a connection's slot once its peer
+// authenticated. TLS wraps the listener's connection.
+func agentConnContext(ctx context.Context, c net.Conn) context.Context {
+	if t, ok := c.(*tls.Conn); ok {
+		c = t.NetConn()
+	}
+	if lc, ok := c.(*limitedConn); ok {
+		return gateway.WithAuthenticated(ctx, lc.authenticated)
+	}
+	return ctx
 }

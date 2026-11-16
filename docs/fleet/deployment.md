@@ -144,7 +144,7 @@ Optional Compose variables (environment or a protected env file):
 | `--server-id` | required | Stable operator-assigned identity |
 | `--tls-cert`, `--tls-key` | none | Serve both listeners over HTTPS/WSS |
 | `--max-agents` | | Inventory capacity (1 to 100,000). At the limit, registration evicts the longest-disconnected agent before refusing |
-| `--max-connections` | | Agent TCP connections per replica (1 to 10,000) |
+| `--max-connections` | | Agent sessions per replica (1 to 10,000), and separately agent TCP connections that have not yet presented an agent credential. A replica holds at most twice this many agent connections |
 | `--max-pending-sessions` | 400 | Handshakes per replica between admission and first commit (1 to 10,000) |
 | `--max-events` | 100,000 | Retained events (1 to 1,000,000); keep at least two per agent |
 | `--drain-timeout` | 20 s | Window for closing agent sockets on stop (0 to 30 s) |
@@ -167,6 +167,12 @@ Optional Compose variables (environment or a protected env file):
 - Core has no cookie auth or CORS, and rejects browser-origin WebSockets.
 - Agents send bearer auth to `/v1/opamp`; polling is unsupported. API clients
   use a reader, operator or admin token on the management listener.
+- The agent listener speaks HTTP/1.1 only. A connection counts against the
+  unauthenticated bound until it presents an agent credential, and every
+  refusal (401, 403, 404, 405, 426, 503) closes it. Fleet has no limit per
+  source address: the ingress or load balancer in front of the agent listener
+  must limit connections and connection rate per source, so one source cannot
+  fill the unauthenticated bound and keep new Collectors out.
 - Only process probes are anonymous. Metrics need fleet read access.
 
 ### Container hardening

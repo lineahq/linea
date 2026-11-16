@@ -36,7 +36,7 @@ All names start with `linea_fleet_`.
 | `agent_admission_refused_total` | Refused gateway admissions: connection ceiling, no handshake slot within 25 s, or writer backpressure |
 | `agent_admission_held_total` | Handshakes that waited for a slot |
 | `agent_handshakes_pending`, `agent_handshake_limit` | Handshakes between admission and first commit, and `--max-pending-sessions`. Pending at the limit during a storm means admission is the bound |
-| `tcp_connections`, `tcp_connection_limit`, `tcp_refused_total` | Agent and management TCP budgets, including incomplete handshakes |
+| `tcp_connections`, `tcp_unauthenticated_connections`, `tcp_connection_limit`, `tcp_refused_total` | Agent and management TCP connections: all open ones, those that hold a slot, the slots, and refusals. On the agent listener a connection frees its slot once it presents an agent credential; management connections hold theirs until they close |
 | `agent_credential_refused_total` | Connections refused because another credential holds the instance UID (see [identity](README.md#register-collectors-with-a-deployment-token)) |
 | `agent_takeovers_total`, `agents_reaped_total` | Sessions this replica took over from another connection, and agents the leader released from crashed replicas |
 | `replica_leader`, `replica_heartbeat_age_seconds` | 1 while this replica holds the leader lease, and the age of its last successful heartbeat |

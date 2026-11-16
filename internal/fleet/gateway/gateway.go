@@ -96,6 +96,21 @@ const (
 type busy interface{ Busy() bool }
 
 type principalKey struct{}
+type authenticatedKey struct{}
+
+// WithAuthenticated returns a connection context whose function the gateway
+// calls once the peer presented a valid agent credential.
+func WithAuthenticated(ctx context.Context, fn func()) context.Context {
+	return context.WithValue(ctx, authenticatedKey{}, fn)
+}
+
+// refuse answers an error and closes the connection, so a refused peer
+// cannot keep it open idle and send again without a new TCP connection.
+func refuse(w http.ResponseWriter, message string, code int) {
+	w.Header().Set("Connection", "close")
+	http.Error(w, message, code)
+}
+
 type handshakeKey struct{}
 type Gateway struct {
 	store            fleet.Repository
@@ -161,7 +176,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	g.mu.Unlock()
 	if draining {
 		w.Header().Set("Retry-After", "1")
-		http.Error(w, "fleet is draining", http.StatusServiceUnavailable)
+		refuse(w, "fleet is draining", http.StatusServiceUnavailable)
 		return
 	}
 	// Admission runs before credential checks so storms stay cheap.
@@ -179,12 +194,12 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		g.mu.Unlock()
 		if draining {
 			w.Header().Set("Retry-After", "1")
-			http.Error(w, "fleet is draining", http.StatusServiceUnavailable)
+			refuse(w, "fleet is draining", http.StatusServiceUnavailable)
 			return
 		}
 		g.admissionRefused.Add(1)
 		w.Header().Set("Retry-After", retryAfter())
-		http.Error(w, "fleet admission limit reached", http.StatusServiceUnavailable)
+		refuse(w, "fleet admission limit reached", http.StatusServiceUnavailable)
 		return
 	}
 	// A hijacked connection takes the slot with it; otherwise the handshake
@@ -202,7 +217,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		g.mu.Unlock()
 		if draining {
 			w.Header().Set("Retry-After", "1")
-			http.Error(w, "fleet is draining", http.StatusServiceUnavailable)
+			refuse(w, "fleet is draining", http.StatusServiceUnavailable)
 			return
 		}
 	}
@@ -211,29 +226,32 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p, err := g.access.Authenticate(ctx, r)
 	if err != nil || p.Role != "agent" {
 		if err != nil && !errors.Is(err, auth.ErrUnauthorized) {
-			http.Error(w, "fleet storage unavailable", http.StatusServiceUnavailable)
+			refuse(w, "fleet storage unavailable", http.StatusServiceUnavailable)
 			return
 		}
 		g.log.AuthFailure(translog.ListenerAgent)
 		w.Header().Set("WWW-Authenticate", "Bearer")
-		http.Error(w, "valid agent credential required", http.StatusUnauthorized)
+		refuse(w, "valid agent credential required", http.StatusUnauthorized)
 		return
 	}
+	if fn, ok := r.Context().Value(authenticatedKey{}).(func()); ok {
+		fn()
+	}
 	if r.URL.Path != "/v1/opamp" {
-		http.NotFound(w, r)
+		refuse(w, "404 page not found", http.StatusNotFound)
 		return
 	}
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
-		http.Error(w, "WebSocket transport required", http.StatusMethodNotAllowed)
+		refuse(w, "WebSocket transport required", http.StatusMethodNotAllowed)
 		return
 	}
 	if len(r.Header.Values("Origin")) > 0 {
-		http.Error(w, "browser origins unsupported", http.StatusForbidden)
+		refuse(w, "browser origins unsupported", http.StatusForbidden)
 		return
 	}
 	if !websocket.IsWebSocketUpgrade(r) || r.Header.Get("Content-Type") == "application/x-protobuf" {
-		http.Error(w, "WebSocket transport required", http.StatusUpgradeRequired)
+		refuse(w, "WebSocket transport required", http.StatusUpgradeRequired)
 		return
 	}
 	ctx = context.WithValue(context.WithValue(r.Context(), principalKey{}, p), handshakeKey{}, h)

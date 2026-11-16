@@ -191,6 +191,9 @@ func TestGatewayAuthAndTransport(t *testing.T) {
 		if resp.StatusCode != tc.want {
 			t.Fatalf("got %d want %d", resp.StatusCode, tc.want)
 		}
+		if !resp.Close {
+			t.Fatalf("refusal %d left the connection open", tc.want)
+		}
 	}
 	// A Content-Type must not redirect an otherwise valid upgrade into polling.
 	c, resp, err := websocket.DefaultDialer.Dial(url, http.Header{
@@ -630,4 +633,21 @@ func TestSweepRefreshesVerificationWhileIdle(t *testing.T) {
 	// Without the refresh, the stale time closes it at once.
 	g.sweepCredentials(stale)
 	expectClosedWithin(t, c, 3*time.Second)
+}
+
+func TestGatewayReportsAuthenticatedConnections(t *testing.T) {
+	g, _, _, token := setup(t, 1, 1)
+	for _, tc := range []struct {
+		credential string
+		want       bool
+	}{{"", false}, {strings.Repeat("m", 32), false}, {token, true}} {
+		called := false
+		r := httptest.NewRequest(http.MethodGet, "/v1/opamp", nil)
+		r = r.WithContext(WithAuthenticated(r.Context(), func() { called = true }))
+		r.Header.Set("Authorization", "Bearer "+tc.credential)
+		g.ServeHTTP(httptest.NewRecorder(), r)
+		if called != tc.want {
+			t.Fatalf("credential %q: authenticated hook called = %v", tc.credential, called)
+		}
+	}
 }

@@ -262,3 +262,57 @@ func writeTLSFixture(t *testing.T, cert tls.Certificate) (string, string, error)
 	}
 	return certPath, keyPath, nil
 }
+
+func TestAuthenticatedConnectionFreesItsSlot(t *testing.T) {
+	raw, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := &limitedListener{Listener: raw, slots: make(chan struct{}, 1)}
+	defer l.Close()
+	accepted := make(chan net.Conn, 2)
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			accepted <- c
+		}
+	}()
+	take := func() net.Conn {
+		t.Helper()
+		c, err := net.DialTimeout("tcp", l.Addr().String(), time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = c.Close() })
+		select {
+		case c := <-accepted:
+			return c
+		case <-time.After(time.Second):
+			t.Fatal("accept timed out")
+			return nil
+		}
+	}
+	first := take()
+	if ctx := context.Background(); agentConnContext(ctx, first) == ctx {
+		t.Fatal("agent connection context carries no authentication hook")
+	}
+	lc := first.(*limitedConn)
+	lc.authenticated()
+	lc.authenticated()
+	if got := len(l.slots); got != 0 {
+		t.Fatalf("authenticated connection holds %d slots", got)
+	}
+	second := take()
+	if got := l.open.Load(); got != 2 {
+		t.Fatalf("open connections = %d, want 2", got)
+	}
+	_ = first.Close()
+	_ = first.Close()
+	_ = second.Close()
+	if got, open := len(l.slots), l.open.Load(); got != 0 || open != 0 {
+		t.Fatalf("after close: slots %d, open %d", got, open)
+	}
+}
