@@ -18,8 +18,9 @@
 #   - a two-wave rollout releases the canary, bakes it, and pauses when the
 #     second wave's Collector fails;
 #   - rolling back restores the previous version on both.
-# Each single-agent change tolerates one failure, so it completes and the
-# held config stays desired.
+# A single-agent change that fails pauses its wave; the smoke accepts the
+# failure as an operator would (:pause, :resume), so the rollout completes
+# and the held config stays desired.
 #
 # The first Collector runs from compose.supervised.yaml, the deployment
 # overlay, with the fixture supervisor config (shorter apply timeout).
@@ -77,14 +78,24 @@ check() { [ "$(view | json "$1")" = True ]; }
 agent() { [ "$(req GET "/api/v1/agents/$uid" | json "$1")" = True ]; }
 # version CONFIG_ID BODY_FILE MESSAGE -> version number
 version() { req POST "/api/v1/configs/$1/versions" "{\"body\":$(quote "$2"),\"message\":\"$3\"}" 201 | json 'd["version"]'; }
-# Single-agent changes complete even when the agent fails them.
 single='"waves":[{"percent":100}],"bake_seconds":0,"max_failures":1'
 rollout_is() { [ "$(req GET "/api/v1/rollouts/$1" | json 'd["state"]')" = "$2" ]; }
+# failed_target ROLLOUT: a target of the rollout failed, was unhealthy or
+# timed out.
+failed_target() { req GET "/api/v1/rollouts/$1/targets" | json "any(t['outcome'] in ('failed', 'unhealthy', 'timed_out') for t in d['items'])" | grep -qx True; }
+# done_or_failed ROLLOUT: the rollout completed or a target failed.
+done_or_failed() { rollout_is "$1" completed || failed_target "$1"; }
 # rollout ASSIGNMENT CHANGE [POLICY]: start a rollout and wait for it to
-# complete. CHANGE is "to_version":N or "delete":true.
+# complete, accepting a failed target as an operator would. CHANGE is
+# "to_version":N or "delete":true.
 rollout() {
   local r
   r=$(req POST /api/v1/rollouts "{\"assignment_id\":\"$1\",$2,${3:-$single}}" 201 | json 'd["id"]')
+  wait_for 180 "rollout $r neither completed nor failed a target" done_or_failed "$r"
+  if ! rollout_is "$r" completed; then
+    rollout_is "$r" paused || req POST "/api/v1/rollouts/$r:pause" >/dev/null
+    req POST "/api/v1/rollouts/$r:resume" >/dev/null
+  fi
   wait_for 180 "rollout $r did not complete" rollout_is "$r" completed
 }
 set_version() { rollout "$assignment" "\"to_version\":$1"; }
@@ -148,14 +159,20 @@ wait_for 30 "the component list was not stored" sets_stored
 printf 'receivers:\n  smokemissing: {}\n' > "$run/missing.yaml"
 missing=$(version "$config" "$run/missing.yaml" missing)
 before=$(sends)
-r=$(req POST /api/v1/rollouts "{\"assignment_id\":\"$assignment\",\"to_version\":$missing,$single}" 201 | json 'd["id"]')
-wait_for 180 "the incompatible rollout did not complete" rollout_is "$r" completed
-[ "$(req GET "/api/v1/rollouts/$r/targets" | json "d['items'][0]['outcome']")" = incompatible ] || fail "the target was not marked incompatible"
-check "d['missing_components'] == ['receiver:smokemissing'] and d['reported']['hash'] == '$good_hash' and d['reported']['status'] == 'applied'" ||
-  fail "the agent view does not report the missing type: $(view)"
+r=$(req POST /api/v1/rollouts "{\"assignment_id\":\"$assignment\",\"to_version\":$missing,$single,\"wave_timeout_seconds\":60}" 201 | json 'd["id"]')
+incompatible() { [ "$(req GET "/api/v1/rollouts/$r/targets" | json "d['items'][0]['outcome']")" = incompatible ]; }
+wait_for 30 "the target was not marked incompatible" incompatible
+withheld() { check "d['desired']['hash'] == '$good_hash' and d['reported']['hash'] == '$good_hash' and d['reported']['status'] == 'applied'"; }
+withheld || fail "the incompatible version reached the agent: $(view)"
 quiet 10 "an incompatible config was sent"
+# A wave with no succeeded target proves nothing: it pauses at its timeout,
+# and an operator cancels it.
+wait_for 90 "the incompatible rollout did not pause at its wave timeout" rollout_is "$r" paused
+[ "$(req POST "/api/v1/rollouts/$r:cancel" | json 'd["state"]')" = cancelled ] || fail "the incompatible rollout was not cancelled"
+quiet 5 "an incompatible config was sent after the cancel"
+withheld || fail "the cancelled incompatible version reached the agent: $(view)"
 [ "$(sends)" = "$before" ] || fail "an incompatible config was sent"
-echo "withheld: version $missing needs receiver:smokemissing"
+echo "withheld: version $missing needs receiver:smokemissing; its rollout paused and was cancelled"
 
 # 2. An invalid config is FAILED and held; the old config keeps running.
 bad=$(version "$config" "$fixtures/invalid.yaml" invalid)
