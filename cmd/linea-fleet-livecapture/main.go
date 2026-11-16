@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -10,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -115,12 +119,20 @@ func run(log *translog.Logger) (result error) {
 		if err != nil {
 			return err
 		}
-		r, _ := http.NewRequestWithContext(ctx, "GET", "http://127.0.0.1:8090/readyz", nil)
+		client := &http.Client{Timeout: 2 * time.Second}
+		scheme := "http"
+		if config.HTTPTLS && *haListen == "" {
+			scheme = "https"
+			client.Transport, err = probeTransport(config.CertFile)
+			if err != nil {
+				return capture.ErrInvalid
+			}
+		}
+		r, _ := http.NewRequestWithContext(ctx, "GET", scheme+"://127.0.0.1:8090/readyz", nil)
 		r.Header.Set("Authorization", "Bearer "+token)
 		if *haListen != "" {
 			r, _ = http.NewRequestWithContext(ctx, "GET", "http://"+*haListen+"/healthz", nil)
 		}
-		client := &http.Client{Timeout: 2 * time.Second}
 		response, err := client.Do(r)
 		if err != nil {
 			return capture.ErrUnavailable
@@ -187,4 +199,29 @@ func supervisorFailure(err error) error {
 		return err
 	}
 	return capture.WithCause(translog.ReasonSupervisorFailed, err)
+}
+
+// probeTransport trusts exactly the plugin's own certificate: the probe
+// dials the loopback address, which the certificate does not name.
+func probeTransport(certFile string) (*http.Transport, error) {
+	certPEM, err := capture.Secret(certFile)
+	if err != nil {
+		return nil, err
+	}
+	block, _ := pem.Decode([]byte(strings.TrimSpace(certPEM)))
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, capture.ErrInvalid
+	}
+	leaf := block.Bytes
+	return &http.Transport{TLSClientConfig: &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		// Verification is the pin below, not a chain to a root.
+		InsecureSkipVerify: true,
+		VerifyConnection: func(s tls.ConnectionState) error {
+			if len(s.PeerCertificates) == 0 || !bytes.Equal(s.PeerCertificates[0].Raw, leaf) {
+				return capture.ErrUnavailable
+			}
+			return nil
+		},
+	}}, nil
 }
