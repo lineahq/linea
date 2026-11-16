@@ -126,6 +126,7 @@ func (s *Server) Metrics() MetricSnapshot {
 	m.Counters["captures_withdrawn_total"] = s.observed.withdrawn.Load()
 	m.Counters["peers_credential_closed_total"] = s.observed.credentialClosed.Load()
 	m.Counters["desired_state_rejected_total"] = s.observed.desiredRejected.Load()
+	m.Counters["log_lines_dropped_total"] = s.log.Dropped()
 	for i, outcome := range linkOutcomes {
 		m.Counters["peer_link_"+outcome+"_total"] = s.observed.linkOutcomes[i].Load()
 	}
