@@ -336,7 +336,17 @@ the first item below.
   `--config-unstaged-limit` (default 10) is refused with 409
   `too_many_affected`, unless the request carries `max_affected` at least that
   large. Group edits are not staged by rollouts; the docs list what a rollout
-  cannot stage.
+  cannot stage. The refusal's error body carries `affected`, the number of
+  agents the edit would reconfigure. The debugger passes it on as a conflict
+  with `affected` (HTTP and MCP), takes `max_affected` on a collector group
+  save, and the web client asks inline to confirm before resending.
+- Fleet serializes group, config, credential and plugin row creations that a
+  row cap bounds, so concurrent creations can no longer pass the cap together.
+- The live capture plugin introspects the credential of every new control
+  stream instead of reusing a cached admission, so a revoked credential cannot
+  reconnect from the cache. Delivery requests still use the cache.
+- The live capture plugin reports transition log lines dropped on a full
+  queue as `log_lines_dropped_total`.
 - Fleet stores a Collector build's component set only from credentials with
   remote config, and only when the list hashes to the reported build hash as
   the Collector's OpAMP extension computes it. An agent whose build stays
