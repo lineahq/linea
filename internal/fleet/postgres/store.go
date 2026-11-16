@@ -67,7 +67,10 @@ var pluginStateMigration string
 //go:embed migrations/014_credential_scope.sql
 var credentialScopeMigration string
 
-var migrations = []string{migration, deploymentTokensMigration, lifecycleMigration, replicasMigration, inventoryMigration, pluginsMigration, configMigration, rolloutMigration, componentsMigration, actingMigration, credentialExpiryMigration, operatorRoleMigration, pluginStateMigration, credentialScopeMigration}
+//go:embed migrations/015_audit.sql
+var auditMigration string
+
+var migrations = []string{migration, deploymentTokensMigration, lifecycleMigration, replicasMigration, inventoryMigration, pluginsMigration, configMigration, rolloutMigration, componentsMigration, actingMigration, credentialExpiryMigration, operatorRoleMigration, pluginStateMigration, credentialScopeMigration, auditMigration}
 
 // adminLock serializes offline administration (migrate, bootstrap, grants).
 // v1 servers held the same lock, so a v1 server also blocks migration to v2.
@@ -670,7 +673,8 @@ func (s *Store) event(ctx context.Context, tx pgx.Tx, kind, subject, actor strin
 	return appendEvent(ctx, tx, kind, subject, actor, detail)
 }
 
-// appendEvent records the request's acting-for value with the event.
+// appendEvent records the request's acting-for value with the event, and
+// writes an administrative event to the audit record as well.
 func appendEvent(ctx context.Context, tx pgx.Tx, kind, subject, actor string, detail []byte) error {
 	var acting []byte
 	if a := fleet.ActingFrom(ctx); a != nil {
@@ -679,7 +683,9 @@ func appendEvent(ctx context.Context, tx pgx.Tx, kind, subject, actor string, de
 			return err
 		}
 	}
-	_, err := tx.Exec(ctx, "WITH e AS (INSERT INTO fleet.events(kind,subject_id,actor_id,detail,acting_for) VALUES($1,$2,$3,$4,$5) RETURNING 1) SELECT pg_notify('fleet_events','') FROM e", kind, subject, actor, detail, acting)
+	_, err := tx.Exec(ctx, `WITH e AS (INSERT INTO fleet.events(kind,subject_id,actor_id,detail,acting_for) VALUES($1,$2,$3,$4,$5) RETURNING 1),
+		a AS (INSERT INTO fleet.audit(kind,subject_id,actor_id,detail,acting_for) SELECT $1,$2,$3,$4,$5 WHERE $6 RETURNING 1)
+		SELECT pg_notify('fleet_events','') FROM e`, kind, subject, actor, detail, acting, fleet.Audited(kind, actor))
 	return err
 }
 

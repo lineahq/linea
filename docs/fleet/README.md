@@ -119,7 +119,7 @@ return an error object with `code` and `message`.
 | --- | --- |
 | `reader` | Read inventory, groups, events, metrics and plugin discovery |
 | `operator` | Everything a reader may, plus write groups, configs, config versions, assignments and rollouts, retry an agent's config, read config version bodies. Config management still needs `--config-management`. No credentials API, no plugin lifecycle |
-| `admin` | Everything an operator may, plus the credentials API and plugin lifecycle |
+| `admin` | Everything an operator may, plus the credentials API, plugin lifecycle and the audit record |
 
 No role reaches a plugin's status or API. An admin grants that per credential
 and plugin with `plugin_access` (`{"livecapture": "write"}`; `read`,
@@ -141,6 +141,7 @@ only.
 | POST /api/v1/plugins/{id}/lifecycle | Admin; durable drain, disable or enable with `If-Match` revision |
 | /api/v1/plugins/{id}/api/{path} | A `plugin_access` grant; opaque JSON ingress, the plugin owns schemas and domain authorization |
 | GET /api/v1/events | Bounded meaningful changes: `cursor`, `limit`, `wait` (long-poll up to 30 s) |
+| GET /api/v1/audit | Admin; the administrative record, newest first: `limit`, `before` (from `next_before`), `kind`, `actor`, `since`, `until` |
 | GET /api/v1/groups, GET /api/v1/groups/{id} | Group metadata; static members or canonical selector |
 | GET /api/v1/groups/{id}/agents | Current members as agent pages |
 | PUT /api/v1/groups/{id}, DELETE /api/v1/groups/{id} | Admin or operator; static `agent_ids` or selector; quoted `If-Match` revision required |
@@ -158,6 +159,12 @@ Reading data:
   Cursors survive restarts and work on any replica.
 - A cursor answers 410 after a retention gap or a restore into another
   cluster. Refresh state and start again without a cursor.
+- Events are trimmed by count, so a reconnect storm can push a revocation
+  out of them. The audit record keeps every change to credentials, groups,
+  configs, assignments, rollouts and plugin lifecycle, with actor and
+  acting-for, for 400 days (at most one million records), written in the same
+  transaction as the change. Agent activity and the holds the gateway sets
+  never write to it.
 - Connectivity, health and telemetry delivery are separate facts. A crashed
   replica's agents read as disconnected within 10 s, with health preserved.
 - A second connection with an active UID and the same credential takes

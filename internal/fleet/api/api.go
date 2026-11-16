@@ -376,6 +376,29 @@ func (h *Handler) ServeHTTP(raw http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, 200, page)
+	case "/api/v1/audit":
+		audit, ok := h.control.(fleet.AuditRepository)
+		if !ok {
+			failure(w, fleet.ErrNotFound)
+			return
+		}
+		if !method(w, r, "GET") || !admin(w, p) {
+			return
+		}
+		q, limit, ok := query(w, r, "before", "kind", "actor", "since", "until")
+		if !ok {
+			return
+		}
+		aq, ok := auditQuery(w, q, limit)
+		if !ok {
+			return
+		}
+		page, err := audit.Audit(ctx, aq)
+		if err != nil {
+			failure(w, err)
+			return
+		}
+		writeJSON(w, 200, page)
 	case "/api/v1/groups":
 		if h.control == nil {
 			failure(w, fleet.ErrNotFound)
@@ -793,6 +816,35 @@ func (h *Handler) groupAgents(w http.ResponseWriter, r *http.Request, id string)
 		return
 	}
 	writeJSON(w, 200, page)
+}
+
+// auditQuery reads the audit route's filters.
+func auditQuery(w http.ResponseWriter, q url.Values, limit int) (fleet.AuditQuery, bool) {
+	aq := fleet.AuditQuery{Kind: q.Get("kind"), Actor: q.Get("actor"), Limit: limit}
+	if q.Has("before") {
+		before, err := strconv.ParseInt(q.Get("before"), 10, 64)
+		if err != nil || before < 1 {
+			failure(w, fleet.Invalid("before must be a record ID from next_before"))
+			return aq, false
+		}
+		aq.Before = before
+	}
+	if len(aq.Kind) > 128 || len(aq.Actor) > 256 || q.Has("kind") && aq.Kind == "" || q.Has("actor") && aq.Actor == "" {
+		failure(w, fleet.Invalid("kind and actor must be 1 to 128 and 1 to 256 characters"))
+		return aq, false
+	}
+	for key, at := range map[string]*time.Time{"since": &aq.Since, "until": &aq.Until} {
+		if !q.Has(key) {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339, q.Get(key))
+		if err != nil {
+			failure(w, fleet.Invalid(key+" must be an RFC 3339 time"))
+			return aq, false
+		}
+		*at = t
+	}
+	return aq, true
 }
 
 func afterID(w http.ResponseWriter, q url.Values) (string, bool) {

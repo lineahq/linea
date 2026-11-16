@@ -338,3 +338,47 @@ func NormalizeGroup(g Group) (Group, error) {
 	g.Kind, g.AgentIDs = GroupStatic, slices.Compact(g.AgentIDs)
 	return g, nil
 }
+
+// Audit retention: administrative records are kept by time, with a row cap
+// as a safety bound.
+const (
+	AuditRetentionDays = 400
+	MaxAuditRows       = 1_000_000
+	MaxAuditPage       = 500
+)
+
+// AuditQuery selects administrative records, newest first. Before is the
+// NextBefore of the previous page; Kind and Actor match exactly; Since and
+// Until bound occurred_at (Since inclusive, Until exclusive).
+type AuditQuery struct {
+	Before       int64
+	Kind, Actor  string
+	Since, Until time.Time
+	Limit        int
+}
+
+type AuditPage struct {
+	Items      []Event `json:"items"`
+	NextBefore string  `json:"next_before,omitempty"`
+}
+
+// AuditRepository reads the administrative record: changes to credentials,
+// groups, configs, assignments, rollouts and plugin lifecycle, written with
+// the change itself and never touched by agent activity.
+type AuditRepository interface {
+	Audit(context.Context, AuditQuery) (AuditPage, error)
+}
+
+// Audited reports whether an event kind is administrative. Holds the gateway
+// sets or clears for an agent are not; an operator clearing one is.
+func Audited(kind, actor string) bool {
+	if kind == "config.held" || kind == "config.hold_cleared" && actor == "server" {
+		return false
+	}
+	for _, prefix := range []string{"credential.", "group.", "config.", "rollout.", "plugin."} {
+		if strings.HasPrefix(kind, prefix) {
+			return true
+		}
+	}
+	return false
+}

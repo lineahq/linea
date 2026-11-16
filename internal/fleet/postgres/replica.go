@@ -160,6 +160,7 @@ func (s *Store) lead(ctx context.Context) {
 	_ = s.trimEvents(ctx, s.options.MaxEvents)
 	_ = s.retain(ctx)
 	_ = s.pruneCredentials(ctx)
+	_ = s.retainAudit(ctx)
 	_ = s.pruneComponentSets(ctx)
 }
 

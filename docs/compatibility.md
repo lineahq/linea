@@ -34,7 +34,8 @@ database restore.
 
 Fleet schema version 13 adds the shared plugin state (`epoch`, `instance_id`
 and `seen_at` on `fleet.plugin_lifecycle`), and version 14 adds
-`plugin_access`, `delegate` and `plugin_hash` to `fleet.credentials`. Run the fleet `migrate` step before
+`plugin_access`, `delegate` and `plugin_hash` to `fleet.credentials`.
+Version 15 adds the audit record `fleet.audit`. Run the fleet `migrate` step before
 starting the new release; an older fleet server refuses the newer schema.
 
 ## Upgrade order

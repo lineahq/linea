@@ -31,6 +31,9 @@ func GrantRuntime(ctx context.Context, url, role string) error {
 			"GRANT SELECT,INSERT,UPDATE,DELETE ON fleet.events TO " + quoted,
 			"GRANT SELECT,INSERT,UPDATE,DELETE ON fleet.replicas,fleet.leases TO " + quoted,
 			"GRANT USAGE,SELECT ON SEQUENCE fleet.events_id_seq TO " + quoted,
+			// The audit record is appended to and deleted only by retention.
+			"GRANT SELECT,INSERT,DELETE ON fleet.audit TO " + quoted,
+			"GRANT USAGE,SELECT ON SEQUENCE fleet.audit_id_seq TO " + quoted,
 			"GRANT SELECT,INSERT,UPDATE,DELETE ON fleet.configs,fleet.config_versions,fleet.config_assignments TO " + quoted,
 			"GRANT SELECT,INSERT,UPDATE,DELETE ON fleet.rollouts,fleet.rollout_targets TO " + quoted,
 			// Component sets are inserted once per build and pruned by retention.

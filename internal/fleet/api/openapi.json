@@ -863,6 +863,101 @@
         ]
       }
     },
+    "/api/v1/audit": {
+      "get": {
+        "operationId": "listAudit",
+        "description": "Admin only. The administrative record: changes to credentials, groups, configs, assignments, rollouts and plugin lifecycle, written in the same transaction as the change. Newest first. Kept 400 days, at most one million records; agent activity never writes here.",
+        "responses": {
+          "200": {
+            "description": "A page of audit records, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "description": "next_before of the previous page",
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*$"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "Exact event kind, such as credential.revoked",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "actor",
+            "in": "query",
+            "description": "Exact actor credential ID",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Inclusive lower bound on occurred_at",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "description": "Exclusive upper bound on occurred_at",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ]
+      }
+    },
     "/metrics": {
       "get": {
         "operationId": "getMetrics",
@@ -3364,6 +3459,27 @@
           "next_cursor": {
             "type": "string",
             "maxLength": 256
+          }
+        }
+      },
+      "AuditPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 500,
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            }
+          },
+          "next_before": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*$",
+            "description": "Present when older records may follow"
           }
         }
       },
