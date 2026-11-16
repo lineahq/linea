@@ -65,14 +65,14 @@ func TestPostgresLifecycle(t *testing.T) {
 	if err := Migrate(ctx, url); err != nil {
 		t.Fatal("repeat migration:", err)
 	}
-	issued, err := Bootstrap(ctx, url, "integration-fleet", "bootstrap-admin")
+	issued, err := Bootstrap(ctx, url, "integration-fleet", "bootstrap-admin", nil)
 	if err != nil {
 		t.Fatal("bootstrap:", err)
 	}
 	if issued.Credential.ExpiresAt != nil {
 		t.Fatal("bootstrap administrator expires")
 	}
-	if _, err := Bootstrap(ctx, url, "integration-fleet", "another-admin"); !errors.Is(err, fleet.ErrConflict) {
+	if _, err := Bootstrap(ctx, url, "integration-fleet", "another-admin", nil); !errors.Is(err, fleet.ErrConflict) {
 		t.Fatal("bootstrap duplicated active administrator")
 	}
 	options := Options{ServerID: "integration-fleet", MaxAgents: 10, MaxEvents: 100, Heartbeat: 200 * time.Millisecond, Alive: time.Second, Flush: 200 * time.Millisecond}
@@ -86,14 +86,14 @@ func TestPostgresLifecycle(t *testing.T) {
 	if err != nil || other.ReplicaID() == s.ReplicaID() {
 		t.Fatal("second replica was refused:", err)
 	}
-	pending := sha256.Sum256([]byte(operatorRoleMigration))
-	if _, err := s.pool.Exec(ctx, "DELETE FROM fleet.schema_version WHERE version=12"); err != nil {
+	pending := sha256.Sum256([]byte(migrations[schemaVersion-1]))
+	if _, err := s.pool.Exec(ctx, "DELETE FROM fleet.schema_version WHERE version=$1", schemaVersion); err != nil {
 		t.Fatal(err)
 	}
 	if err := Migrate(ctx, url); !errors.Is(err, ErrReplicasActive) {
 		t.Fatal("migration ran while replicas were alive:", err)
 	}
-	if _, err := s.pool.Exec(ctx, "INSERT INTO fleet.schema_version(version,checksum) VALUES(12,$1)", hex.EncodeToString(pending[:])); err != nil {
+	if _, err := s.pool.Exec(ctx, "INSERT INTO fleet.schema_version(version,checksum) VALUES($1,$2)", schemaVersion, hex.EncodeToString(pending[:])); err != nil {
 		t.Fatal(err)
 	}
 	if err := other.StopAgents(ctx); err != nil {
@@ -531,7 +531,7 @@ func TestPostgresLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer maintenance.Close(ctx)
-	if _, err := maintenance.Exec(ctx, "UPDATE fleet.schema_version SET version=13 WHERE version=12"); err != nil {
+	if _, err := maintenance.Exec(ctx, "UPDATE fleet.schema_version SET version=$1 WHERE version=$2", schemaVersion+1, schemaVersion); err != nil {
 		t.Fatal(err)
 	}
 	if err := Migrate(ctx, url); !errors.Is(err, fleet.ErrConflict) {
@@ -543,13 +543,13 @@ func TestPostgresLifecycle(t *testing.T) {
 		}
 		t.Fatal("server accepted a newer schema")
 	}
-	if _, err := maintenance.Exec(ctx, "UPDATE fleet.schema_version SET version=12,checksum='tampered' WHERE version=13"); err != nil {
+	if _, err := maintenance.Exec(ctx, "UPDATE fleet.schema_version SET version=$1,checksum='tampered' WHERE version=$2", schemaVersion, schemaVersion+1); err != nil {
 		t.Fatal(err)
 	}
 	if err := Migrate(ctx, url); !errors.Is(err, fleet.ErrConflict) {
 		t.Fatal("migration accepted a modified checksum")
 	}
-	if _, err := maintenance.Exec(ctx, "UPDATE fleet.schema_version SET checksum=$1 WHERE version=12", hex.EncodeToString(pending[:])); err != nil {
+	if _, err := maintenance.Exec(ctx, "UPDATE fleet.schema_version SET checksum=$1 WHERE version=$2", hex.EncodeToString(pending[:]), schemaVersion); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := maintenance.Exec(ctx, "UPDATE fleet.schema_version SET checksum='tampered' WHERE version=1"); err != nil {

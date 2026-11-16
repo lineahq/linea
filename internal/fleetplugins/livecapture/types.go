@@ -12,11 +12,30 @@ import (
 var ErrInvalid = errors.New("invalid capture request")
 var ErrConflict = errors.New("capture state conflicts")
 
+// ErrStaleAuthority means the request was admitted under an instance or epoch
+// that is no longer current. It is HTTP 421 (pluginsdk.StatusMisdirected), never
+// 409, which is reserved for conflicts in the capture domain.
+var ErrStaleAuthority = errors.New("plugin authority is not current")
+
 // ErrPeerBusy refuses a named target that serves another capture.
 var ErrPeerBusy = fmt.Errorf("collector is serving another capture: %w", ErrConflict)
 var ErrForbidden = errors.New("capture access denied")
 var ErrNotFound = errors.New("capture resource not found")
 var ErrUnavailable = errors.New("capture service unavailable")
+
+// Repository.Ready results other than nil and ErrUnavailable. Both wrap
+// ErrUnavailable for callers that only care whether storage answered.
+//
+// ErrStorageBusy means the one connection stayed occupied by other statements
+// for the whole wait, so there is no sample of the database at all. A busy
+// queue is not a dead database.
+//
+// ErrStorageLost means the connection is closed. The driver does not
+// reconnect it, so every later probe fails too and waiting does not help.
+var (
+	ErrStorageBusy = fmt.Errorf("storage connection busy: %w", ErrUnavailable)
+	ErrStorageLost = fmt.Errorf("storage connection lost: %w", ErrUnavailable)
+)
 var ErrCapacity = errors.New("capture capacity reached")
 var ErrPrecondition = errors.New("capture revision changed")
 var ErrCursorExpired = errors.New("capture peer cursor expired; refresh discovery")
@@ -72,8 +91,17 @@ type PeerInfo struct {
 	// CredentialID is the fleet agent credential the Collector presented.
 	CredentialID string `json:"credential_id"`
 	// AgentID is the uniquely matching connected fleet agent, when linked.
-	AgentID  string   `json:"agent_id,omitempty"`
+	AgentID string `json:"agent_id,omitempty"`
+	// Link tells how linking the peer to a fleet agent stands.
+	Link     PeerLink `json:"link"`
 	Identity Identity `json:"identity"`
+}
+
+// PeerLink is the state of linking a peer to a fleet agent: pending (no
+// attempt has finished yet), linked, no_match or ambiguous. An attempt that
+// fails on the host call leaves the state as it was.
+type PeerLink struct {
+	State string `json:"state"`
 }
 type TargetRequest struct {
 	PeerID     string `json:"peer_id"`
@@ -130,6 +158,18 @@ type Target struct {
 	State      string       `json:"state"`
 	Released   bool         `json:"-"`
 	Stats      *TargetStats `json:"stats,omitempty"`
+	// Delivery counts what reached the plugin from this target.
+	Delivery TargetDelivery `json:"delivery"`
+}
+
+// TargetDelivery counts the copies the plugin received from one target and
+// the ones it dropped before the consumer acknowledged them: a full buffer,
+// a batch older than 10 s, or a consumer that is gone. Dropped records are
+// part of the received ones. Any drop makes the capture incomplete.
+type TargetDelivery struct {
+	ReceivedRecords int64 `json:"received_records"`
+	DroppedRecords  int64 `json:"dropped_records"`
+	DroppedBatches  int64 `json:"dropped_batches"`
 }
 
 // TargetStats are the Collector's last reported counters for its session.
@@ -144,13 +184,14 @@ type TargetStats struct {
 
 // StoredTarget is private durable metadata; wire IDs are never in public reads.
 type StoredTarget struct {
-	PeerID     string       `json:"peer_id"`
-	Generation uint64       `json:"generation"`
-	AgentID    string       `json:"agent_id,omitempty"`
-	WireID     string       `json:"wire_id"`
-	State      string       `json:"state"`
-	Released   bool         `json:"released"`
-	Stats      *TargetStats `json:"stats,omitempty"`
+	PeerID     string         `json:"peer_id"`
+	Generation uint64         `json:"generation"`
+	AgentID    string         `json:"agent_id,omitempty"`
+	WireID     string         `json:"wire_id"`
+	State      string         `json:"state"`
+	Released   bool           `json:"released"`
+	Stats      *TargetStats   `json:"stats,omitempty"`
+	Delivery   TargetDelivery `json:"delivery"`
 }
 type Operation struct {
 	AuthorityID string    `json:"authority_id"`
@@ -167,6 +208,13 @@ type Operation struct {
 	// created the operation. Attribution only; Owner stays the authority.
 	ActingFor *pluginsdk.Acting `json:"acting_for,omitempty"`
 }
+
+// RunningOperation is an operation in a list, with the credential that owns
+// it, so an admin can see who holds the plugin's slots.
+type RunningOperation struct {
+	Owner string `json:"owner"`
+	Operation
+}
 type Envelope struct {
 	AuthorityID    string    `json:"authority_id"`
 	PluginInstance string    `json:"plugin_instance"`
@@ -182,8 +230,7 @@ type Envelope struct {
 	ObservedAt     time.Time `json:"observed_at"`
 }
 type Acknowledgement struct {
-	ID       string `json:"batch_id"`
-	Accepted int64  `json:"accepted_records"`
+	ID string `json:"batch_id"`
 }
 
 func terminal(state string) bool {

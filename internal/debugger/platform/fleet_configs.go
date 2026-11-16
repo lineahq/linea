@@ -377,7 +377,7 @@ func (s *Service) ListFleetConfigVersions(ctx context.Context, caller Caller, id
 }
 
 // GetFleetConfigVersion returns one version with its body, which fleet
-// returns to an admin credential only.
+// returns to an operator or admin credential only.
 func (s *Service) GetFleetConfigVersion(ctx context.Context, caller Caller, id string, version int) (_ *FleetConfigVersion, err error) {
 	defer s.audit(&caller, "GetFleetConfigVersion", &err)()
 	if err := s.fleetBegin(ctx, caller, authz.FleetRead); err != nil {
@@ -472,8 +472,8 @@ func (s *Service) CreateFleetAssignment(ctx context.Context, caller Caller, req 
 		return nil, captureInvalid("an assignment targets a group or a selector, not both")
 	case req.GroupID != "" && !validFleetID(req.GroupID), !collectorText(req.Selector, 4096, false):
 		return nil, captureInvalid("invalid assignment group or selector")
-	case len(req.CredentialLabels) > 16:
-		return nil, captureInvalid("an assignment requires at most 16 credential labels")
+	case len(req.CredentialLabels) == 0 || len(req.CredentialLabels) > 16:
+		return nil, captureInvalid("an assignment requires 1 to 16 credential labels")
 	}
 	if err := checkRolloutPolicy(req.Rollout); err != nil {
 		return nil, err

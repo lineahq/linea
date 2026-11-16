@@ -3,16 +3,21 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"slices"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/lineahq/linea/internal/fleet/configmgmt"
 	"github.com/lineahq/linea/internal/fleet/fleet"
+	"github.com/lineahq/linea/internal/fleet/translog"
 	"github.com/open-telemetry/opamp-go/protobufs"
 )
 
@@ -21,6 +26,8 @@ import (
 type Reconciler interface {
 	Refresh(ctx context.Context) error
 	Reconcile(ctx context.Context, s configmgmt.Session) (configmgmt.Decision, error)
+	// Managed reports whether a credential opted in to remote config.
+	Managed(credential string) bool
 }
 
 // ConfigStore persists failure holds of owned agents and the component
@@ -46,7 +53,7 @@ const (
 	// restarts when full.
 	maxComponentSets = 1024
 	// componentsWait is how long delivery waits for a component list asked
-	// for; after it, the agent is treated as not reporting components.
+	// for; after it, config stays withheld until the build is resolved.
 	componentsWait = 10 * time.Second
 	// stateWait is how long delivery waits for the full state after a
 	// reconnect; after it, the stored status is used.
@@ -69,6 +76,9 @@ type configState struct {
 	setsMu                  sync.Mutex
 	sets                    map[string]configmgmt.Components
 	asked, stored, withheld atomic.Uint64
+	// unverified counts sends withheld for an unresolved build; unmatched
+	// counts component lists refused because they do not match their hash.
+	unverified, unmatched atomic.Uint64
 }
 
 // SetConfigManagement enables config delivery. It must be called before
@@ -147,7 +157,7 @@ func (g *Gateway) resyncHolds() {
 	for _, s := range g.sessions() {
 		s.mu.Lock()
 		if s.identified && holds[s.id] != s.held {
-			s.held, s.offered = holds[s.id], nil
+			s.adoptHold(holds[s.id])
 		}
 		s.mu.Unlock()
 	}
@@ -202,12 +212,32 @@ func (g *Gateway) sweep() {
 	}
 }
 
+// adoptHold takes a hold that changed in the store. A hold that was cleared
+// owes one retry of the desired config, even when the agent reports that very
+// hash as failed.
+func (s *session) adoptHold(stored string) {
+	if s.held != "" && stored == "" {
+		s.retryOwed = true
+	}
+	s.held, s.offered = stored, nil
+}
+
 // owns reports whether s is this replica's current holder of its identity.
 func (g *Gateway) owns(s *session) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	e, ok := g.agents[s.id]
 	return ok && e.conn == s.conn && e.generation == s.generation
+}
+
+// attachConfig puts the config to deliver, if any, into an answer to the
+// agent. With the push in this file, it is the only place that sends remote
+// config (TestOnlyConfigFileSendsAgentCommands).
+func (g *Gateway) attachConfig(ctx context.Context, s *session, prev configmgmt.Status, transition bool, response *protobufs.ServerToAgent) {
+	if remote := g.deliver(ctx, s, prev, transition); remote != nil {
+		response.RemoteConfig = remote
+		g.config.responses.Add(1)
+	}
 }
 
 // deliver runs under s.mu on a committed session. prev is the remote config
@@ -222,15 +252,33 @@ func (g *Gateway) deliver(ctx context.Context, s *session, prev configmgmt.Statu
 	held := decodeHash(s.held)
 	if transition {
 		held = configmgmt.NextHold(prev, status, held)
+		if status.State == configmgmt.Failed || status.State == configmgmt.Applied {
+			// The agent answered the retry, if one was out.
+			s.retrySent = nil
+		}
 	}
 	d, err := c.reconciler.Reconcile(ctx, configmgmt.Session{AgentID: s.id, Credential: s.principal.ID, Attributes: s.report.Attributes,
-		Capabilities: s.report.Capabilities, Status: status, Held: held, Components: s.components})
+		Capabilities: s.report.Capabilities, Status: status, Held: held, Retry: s.retryOwed, Components: s.components,
+		Unverified: s.unresolved()})
 	if err != nil {
 		c.errors.Add(1)
 		d = configmgmt.Decision{}
 	}
-	if len(d.Missing) > 0 {
-		c.withheld.Add(1)
+	if len(d.Missing) > 0 || d.Unverified {
+		why := translog.ReasonIncompatibleComponents
+		if d.Unverified {
+			c.unverified.Add(1)
+			why = translog.ReasonUnverifiedComponents
+		} else {
+			c.withheld.Add(1)
+		}
+		// One line per session and withheld plan, not per evaluation.
+		if !bytes.Equal(s.withheld, d.Plan.Hash) {
+			s.withheld = bytes.Clone(d.Plan.Hash)
+			g.log.Limited(translog.ConfigWithheld, translog.ID(translog.KeyAgent, s.id), translog.Why(why))
+		}
+	} else {
+		s.withheld = nil
 	}
 	if d.ClearHold {
 		held = nil
@@ -241,14 +289,16 @@ func (g *Gateway) deliver(ctx context.Context, s *session, prev configmgmt.Statu
 			c.failures.Add(1)
 			return nil
 		}
-		s.held = stored
 		if stored != next {
 			// Changed meanwhile, for example cleared through the API; the
 			// next evaluation starts from the stored hold.
+			s.adoptHold(stored)
 			return nil
 		}
+		s.held = stored
 		if next != "" {
 			c.holdsSet.Add(1)
+			g.log.Limited(translog.ConfigWithheld, translog.ID(translog.KeyAgent, s.id), translog.Why(translog.ReasonAgentReportedFailure))
 		}
 	}
 	if !d.Send {
@@ -261,6 +311,9 @@ func (g *Gateway) deliver(ctx context.Context, s *session, prev configmgmt.Statu
 		return nil
 	}
 	s.offered, s.offeredAt = d.Plan.Hash, time.Now()
+	if s.retryOwed {
+		s.retryOwed, s.retrySent = false, d.Plan.Hash
+	}
 	files := make(map[string]*protobufs.AgentConfigObject, len(d.Plan.Entries))
 	for _, e := range d.Plan.Entries {
 		files[e.Name] = &protobufs.AgentConfigObject{Body: e.Body, ContentType: "text/yaml"}
@@ -269,28 +322,43 @@ func (g *Gateway) deliver(ctx context.Context, s *session, prev configmgmt.Statu
 }
 
 // components resolves the session's component set when its reported build
-// changes. An unknown build is asked for in full once per session; the list
-// the agent then sends is stored for every agent of that build. It reports
-// whether to ask, and whether the resolved set changed.
+// changes. Only a credential that opted in to remote config resolves builds.
+// An unknown build is asked for in full once per session; the list the
+// agent then sends is stored for every agent of that build only when it
+// hashes to the reported build hash. It reports whether to ask, and whether
+// the resolved set changed. A build that stays unresolved withholds config.
 func (g *Gateway) components(ctx context.Context, s *session, ac *protobufs.AvailableComponents) (ask, changed bool) {
 	hash := s.report.AvailableComponents
 	if hash == s.componentsHash {
 		return false, false
 	}
 	c := g.config
+	if !c.reconciler.Managed(s.principal.ID) {
+		// Nothing is sent to this credential; resolve once it opts in.
+		return false, false
+	}
 	if s.components != nil {
 		// A new build: unknown until resolved, so the check is skipped.
 		s.components, changed = nil, true
 	}
 	if ac != nil && len(ac.Components) > 0 && hex.EncodeToString(ac.Hash) == hash {
 		set := availableComponents(ac)
-		if set == nil {
-			// An unusable list: the check stays skipped for this build.
+		if set == nil || !componentsHashMatches(ac) {
+			// A list that is unusable or does not match its hash leaves the
+			// build unresolved for this session: config stays withheld.
+			c.unmatched.Add(1)
 			s.componentsHash, s.awaiting = hash, time.Time{}
 			return false, true
 		}
 		if err := c.holds.SaveComponentSet(ctx, hash, set); err != nil {
 			c.failures.Add(1)
+			if errors.Is(err, fleet.ErrCapacity) {
+				// Full: the build stays unresolved for this session.
+				s.componentsHash, s.awaiting = hash, time.Time{}
+				return false, true
+			}
+			// Ask again with a later message.
+			s.componentsAsked = ""
 			return false, changed
 		}
 		c.stored.Add(1)
@@ -319,6 +387,58 @@ func (g *Gateway) components(ctx context.Context, s *session, ac *protobufs.Avai
 	}
 	s.components, s.componentsHash, s.awaiting = set, hash, time.Time{}
 	return false, true
+}
+
+// unresolved reports a build that the session reported but could not
+// resolve, once any wait for its component list is over.
+func (s *session) unresolved() bool {
+	return s.report.AvailableComponents != "" && s.components == nil &&
+		(s.awaiting.IsZero() || time.Since(s.awaiting) >= componentsWait)
+}
+
+// componentKinds maps the report's sections to the names the Collector's
+// OpAMP extension hashes, in its order.
+var componentKinds = []struct{ section, kind string }{
+	{"receivers", "receiver"}, {"processors", "processor"}, {"exporters", "exporter"},
+	{"extensions", "extension"}, {"connectors", "connector"},
+}
+
+// componentsHashMatches recomputes the build hash the way the Collector's
+// OpAMP extension does (verified against opampextension v0.162.0): SHA-256
+// of "kind:" followed by "type=module;" per sorted type, for each kind. A
+// list that does not hash to the reported value cannot describe that build.
+func componentsHashMatches(ac *protobufs.AvailableComponents) bool {
+	if len(ac.Components) > len(componentKinds) {
+		return false
+	}
+	var b strings.Builder
+	for _, k := range componentKinds {
+		d := ac.Components[k.section]
+		types := make([]string, 0)
+		if d != nil {
+			for typ := range d.SubComponentMap {
+				types = append(types, typ)
+			}
+		}
+		sort.Strings(types)
+		b.WriteString(k.kind + ":")
+		for _, typ := range types {
+			module := ""
+			for _, kv := range d.SubComponentMap[typ].GetMetadata() {
+				if kv.GetKey() == "code.namespace" {
+					module = kv.GetValue().GetStringValue()
+				}
+			}
+			b.WriteString(typ + "=" + module + ";")
+		}
+	}
+	for section := range ac.Components {
+		if !slices.ContainsFunc(componentKinds, func(k struct{ section, kind string }) bool { return k.section == section }) {
+			return false
+		}
+	}
+	sum := sha256.Sum256([]byte(b.String()))
+	return bytes.Equal(sum[:], ac.Hash)
 }
 
 // availableComponents reads the Collector's report: one entry per section,
@@ -387,7 +507,7 @@ func (g *Gateway) writeConfigMetrics(w io.Writer) {
 	}
 	fmt.Fprintf(w, "# TYPE linea_fleet_config_sends_total counter\nlinea_fleet_config_sends_total{path=\"response\"} %d\nlinea_fleet_config_sends_total{path=\"async\"} %d\n", c.responses.Load(), c.async.Load())
 	fmt.Fprintf(w, "# TYPE linea_fleet_config_reconcile_errors_total counter\nlinea_fleet_config_reconcile_errors_total %d\n# TYPE linea_fleet_config_storage_errors_total counter\nlinea_fleet_config_storage_errors_total %d\n# TYPE linea_fleet_config_holds_total counter\nlinea_fleet_config_holds_total %d\n", c.errors.Load(), c.failures.Load(), c.holdsSet.Load())
-	fmt.Fprintf(w, "# TYPE linea_fleet_config_component_sets_requested_total counter\nlinea_fleet_config_component_sets_requested_total %d\n# TYPE linea_fleet_config_component_sets_stored_total counter\nlinea_fleet_config_component_sets_stored_total %d\n# TYPE linea_fleet_config_incompatible_total counter\nlinea_fleet_config_incompatible_total %d\n", c.asked.Load(), c.stored.Load(), c.withheld.Load())
+	fmt.Fprintf(w, "# TYPE linea_fleet_config_component_sets_requested_total counter\nlinea_fleet_config_component_sets_requested_total %d\n# TYPE linea_fleet_config_component_sets_stored_total counter\nlinea_fleet_config_component_sets_stored_total %d\n# TYPE linea_fleet_config_incompatible_total counter\nlinea_fleet_config_incompatible_total %d\n# TYPE linea_fleet_config_unverified_total counter\nlinea_fleet_config_unverified_total %d\n# TYPE linea_fleet_config_component_sets_unmatched_total counter\nlinea_fleet_config_component_sets_unmatched_total %d\n", c.asked.Load(), c.stored.Load(), c.withheld.Load(), c.unverified.Load(), c.unmatched.Load())
 	if b, ok := c.reconciler.(interface{ CachedBodyBytes() int64 }); ok {
 		fmt.Fprintf(w, "# TYPE linea_fleet_config_body_cache_bytes gauge\nlinea_fleet_config_body_cache_bytes %d\n", b.CachedBodyBytes())
 	}

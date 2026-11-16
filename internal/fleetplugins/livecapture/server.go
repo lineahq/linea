@@ -17,6 +17,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/lineahq/linea/internal/fleetplugins/livecapture/translog"
 	"github.com/lineahq/linea/pluginsdk"
 )
 
@@ -24,6 +25,9 @@ type Repository interface {
 	AuthorityID() string
 	Ready(context.Context) error
 	NextGeneration(context.Context, string) (uint64, error)
+	// MaintainPeers marks the connected peers as seen and deletes at most limit
+	// peers unused for idle (see Store.MaintainPeers).
+	MaintainPeers(ctx context.Context, connected []string, idle time.Duration, limit int) (int, error)
 	Get(context.Context, string) (Operation, error)
 	Insert(context.Context, Operation) error
 	Save(context.Context, Operation, int64) error
@@ -32,49 +36,86 @@ type activeOperation struct {
 	op      Operation
 	request CreateRequest
 	raw     bool
+	// logged is the state the transition log last reported.
+	logged translog.State
+	// inserting holds the operation back from its peers until the writer
+	// inserted it.
+	inserting bool
+	inserted  chan struct{}
+	// sent holds the wire IDs of the targets whose session went into a
+	// desired state. Only those can run at a Collector; a stop releases the
+	// others at once.
+	sent map[string]bool
 }
 type Server struct {
-	mu              sync.Mutex
-	config          Config
-	repo            Repository
-	ctx             context.Context
-	cancel          context.CancelFunc
-	instance        string
-	host            pluginsdk.HostClient
-	epoch           string
-	session         pluginsdk.Session
-	hostOK, dbOK    bool
+	mu           sync.Mutex
+	config       Config
+	repo         Repository
+	ctx          context.Context
+	cancel       context.CancelFunc
+	instance     string
+	host         pluginsdk.HostClient
+	epoch        string
+	session      pluginsdk.Session
+	hostOK, dbOK bool
+	// hostMisses counts consecutive session polls that got no answer.
+	hostMisses int
+	// storageFailures counts consecutive failed pings; only maintain changes it.
+	storageFailures int
 	permissionsOK   bool
 	draining        bool
 	peers           map[string]*peer
+	// joining holds the peer identities whose generation is being minted.
+	joining         map[string]bool
 	operations      map[string]*activeOperation
 	channels        map[string]*channel
 	credentials     map[[32]byte]cachedCredential
 	linkWake        chan struct{}
 	revalidateEvery time.Duration
-	dataGate        chan struct{}
-	fatal           chan error
-	wg              sync.WaitGroup
-	observed        pluginMetrics
-	budgets         [3]*connectionBudget
+	// peerIdle is how long a peer may go unused before the database row is deleted.
+	peerIdle time.Duration
+	// pending is the bytes buffered across all channels.
+	pending int
+	// now is the clock of the delivery buffer; tests replace it.
+	now      func() time.Time
+	fatal    chan error
+	wg       sync.WaitGroup
+	observed pluginMetrics
+	budgets  [3]*connectionBudget
+	// log is the transition log (nil logs nothing) and authFailures counts
+	// rejected credentials per listener for its summary lines.
+	log          *translog.Logger
+	authFailures *translog.FailureSummary
+	// saves is the writer's queue (persist.go); persistDone closes when the
+	// writer stopped.
+	saves       *saveQueue
+	persistDone chan struct{}
 }
 
-func New(ctx context.Context, c Config, repo Repository) (*Server, error) {
+// New returns a server over repo. log receives the transition log; nil logs
+// nothing.
+func New(ctx context.Context, c Config, repo Repository, log *translog.Logger) (*Server, error) {
 	if err := repo.Ready(ctx); err != nil {
-		return nil, err
+		return nil, WithCause(translog.ReasonStorageUnavailable, err)
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	s := &Server{config: c, repo: repo, ctx: ctx, cancel: cancel, instance: pluginsdk.RandomID(), dbOK: true, peers: map[string]*peer{}, operations: map[string]*activeOperation{}, channels: map[string]*channel{}, credentials: map[[32]byte]cachedCredential{}, linkWake: make(chan struct{}, 1), revalidateEvery: credentialTTL, dataGate: make(chan struct{}, 16), fatal: make(chan error, 1)}
-	s.host = pluginsdk.HostClient{Endpoint: c.HostEndpoint, Token: c.hostToken, InstanceID: s.instance, HTTP: pluginsdk.NewHTTPClient()}
+	s := &Server{config: c, repo: repo, ctx: ctx, cancel: cancel, instance: pluginsdk.RandomID(), dbOK: true, peers: map[string]*peer{}, joining: map[string]bool{}, operations: map[string]*activeOperation{}, channels: map[string]*channel{}, credentials: map[[32]byte]cachedCredential{}, linkWake: make(chan struct{}, 1), revalidateEvery: credentialTTL, peerIdle: peerRetention, now: time.Now, fatal: make(chan error, 1), log: log, authFailures: translog.NewFailureSummary(log, translog.SummaryEvery, time.Now())}
+	s.host = pluginsdk.HostClient{Endpoint: c.HostEndpoint, Token: c.hostToken, InstanceID: s.instance, HTTP: c.hostClient(), SessionHTTP: c.hostClient()}
 	for i, limit := range []int{c.peerLimit() + 16, 64, 64} {
 		s.budgets[i] = &connectionBudget{slots: make(chan struct{}, limit)}
 	}
+	s.saves, s.persistDone = newSaveQueue(), make(chan struct{})
+	s.wg.Add(1)
+	go func() { defer close(s.persistDone); s.persist() }()
 	return s, nil
 }
 func (s *Server) Start() { s.wg.Add(3); go s.monitorHost(); go s.maintain(); go s.revalidate() }
 func (s *Server) Drain() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.draining {
+		s.log.Log(translog.EventDrainStarted)
+	}
 	s.draining = true
 	s.hostOK = false
 	s.stopAllLocked("stopping")
@@ -92,37 +133,46 @@ func (s *Server) Close() {
 	s.cancel()
 	s.mu.Lock()
 	for _, p := range s.peers {
-		p.close()
+		s.retirePeerLocked(p, translog.ReasonShutdown)
 	}
 	for _, c := range s.channels {
 		s.closeChannelLocked(c)
 	}
 	s.mu.Unlock()
 	s.wg.Wait()
+	s.authFailures.Flush(time.Now())
 	s.host.HTTP.CloseIdleConnections()
+	s.host.SessionHTTP.CloseIdleConnections()
 }
 func (s *Server) Fatal() <-chan error { return s.fatal }
-func (s *Server) fatalLocked() {
+
+// fatalLocked ends the plugin: it withdraws the database flag and sends the
+// cause, once, to Run. Only the first cause is logged.
+func (s *Server) fatalLocked(cause translog.Reason) {
 	s.dbOK = false
 	select {
-	case s.fatal <- ErrUnavailable:
+	case s.fatal <- WithCause(cause, ErrUnavailable):
+		s.log.Log(translog.EventPluginFatal, translog.Cause(cause))
 	default:
 	}
 }
-func (s *Server) saveLocked(a *activeOperation) error {
-	previous := a.op.Revision
-	a.op.Revision++
-	if err := s.repo.Save(s.ctx, a.op, previous); err != nil {
-		s.fatalLocked()
-		return err
+
+// retirePeerLocked closes p and remembers why, unless it was closed before.
+func (s *Server) retirePeerLocked(p *peer, reason translog.Reason) {
+	if p.closeReason == translog.ReasonNone {
+		p.closeReason = reason
 	}
-	return nil
+	p.close()
 }
-func (s *Server) stopLocked(a *activeOperation, state string) error {
+
+// logOperation reports one operation state transition.
+func (s *Server) logOperation(id string, from, to translog.State, reason string) {
+	s.log.Log(translog.EventOperationState, translog.Operation(id), translog.From(from), translog.To(to), translog.Why(translog.ParseReason(reason)))
+}
+func (s *Server) stopLocked(a *activeOperation, state string) {
 	if a.op.State != "starting" && a.op.State != "active" && a.op.State != "stopping" {
-		return nil
+		return
 	}
-	var result error
 	if a.op.State != state {
 		if state == "stopping" {
 			s.observed.withdrawn.Add(1)
@@ -131,7 +181,16 @@ func (s *Server) stopLocked(a *activeOperation, state string) error {
 		if state == "expired" {
 			expireTargets(a.op.Targets)
 		}
-		result = s.saveLocked(a)
+		if state == "stopping" {
+			for i, t := range a.op.Targets {
+				if !t.Released && !a.sent[t.WireID] {
+					a.op.Targets[i].Released = true
+				}
+			}
+		}
+		if state == "expired" || !s.settleLocked(a) {
+			s.saveLocked(a)
+		}
 	}
 	for _, t := range a.op.Targets {
 		if p := s.peers[t.PeerID]; p != nil && p.info.Generation == t.Generation && p.operation == a.op.ID {
@@ -139,7 +198,38 @@ func (s *Server) stopLocked(a *activeOperation, state string) error {
 			p.wakeup()
 		}
 	}
-	return result
+}
+
+// settleLocked ends an operation once every target is released: it decides
+// the final state from the targets, saves it and forgets the operation.
+func (s *Server) settleLocked(a *activeOperation) bool {
+	for _, t := range a.op.Targets {
+		if !t.Released {
+			return false
+		}
+	}
+	if a.op.State == "stopping" {
+		a.op.State = "stopped"
+	} else {
+		a.op.State = "completed"
+	}
+	for _, t := range a.op.Targets {
+		if t.State == "expired" {
+			a.op.State = "expired"
+			if a.op.Reason == "" {
+				a.op.Reason = "absolute_expiry"
+			}
+		}
+		if t.State == "failed" || t.State == "disabled" {
+			a.op.State = "failed"
+			if a.op.Reason == "" {
+				a.op.Reason = "collector_rejected"
+			}
+		}
+	}
+	s.saveLocked(a)
+	delete(s.operations, a.op.ID)
+	return true
 }
 
 // expireTargets ends targets with the operation's absolute expiry, which every
@@ -153,43 +243,13 @@ func expireTargets(targets []Target) {
 }
 func (s *Server) stopAllLocked(state string) {
 	for _, a := range s.operations {
-		if s.stopLocked(a, state) != nil {
-			break
-		}
+		s.stopLocked(a, state)
 	}
 }
 func (s *Server) monitorHost() {
 	defer s.wg.Done()
 	for {
-		session, err := s.host.Session(s.ctx)
-		s.mu.Lock()
-		// Without both host permissions Collectors cannot be authenticated or linked.
-		s.permissionsOK = err == nil && hasPermissions(session)
-		if err == nil && !s.permissionsOK {
-			err = ErrUnavailable
-		}
-		if err != nil || s.epoch != "" && s.epoch != session.Epoch {
-			if s.hostOK {
-				s.hostOK = false
-				for _, a := range s.operations {
-					if a.op.Reason == "" {
-						a.op.Reason = "host_authority_lost"
-					}
-				}
-				s.stopAllLocked("stopping")
-				for id, c := range s.channels {
-					s.closeChannelLocked(c)
-					delete(s.channels, id)
-				}
-			}
-			// A new host epoch may follow credential changes; forget cached answers.
-			clear(s.credentials)
-		}
-		if err == nil && !s.draining {
-			s.epoch, s.session = session.Epoch, session
-			s.hostOK = true
-		}
-		s.mu.Unlock()
+		s.checkHost()
 		select {
 		case <-s.ctx.Done():
 			return
@@ -197,21 +257,130 @@ func (s *Server) monitorHost() {
 		}
 	}
 }
+
+// hostMissLimit is how many session polls in a row may get no answer (timeout,
+// refused or broken connection) before the session is lost. An answer ends it
+// at once, a refusal such as 421 or a changed epoch included: the host has
+// spoken, and waiting cannot help. A silent host may only be one busy moment,
+// and a lost capture, though cheap, is not worth one.
+const hostMissLimit = 2
+
+// checkHost reads the host session once and applies it: it ends host-bound work
+// when the session is lost or its epoch changed, and adopts a usable session.
+// The poll has its own HTTP client, so nothing else the plugin asks of the
+// host can make it time out. The transitions are logged after the lock is
+// released.
+func (s *Server) checkHost() {
+	session, err := s.host.Session(s.ctx)
+	s.mu.Lock()
+	if pluginsdk.Unreachable(err) && s.hostOK && s.ctx.Err() == nil {
+		s.hostMisses++
+		if s.hostMisses < hostMissLimit {
+			s.mu.Unlock()
+			return
+		}
+	}
+	s.hostMisses = 0
+	// unusable is why the session cannot serve, none when it can.
+	unusable := translog.ReasonNone
+	if err != nil {
+		unusable = translog.ReasonHostUnreachable
+	}
+	// Without both host permissions Collectors cannot be authenticated or linked.
+	s.permissionsOK = err == nil && hasPermissions(session)
+	if err == nil && !s.permissionsOK {
+		err = ErrUnavailable
+		unusable = translog.ReasonPermissionsMissing
+	}
+	if err == nil && s.epoch != "" && s.epoch != session.Epoch {
+		unusable = translog.ReasonEpochChanged
+	}
+	lost, established := translog.ReasonNone, false
+	if unusable != translog.ReasonNone {
+		if s.hostOK {
+			lost = unusable
+			s.hostOK = false
+			for _, a := range s.operations {
+				if a.op.Reason == "" {
+					a.op.Reason = "host_authority_lost"
+				}
+			}
+			s.stopAllLocked("stopping")
+			for id, c := range s.channels {
+				s.closeChannelLocked(c)
+				delete(s.channels, id)
+			}
+		}
+		// A new host epoch may follow credential changes; forget cached answers.
+		clear(s.credentials)
+	}
+	if err == nil && !s.draining {
+		established = !s.hostOK
+		s.epoch, s.session = session.Epoch, session
+		s.hostOK = true
+	}
+	instance, epoch := s.instance, s.epoch
+	s.mu.Unlock()
+	if lost != translog.ReasonNone {
+		s.log.Log(translog.EventHostSessionLost, translog.Why(lost))
+	}
+	if established {
+		s.log.Log(translog.EventHostSessionEstablished, translog.Instance(instance), translog.Epoch(epoch))
+	}
+}
+
+// storageFailureLimit is how many consecutive failed database pings, sampled
+// once a second, end the process. A ping that finds the connection closed ends
+// it at once instead: the driver never reconnects, so waiting cannot help.
+// A busy connection is no sample. A lost capture is cheap, a plugin exit ends
+// every capture, so one slow answer must not be fatal.
+const storageFailureLimit = 3
+
+// observeStorageLocked records one probe result and reports whether it makes
+// the database fatal. Only maintain calls it: every other path reads dbOK.
+func (s *Server) observeStorageLocked(err error) bool {
+	switch {
+	case err == nil:
+		if s.storageFailures > 0 {
+			s.log.Log(translog.EventDatabaseRecovered, translog.Count(s.storageFailures))
+		}
+		s.storageFailures = 0
+	case errors.Is(err, ErrStorageBusy):
+	case errors.Is(err, ErrStorageLost):
+		return true
+	default:
+		s.storageFailures++
+		if s.storageFailures == 1 {
+			s.log.Log(translog.EventDatabaseDegraded)
+		}
+		return s.storageFailures >= storageFailureLimit
+	}
+	return false
+}
+
+// maintain owns database liveness: it probes once a second and keeps dbOK.
+// Requests, deliveries and control wakes read the flag and never ping.
 func (s *Server) maintain() {
 	defer s.wg.Done()
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
-	lastDB := time.Time{}
+	lastDB, lastPeers := time.Time{}, time.Time{}
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
 		case now := <-tick.C:
+			s.authFailures.Tick(now)
 			if now.Sub(lastDB) >= time.Second {
 				err := s.repo.Ready(s.ctx)
 				s.mu.Lock()
-				if err != nil {
-					s.fatalLocked()
+				if s.observeStorageLocked(err) {
+					cause := translog.ReasonStorageFailures
+					if errors.Is(err, ErrStorageLost) {
+						cause = translog.ReasonStorageLost
+					}
+					s.log.Log(translog.EventDatabaseLost, translog.Why(cause))
+					s.fatalLocked(cause)
 					s.mu.Unlock()
 					return
 				}
@@ -232,7 +401,7 @@ func (s *Server) maintain() {
 			}
 			for _, p := range s.peers {
 				if now.Sub(p.lastSeen) > 6*time.Second {
-					p.close()
+					s.retirePeerLocked(p, translog.ReasonPeerStale)
 				}
 			}
 			for id, a := range s.operations {
@@ -240,7 +409,7 @@ func (s *Server) maintain() {
 					if a.op.Reason == "" {
 						a.op.Reason = "absolute_expiry"
 					}
-					_ = s.stopLocked(a, "expired")
+					s.stopLocked(a, "expired")
 					delete(s.operations, id)
 					continue
 				}
@@ -249,13 +418,38 @@ func (s *Server) maintain() {
 						if a.op.Reason == "" {
 							a.op.Reason = "consumer_unavailable"
 						}
-						_ = s.stopLocked(a, "stopping")
+						s.stopLocked(a, "stopping")
 					}
 				}
 			}
 			s.mu.Unlock()
+			if now.Sub(lastPeers) >= peerMaintenanceEvery {
+				lastPeers = now
+				// A full batch means more peers wait: run again on the next tick.
+				if s.retirePeers() >= peerPruneBatch {
+					lastPeers = time.Time{}
+				}
+			}
 		}
 	}
+}
+
+// retirePeers refreshes the connected peers' last-seen time and deletes unused
+// peers in the database. A failure is counted by the store and retried at the
+// next pass; it never ends the plugin, because the peer table only matters
+// when it is full.
+func (s *Server) retirePeers() int {
+	s.mu.Lock()
+	connected := make([]string, 0, len(s.peers))
+	for id := range s.peers {
+		connected = append(connected, id)
+	}
+	s.mu.Unlock()
+	deleted, err := s.repo.MaintainPeers(s.ctx, connected, s.peerIdle, peerPruneBatch)
+	if err != nil {
+		return 0
+	}
+	return deleted
 }
 
 func (s *Server) Peers() []PeerInfo {
@@ -410,12 +604,33 @@ func (s *Server) Create(ctx context.Context, owner string, request CreateRequest
 		return Operation{}, ErrUnavailable
 	}
 	if expected, ok := ctx.Value(authorityContextKey{}).(string); ok && expected != s.epoch {
-		return Operation{}, ErrConflict
+		return Operation{}, ErrStaleAuthority
 	}
 	if request.AuthorityID != s.repo.AuthorityID() || request.PluginInstance != s.instance {
 		return Operation{}, ErrConflict
 	}
-	if len(s.operations) >= 32 {
+	// A concurrent identical create answers like a replay: it waits for the
+	// first one's insert and returns the same operation.
+	for {
+		a := s.operations[request.ID]
+		if a == nil || !a.inserting {
+			break
+		}
+		inserted := a.inserted
+		s.mu.Unlock()
+		<-inserted
+		s.mu.Lock()
+	}
+	if known, ok := s.knownLocked(request.ID); ok {
+		if known.Owner != owner {
+			return Operation{}, ErrForbidden
+		}
+		if subtle.ConstantTimeCompare(known.Hash, hash[:]) != 1 {
+			return Operation{}, ErrConflict
+		}
+		return known, nil
+	}
+	if len(s.operations) >= maxOperations || s.ownedLocked(owner) >= ownerLimit(s.config.MaxOperationsPerOwner, maxOperations) {
 		return Operation{}, ErrCapacity
 	}
 	c := s.channels[request.ChannelID]
@@ -434,25 +649,65 @@ func (s *Server) Create(ctx context.Context, owner string, request CreateRequest
 	for _, p := range peers {
 		op.Targets = append(op.Targets, Target{PeerID: p.info.ID, Generation: p.info.Generation, AgentID: p.info.AgentID, WireID: pluginsdk.RandomID(), State: "pending"})
 	}
-	if err := s.repo.Insert(ctx, op); err != nil {
-		return Operation{}, err
+	// The operation holds its peers and its slot while the writer inserts it,
+	// but no peer learns of it before the insert succeeded.
+	a := &activeOperation{op: op, request: request, raw: raw, logged: translog.StateStarting, inserting: true, inserted: make(chan struct{})}
+	s.operations[op.ID] = a
+	for _, target := range op.Targets {
+		s.peers[target.PeerID].operation = op.ID
+	}
+	done := s.insertLocked(op)
+	s.mu.Unlock()
+	var insertErr error
+	select {
+	case insertErr = <-done:
+	case <-s.persistDone:
+		select {
+		case insertErr = <-done:
+		default:
+			insertErr = ErrUnavailable
+		}
+	}
+	s.mu.Lock()
+	a.inserting = false
+	close(a.inserted)
+	if insertErr != nil {
+		delete(s.operations, op.ID)
+		for _, t := range a.op.Targets {
+			if p := s.peers[t.PeerID]; p != nil && p.operation == op.ID {
+				p.operation = ""
+			}
+		}
+		return Operation{}, insertErr
 	}
 	s.observed.admitted.Add(1)
-	a := &activeOperation{op: op, request: request, raw: raw}
-	s.operations[op.ID] = a
-	if ctx.Err() != nil {
+	if ctx.Err() != nil && a.op.State == "starting" {
 		a.op.State = "interrupted"
 		a.op.Reason = "admission_cancelled"
-		_ = s.saveLocked(a)
+		s.saveLocked(a)
 		delete(s.operations, op.ID)
+		for _, t := range a.op.Targets {
+			if p := s.peers[t.PeerID]; p != nil && p.operation == op.ID {
+				p.operation = ""
+			}
+		}
 		return Operation{}, ErrUnavailable
 	}
-	for _, target := range op.Targets {
-		p := s.peers[target.PeerID]
-		p.operation = op.ID
-		p.wakeup()
+	for _, t := range a.op.Targets {
+		if p := s.peers[t.PeerID]; p != nil && p.operation == op.ID {
+			p.wakeup()
+		}
 	}
-	return cloneOperation(op), nil
+	return cloneOperation(a.op), nil
+}
+
+// knownLocked is the decided state of an operation this authority holds in
+// memory or has not finished writing; the database may still lag behind it.
+func (s *Server) knownLocked(id string) (Operation, bool) {
+	if a := s.operations[id]; a != nil {
+		return cloneOperation(a.op), true
+	}
+	return s.saves.latest(id)
 }
 
 // resolveTargets asks the fleet host for the connected agents of a group or
@@ -616,30 +871,44 @@ func (s *Server) capturableLocked(p *peer, request CreateRequest, raw bool) erro
 	return nil
 }
 
+// Get returns one of the owner's operations.
 func (s *Server) Get(ctx context.Context, owner, id string) (Operation, error) {
+	return s.get(ctx, owner, false, id)
+}
+
+// get returns an operation of the owner, or of any owner for an admin.
+// Operations hold metadata only; channels stay owner-only.
+func (s *Server) get(ctx context.Context, owner string, admin bool, id string) (Operation, error) {
 	if !pluginsdk.ValidUID(id) {
 		return Operation{}, ErrInvalid
 	}
-	op, err := s.repo.Get(ctx, id)
-	if err == nil && op.Owner != owner {
+	// The decided state goes first: the writer may not have written it yet.
+	s.mu.Lock()
+	op, known := s.knownLocked(id)
+	s.mu.Unlock()
+	var err error
+	if !known {
+		op, err = s.repo.Get(ctx, id)
+	}
+	if err == nil && op.Owner != owner && !admin {
 		return Operation{}, ErrForbidden
 	}
 	if err == nil && !time.Now().Before(op.ExpiresAt) && (op.State == "starting" || op.State == "active" || op.State == "stopping") {
 		s.mu.Lock()
 		if active := s.operations[id]; active != nil {
 			defer s.mu.Unlock()
-			if active.op.Owner != owner {
+			if active.op.Owner != owner && !admin {
 				return Operation{}, ErrForbidden
 			}
 			if active.op.Reason == "" {
 				active.op.Reason = "absolute_expiry"
 			}
-			err = s.stopLocked(active, "expired")
-			return cloneOperation(active.op), err
+			s.stopLocked(active, "expired")
+			return cloneOperation(active.op), nil
 		}
 		// Unlocked before liveStats below, which takes s.mu again.
 		s.mu.Unlock()
-		previous := op.Revision
+		previous, was := op.Revision, translog.ParseState(op.State)
 		op.State = "expired"
 		op.Reason = "absolute_expiry"
 		expireTargets(op.Targets)
@@ -647,6 +916,7 @@ func (s *Server) Get(ctx context.Context, owner, id string) (Operation, error) {
 		if err := s.repo.Save(ctx, op, previous); err != nil {
 			return s.repo.Get(ctx, id)
 		}
+		s.logOperation(op.ID, was, translog.StateExpired, op.Reason)
 	}
 	if err == nil {
 		s.liveStats(&op)
@@ -664,34 +934,54 @@ func (s *Server) liveStats(op *Operation) {
 	}
 	for i, t := range op.Targets {
 		for _, live := range active.op.Targets {
-			if live.PeerID == t.PeerID && live.Generation == t.Generation && live.Stats != nil {
-				op.Targets[i].Stats = live.Stats
+			if live.PeerID == t.PeerID && live.Generation == t.Generation {
+				if live.Stats != nil {
+					op.Targets[i].Stats = live.Stats
+				}
+				op.Targets[i].Delivery = live.Delivery
 			}
 		}
 	}
 }
+
+// Stop ends one of the owner's operations.
 func (s *Server) Stop(ctx context.Context, owner, id string, revision int64) (Operation, error) {
+	return s.stop(ctx, owner, false, id, revision)
+}
+
+// stop ends an operation of the owner, or of any owner for an admin.
+func (s *Server) stop(ctx context.Context, owner string, admin bool, id string, revision int64) (Operation, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	a := s.operations[id]
 	if a == nil {
-		op, err := s.repo.Get(ctx, id)
-		if err == nil && op.Owner != owner {
+		// An operation no longer in memory is ended. Its final state may still
+		// wait for the writer; otherwise it is read and written outside the
+		// lock.
+		op, queued := s.saves.latest(id)
+		s.mu.Unlock()
+		var err error
+		if !queued {
+			op, err = s.repo.Get(ctx, id)
+		}
+		if err == nil && op.Owner != owner && !admin {
 			return Operation{}, ErrForbidden
 		}
 		if err == nil && op.Revision != revision {
 			return Operation{}, ErrPrecondition
 		}
-		if err == nil && (op.State == "starting" || op.State == "active" || op.State == "stopping") {
-			previous := op.Revision
+		if err == nil && !queued && (op.State == "starting" || op.State == "active" || op.State == "stopping") {
+			previous, was := op.Revision, translog.ParseState(op.State)
 			op.State = "interrupted"
 			op.Reason = "stop_unconfirmed"
 			op.Revision++
-			err = s.repo.Save(ctx, op, previous)
+			if err = s.repo.Save(ctx, op, previous); err == nil {
+				s.logOperation(op.ID, was, translog.StateInterrupted, op.Reason)
+			}
 		}
 		return op, err
 	}
-	if a.op.Owner != owner {
+	defer s.mu.Unlock()
+	if a.op.Owner != owner && !admin {
 		return Operation{}, ErrForbidden
 	}
 	if a.op.Revision != revision {
@@ -700,8 +990,31 @@ func (s *Server) Stop(ctx context.Context, owner, id string, revision int64) (Op
 	if a.op.Reason == "" {
 		a.op.Reason = "requested_stop"
 	}
-	err := s.stopLocked(a, "stopping")
-	return cloneOperation(a.op), err
+	s.stopLocked(a, "stopping")
+	return cloneOperation(a.op), nil
+}
+
+// Running lists the operations held in memory, soonest expiry first: the owner's,
+// or every owner's for an admin. It is bounded by the operation limit.
+func (s *Server) Running(owner string, admin bool) []RunningOperation {
+	s.mu.Lock()
+	list := []RunningOperation{}
+	for _, a := range s.operations {
+		if a.op.Owner == owner || admin {
+			list = append(list, RunningOperation{Owner: a.op.Owner, Operation: cloneOperation(a.op)})
+		}
+	}
+	s.mu.Unlock()
+	for i := range list {
+		s.liveStats(&list[i].Operation)
+	}
+	slices.SortFunc(list, func(a, b RunningOperation) int {
+		if c := a.ExpiresAt.Compare(b.ExpiresAt); c != 0 {
+			return c
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
+	return list
 }
 
 func cloneOperation(op Operation) Operation {
@@ -732,3 +1045,13 @@ func validIdentity(i Identity, c credential) bool {
 	}
 	return !strings.ContainsAny(i.Cluster+i.Namespace, "\r\n\x00")
 }
+
+const (
+	// peerRetention is how long a peer with no lease and no retained operation
+	// may go unused before the plugin deletes its database row.
+	peerRetention = 24 * time.Hour
+	// peerMaintenanceEvery is the period of the last-seen refresh and the delete.
+	peerMaintenanceEvery = time.Minute
+	// peerPruneBatch bounds the peers deleted in one pass.
+	peerPruneBatch = 500
+)

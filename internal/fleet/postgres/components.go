@@ -41,6 +41,11 @@ func (s *Store) SaveComponentSet(ctx context.Context, hash string, c configmgmt.
 	if !validComponentsHash(hash) || c == nil {
 		return fleet.ErrInvalid
 	}
+	release, err := s.agentWrite()
+	if err != nil {
+		return err
+	}
+	defer release()
 	ctx, cancel := bounded(ctx)
 	defer cancel()
 	tag, err := s.pool.Exec(ctx, `INSERT INTO fleet.component_sets(hash,components,first_seen_at)

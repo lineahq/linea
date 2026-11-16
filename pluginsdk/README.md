@@ -1,7 +1,7 @@
 # pluginsdk
 
 `github.com/lineahq/linea/pluginsdk` is the Go SDK for fleet plugins. It
-holds the host protocol 3 wire types, route and header constants, protocol
+holds the host protocol 4 wire types, route and header constants, protocol
 bounds, bounded HTTP helpers and `HostClient` for the host services. It uses
 only the standard library and never imports fleet internals.
 
@@ -48,15 +48,18 @@ host := pluginsdk.HostClient{
     Token:      hostToken, // the plugin presents this to fleet
     InstanceID: instance,
     HTTP:       pluginsdk.NewHTTPClient(),
+    // The session poll gets its own connections: a slow resolve must not
+    // make the plugin lose its session.
+    SessionHTTP: pluginsdk.NewHTTPClient(),
 }
 ```
 
 | Step | What to do |
 | --- | --- |
 | 1. Serve the manifest | On `GET pluginsdk.ManifestPath`, after checking the service token, answer `pluginsdk.Manifest{ID, Version, ProtocolVersion: pluginsdk.ProtocolVersion, InstanceID: instance, APIVersion}`. Values must equal the registration. Answer 503 when the plugin cannot do its work (for example its database is down): fleet marks it unavailable |
-| 2. Keep a session | Poll `host.Session(ctx)` about every 500 ms. It fails with 409 until fleet's probe has seen this instance (up to about 1 s after start), and with 403 while the plugin is drained, disabled or not ready. When the epoch changes or the session fails, stop everything admitted under the old epoch and drop state derived from it |
+| 2. Keep a session | Poll `host.Session(ctx)` about every 500 ms. It fails with 421 until fleet's probe has seen this instance (up to about 1 s after start), and with 403 while the plugin is drained, disabled or not ready. Stop everything admitted under the old epoch and drop state derived from it when the epoch changes, when the host answers with a refusal (`StatusOf` is not 0, 421 included), or when `pluginsdk.Unreachable(err)` holds twice in a row; one timeout or transport error is not a reason to stop |
 | 3. Call host services | With the current session: `host.Agents`, `host.ResolveAgents`, `host.ResolveGroup`, `host.Introspect`. Each request sends the instance and epoch headers |
-| 4. Serve status and the API | Check the service token, the caller headers and, on API routes, that instance and epoch equal your current session (409 otherwise) |
+| 4. Serve status and the API | Check the service token, the caller headers and, on API routes, that instance and epoch equal your current session (`pluginsdk.AuthorityMatches`; answer `pluginsdk.StatusMisdirected`, 421, otherwise; keep 409 for conflicts in your own domain) |
 
 The example's `watchSession` and `ServeHTTP` implement all four steps in
 about 100 lines.
@@ -67,15 +70,16 @@ about 100 lines.
 
 | Constant | Value | Use |
 | --- | --- | --- |
-| `ProtocolVersion` | `"3"` | `Manifest.ProtocolVersion` |
-| `ManifestPath` | `/fleet-plugin/v3/manifest` | Plugin serves; fleet probes every second |
-| `StatusPath` | `/fleet-plugin/v3/status` | Plugin serves; behind `GET /api/v1/plugins/{id}/status` |
-| `APIPath` | `/fleet-plugin/v3/api/` | Prefix of the plugin's opaque public API |
-| `SessionPath` | `/fleet-host/v3/session` | Host; `HostClient.Session` |
-| `AgentsPath`, `AgentsResolvePath`, `GroupsResolvePath`, `IntrospectPath` | `/fleet-host/v3/...` | Host services |
-| `CallerIDHeader`, `CallerRoleHeader` | `X-Fleet-Caller-ID`, `X-Fleet-Caller-Role` | Fleet sets them on status and API calls |
-| `ActingIDHeader`, `ActingNameHeader`, `ActingRequestHeader` | `X-Fleet-Acting-ID`, `-Name`, `-Request` | Optional, validated; fleet forwards them on API calls. `ReadActing` parses them; attribution only |
+| `ProtocolVersion` | `"4"` | `Manifest.ProtocolVersion` |
+| `ManifestPath` | `/fleet-plugin/v4/manifest` | Plugin serves; fleet probes every second |
+| `StatusPath` | `/fleet-plugin/v4/status` | Plugin serves; behind `GET /api/v1/plugins/{id}/status` |
+| `APIPath` | `/fleet-plugin/v4/api/` | Prefix of the plugin's opaque public API |
+| `SessionPath` | `/fleet-host/v4/session` | Host; `HostClient.Session` |
+| `AgentsPath`, `AgentsResolvePath`, `GroupsResolvePath`, `IntrospectPath` | `/fleet-host/v4/...` | Host services |
+| `CallerIDHeader`, `CallerAccessHeader` | `X-Fleet-Caller-ID`, `X-Fleet-Caller-Access` | Fleet sets them on status and API calls for a caller with a grant on the plugin. `Caller` reads both; `AccessRead`, `AccessWrite`, `AccessAdmin` and `ValidAccess` name the levels |
+| `ActingIDHeader`, `ActingNameHeader`, `ActingRequestHeader` | `X-Fleet-Acting-ID`, `-Name`, `-Request` | Optional, validated; fleet accepts them only from a credential with `delegate` and forwards them on API calls. `ReadActing` parses them; attribution only |
 | `InstanceHeader`, `EpochHeader` | `X-Fleet-Plugin-Instance`, `X-Fleet-Plugin-Epoch` | Plugin sends them to the host; fleet sends them on API calls |
+| `StatusMisdirected` | 421 | A plugin answers it when instance or epoch differ from its session; fleet answers it on the host listener for the same reason and never forwards it to an API caller |
 | `AgentsRead`, `CredentialsIntrospect` | `agents.read`, `credentials.introspect` | Registration permissions |
 
 ### Bounds
@@ -98,10 +102,12 @@ about 100 lines.
 | `Agent`, `Health`, `AgentPage`, `AgentQuery` | Directory page and its query (`after`, `limit` 1-100, `selector`, `connected`) |
 | `ResolveRequest`, `ResolveResponse` | `{credential_id?, attributes, limit?}` → `{agent_ids, more}` |
 | `GroupResolveRequest`, `GroupResolveResponse` | `{group_id \| selector, connected?, limit?}` → `{agent_ids, revision}` |
-| `IntrospectRequest`, `Introspection` | `{token_sha256}` → `{active, credential_id, role, labels, expires_at}` |
+| `IntrospectRequest`, `Introspection` | `{token_sha256}` of an agent credential's plugin token → `{active, credential_id, role, labels, expires_at}` |
 
-Fleet decodes the manifest and its own requests strictly, and the SDK decodes
-host answers strictly. Do not add fields to these types in your plugin.
+Every receiver ignores fields it does not know, in both directions: fleet
+decoding the manifest and host requests, and the SDK decoding host answers.
+Fields may therefore be added within a protocol version; a plugin must not
+rely on fleet rejecting a field it sends.
 
 ### Functions
 
@@ -114,8 +120,10 @@ host answers strictly. Do not add fields to these types in your plugin.
 | `HostClient.Introspect`, `IntrospectHash` | Hashes a presented bearer token and asks about it; the token never leaves the plugin |
 | `HostClient.Headers` | The instance and epoch headers for a session |
 | `StatusOf(err)` | HTTP status of a host refusal, or 0 for transport, size and decoding failures |
+| `Unreachable(err)`, `Misdirected(err)` | No answer arrived (timeout, transport), or the answer was 421 |
+| `AuthorityMatches(header, instance, epoch)` | Whether a forwarded request carries exactly your current instance and epoch |
 | `NewHTTPClient` | Client with 750 ms timeouts, two connections, no redirects and no compression |
-| `RequestJSON`, `GetJSON` | Bearer request, require 200, read at most `maxBytes`, strict decode |
+| `RequestJSON`, `GetJSON` | Bearer request, require 200, read at most `maxBytes`, decode one JSON value and ignore unknown fields |
 | `Endpoint` | Validates a base URL: HTTPS, or HTTP to loopback unless allowed |
 | `RandomID`, `ValidUID` | 32-hex instance IDs; also the format of epochs, agent and group IDs |
 | `ValidID`, `ValidVersion`, `ValidToken` | Registration formats: plugin ID, versions, 64-hex tokens |
@@ -127,12 +135,12 @@ status from `StatusOf`, never tokens, request bodies or telemetry.
 
 | `StatusOf` | Meaning | Typical handling |
 | --- | --- | --- |
-| 0 | Timeout, transport failure, oversized or malformed answer | Retry later; answer 503 to your caller |
+| 0 | Timeout, transport failure, oversized or malformed answer | Retry later; answer 503 to your caller. For the session poll, two timeouts or transport errors in a row end the session |
 | 400 | Malformed request, invalid selector or ID | Your caller's input or a bug; answer 400 |
 | 401 | Wrong host token | Configuration error; fail readiness |
 | 403 | Not enabled and ready, or permission not granted | Wait for the next session; check the registration |
 | 404 | Unknown route or group | Answer 404 for unknown groups |
-| 409 | Stale instance or epoch | Your session ended; drop the work and refresh the session |
+| 421 | Stale instance or epoch | Your session ended; drop the work and refresh the session |
 | 422 | Group larger than the limit | Answer 409 or 400 to your caller (fleet does not forward 422) |
 | 503 | Host busy or its database unavailable | Retry with backoff |
 
@@ -144,7 +152,10 @@ text. Use compile-time metric names and fixed-cardinality dimensions only.
 
 ## Compatibility
 
-Host protocol 3 is fixed: routes, field names and bounds do not change within
-it. A breaking change gets a new protocol version and new route prefixes.
+Host protocol 4 is fixed: routes, field names and bounds do not change within
+it, and fields may be added because receivers ignore unknown ones. A breaking
+change gets a new protocol version and new route prefixes. Protocol 4 replaced
+protocol 3 outright: there is no fallback, and a plugin built for protocol 3 is
+`incompatible` until it is rebuilt.
 Fleet reports a plugin whose manifest declares another protocol as
 `incompatible`.

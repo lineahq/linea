@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,7 +15,9 @@ import (
 	"time"
 
 	"github.com/lineahq/linea/internal/fleet/app"
+	"github.com/lineahq/linea/internal/fleet/auth"
 	"github.com/lineahq/linea/internal/fleet/postgres"
+	"github.com/lineahq/linea/internal/fleet/translog"
 )
 
 // version is the release, set at link time with -X main.version=X.Y.Z.
@@ -66,11 +67,22 @@ func run(args []string, stdout, stderr io.Writer) error {
 		name := fs.String("name", "initial-admin", "bootstrap credential name")
 		operatorName := fs.String("operator-name", "linea-server", "operator credential name (bootstrap, with LINEA_FLEET_OPERATOR_TOKEN)")
 		runtimeRole := fs.String("runtime-role", "", "existing runtime role to grant narrow DML privileges (migrate)")
+		adminAccess := fs.String("plugin-access", "", "plugin grants of the first admin, plugin=read|write|admin[,...] (bootstrap)")
+		operatorAccess := fs.String("operator-plugin-access", "", "plugin grants of the operator, plugin=read|write|admin[,...] (bootstrap)")
+		operatorDelegate := fs.Bool("operator-delegate", false, "let the operator send acting-for headers (bootstrap)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
 		if fs.NArg() != 0 {
 			return errors.New("unexpected positional arguments")
+		}
+		adminGrants, err := parsePluginAccess(*adminAccess)
+		if err != nil {
+			return fmt.Errorf("--plugin-access: %w", err)
+		}
+		operatorGrants, err := parsePluginAccess(*operatorAccess)
+		if err != nil {
+			return fmt.Errorf("--operator-plugin-access: %w", err)
 		}
 		database, err := secret("LINEA_FLEET_DATABASE_URL")
 		if err != nil {
@@ -99,7 +111,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 		if token != "" {
 			// The deployment generated the token and keeps it; never print it.
-			created, err := postgres.BootstrapToken(ctx, database, *id, *name, token)
+			created, err := postgres.BootstrapToken(ctx, database, *id, *name, token, adminGrants)
 			if err != nil {
 				return err
 			}
@@ -113,7 +125,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 				return err
 			}
 			if operatorToken != "" {
-				created, err := postgres.InstallOperatorToken(ctx, database, *id, *operatorName, operatorToken)
+				created, err := postgres.InstallOperatorToken(ctx, database, *id, *operatorName, operatorToken, operatorGrants, *operatorDelegate)
 				if err != nil {
 					return err
 				}
@@ -125,7 +137,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			}
 			return nil
 		}
-		issued, err := postgres.Bootstrap(ctx, database, *id, *name)
+		issued, err := postgres.Bootstrap(ctx, database, *id, *name, adminGrants)
 		if err != nil {
 			return err
 		}
@@ -144,8 +156,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 	fs.StringVar(&cfg.PluginsConfig, "plugins-config", "", "operator plugin registration JSON file (optional)")
 	fs.StringVar(&cfg.PluginAddr, "plugin-listen", cfg.PluginAddr, "private plugin host listener (only with registrations)")
 	fs.StringVar(&cfg.ServerID, "server-id", "", "stable operator-assigned fleet identity (required)")
-	fs.StringVar(&cfg.TLSCert, "tls-cert", "", "TLS certificate for both listeners")
+	fs.StringVar(&cfg.TLSCert, "tls-cert", "", "TLS certificate for every listener")
 	fs.StringVar(&cfg.TLSKey, "tls-key", "", "TLS private key")
+	fs.StringVar(&cfg.PluginTLSCert, "plugin-tls-cert", "", "TLS certificate for the plugin host listener alone; replaces tls-cert there")
+	fs.StringVar(&cfg.PluginTLSKey, "plugin-tls-key", "", "TLS private key for the plugin host listener")
 	fs.BoolVar(&cfg.AllowInsecureRemote, "allow-insecure-remote", false, "acknowledge HTTP behind a trusted TLS ingress")
 	fs.IntVar(&cfg.Limits.MaxAgents, "max-agents", cfg.Limits.MaxAgents, "inventory capacity (1..100000)")
 	fs.IntVar(&cfg.Limits.MaxConnections, "max-connections", cfg.Limits.MaxConnections, "agent TCP connection capacity (1..10000)")
@@ -157,6 +171,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	fs.BoolVar(&cfg.StoreHealthErrors, "store-health-errors", false, "store redacted, truncated component health error text")
 	fs.BoolVar(&cfg.ConfigManagement, "config-management", false, "enable opt-in remote config management for supervised agents (postgres only)")
 	allowedComponents := fs.String("config-allowed-components", "", "comma-separated kind:type components config versions may use (default: any)")
+	fs.IntVar(&cfg.ConfigUnstagedLimit, "config-unstaged-limit", 0, "connected agents a group change may reconfigure without max_affected (default 10)")
 	showVersion := fs.Bool("version", false, "print build version")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -187,18 +202,56 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// Usage and configuration errors are refused here with their authored
+	// message, before the service starts and before it logs anything.
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	cfg.Log = translog.New(stderr)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	return app.Run(ctx, cfg, version, func(management, agent net.Addr) {
-		fmt.Fprintf(stderr, "linea-fleet %s ready: management=%s agent=%s storage=%s\n", version, management, agent, cfg.Storage)
-	})
+	if err := app.Run(ctx, cfg, version, nil); err != nil {
+		// What went wrong is in the process_stopped line as an enumerated
+		// reason. The error itself can carry driver, file or address text
+		// and is never printed.
+		return errServiceFailed
+	}
+	return nil
 }
+
+// errServiceFailed is all the final line says about a failed service; the
+// transition log has the reason.
+var errServiceFailed = errors.New("service stopped with an error; see the process_stopped line for the reason")
+
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return
 		}
+		// The only direct write to stderr. Every error that reaches it is
+		// authored in this repository: flag, secret, validation and offline
+		// administration messages that name a rule, never a value. The
+		// service's own failures are mapped to errServiceFailed above.
 		fmt.Fprintf(os.Stderr, "linea-fleet: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// parsePluginAccess reads plugin=level[,plugin=level...]; empty is no grant.
+func parsePluginAccess(value string) (map[string]string, error) {
+	if value == "" {
+		return nil, nil
+	}
+	access := map[string]string{}
+	for _, item := range strings.Split(value, ",") {
+		id, level, ok := strings.Cut(strings.TrimSpace(item), "=")
+		if _, seen := access[id]; !ok || seen {
+			return nil, errors.New("want plugin=read|write|admin, each plugin once")
+		}
+		access[id] = level
+	}
+	if !auth.ValidPluginAccess(access) {
+		return nil, errors.New(auth.PluginAccessRule)
+	}
+	return access, nil
 }

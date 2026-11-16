@@ -131,3 +131,32 @@ func TestSessionProtoRoundTrip(t *testing.T) {
 		t.Fatalf("round trip changed the session:\n got %+v\nwant %+v", got, want)
 	}
 }
+
+func TestRemoteSessionEndsWhenControlGoesSilent(t *testing.T) {
+	m, _ := testManager(t)
+	request := traceRequest("remote")
+	request.ExpiresAt = time.Now().Add(time.Minute)
+	if err := m.Reconcile(context.Background(), []AuthorizedRequest{{Request: request}}, false); err != nil {
+		t.Fatal(err)
+	}
+	s := m.active.Load()
+	contact := time.Unix(0, m.lastControl.Load())
+	m.checkControl(contact.Add(controlTimeout - time.Second))
+	if s.stopped.Load() {
+		t.Fatal("session ended before the control timeout")
+	}
+	m.checkControl(contact.Add(controlTimeout))
+	<-s.done
+	if status := m.Statuses()[0]; status.State != "failed" || status.Reason != "control_lost" {
+		t.Fatalf("status %+v", status)
+	}
+}
+
+func TestLocalSessionIgnoresControlTimeout(t *testing.T) {
+	m, _ := testManager(t)
+	s := start(t, m, traceRequest("local"))
+	m.checkControl(time.Now().Add(time.Hour))
+	if s.stopped.Load() {
+		t.Fatal("local session ended for lost control")
+	}
+}

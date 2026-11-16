@@ -2,9 +2,12 @@
 package plugins
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -23,8 +26,35 @@ type Config struct {
 	ServiceTokenFile  string   `json:"service_token_file"`
 	AllowInsecureHTTP bool     `json:"allow_insecure_http"`
 	APIVersion        string   `json:"api_version,omitempty"`
-	hostToken         string
-	serviceToken      string
+	// CAFile is a PEM bundle trusted for an https endpoint instead of the
+	// system roots, for a plugin certificate from a private CA.
+	CAFile       string `json:"ca_file,omitempty"`
+	hostToken    string
+	serviceToken string
+	roots        *x509.CertPool
+}
+
+// trustRoots makes an HTTP client trust only the configured CA bundle; it
+// changes nothing without one.
+func (c Config) trustRoots(client *http.Client) {
+	if c.roots == nil {
+		return
+	}
+	client.Transport.(*http.Transport).TLSClientConfig = &tls.Config{RootCAs: c.roots, MinVersion: tls.VersionTLS12}
+}
+
+// loadRoots reads a PEM bundle of at most 64 KiB with at least one
+// certificate.
+func loadRoots(path string) (*x509.CertPool, error) {
+	b, err := readLimited(path, 64<<10)
+	if err != nil {
+		return nil, err
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(b) {
+		return nil, errConfig
+	}
+	return pool, nil
 }
 
 var errConfig = errors.New("invalid plugin configuration or secret files")
@@ -86,6 +116,18 @@ func Load(path string, reservedTokens ...string) ([]Config, error) {
 		c.Endpoint, err = pluginsdk.Endpoint(c.Endpoint, c.AllowInsecureHTTP)
 		if err != nil {
 			return nil, errConfig
+		}
+		if c.CAFile != "" {
+			name := c.CAFile
+			if !filepath.IsAbs(name) {
+				name = filepath.Join(filepath.Dir(path), name)
+			}
+			if !strings.HasPrefix(c.Endpoint, "https://") {
+				return nil, errConfig
+			}
+			if c.roots, err = loadRoots(name); err != nil {
+				return nil, errConfig
+			}
 		}
 		for _, secret := range []struct {
 			path string

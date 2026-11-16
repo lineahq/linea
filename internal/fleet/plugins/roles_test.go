@@ -15,13 +15,13 @@ import (
 	"github.com/lineahq/linea/pluginsdk"
 )
 
-// Reader, operator and admin callers reach a plugin's API and are forwarded
-// with their own role; other roles are refused before any upstream call.
-func TestPluginAPICallerRoles(t *testing.T) {
+// Only a credential granted access to the plugin reaches its API, whatever
+// its role, and is forwarded with the granted level. Status needs a grant too.
+func TestPluginAPICallerAccess(t *testing.T) {
 	config := fixtureConfig("")
 	config.APIVersion = "1"
 	var mu sync.Mutex
-	var roles []string
+	var levels []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if req.URL.Path == pluginsdk.ManifestPath {
@@ -29,7 +29,7 @@ func TestPluginAPICallerRoles(t *testing.T) {
 			return
 		}
 		mu.Lock()
-		roles = append(roles, req.Header.Get(pluginsdk.CallerRoleHeader))
+		levels = append(levels, req.Header.Get(pluginsdk.CallerAccessHeader))
 		mu.Unlock()
 		_, _ = w.Write([]byte(`{}`))
 	}))
@@ -38,32 +38,37 @@ func TestPluginAPICallerRoles(t *testing.T) {
 	r := New(context.Background(), []Config{config}, fleet.NewStore(1))
 	defer r.Close()
 	r.probe(r.entries[0])
+	grant := func(level string) map[string]string { return map[string]string{config.ID: level} }
 	for _, tc := range []struct {
 		role   string
+		access map[string]string
 		method string
 		want   int
 	}{
-		{"reader", "GET", 200}, {"operator", "GET", 200}, {"admin", "GET", 200},
-		{"operator", "POST", 200}, {"operator", "DELETE", 200},
-		{"agent", "GET", 403}, {"", "GET", 403}, {"owner", "POST", 403},
+		{"reader", grant("read"), "GET", 200}, {"reader", grant("write"), "POST", 200}, {"operator", grant("admin"), "DELETE", 200},
+		{"admin", nil, "GET", 403}, {"operator", nil, "POST", 403}, {"admin", map[string]string{"other": "admin"}, "GET", 403},
+		{"reader", grant("owner"), "GET", 403}, {"reader", grant(""), "GET", 403},
 	} {
 		mu.Lock()
-		roles = nil
+		levels = nil
 		mu.Unlock()
 		req := httptest.NewRequest(tc.method, "http://fleet/api/v1/plugins/"+config.ID+"/api/v1/custom", strings.NewReader("{}"))
 		w := httptest.NewRecorder()
-		r.ServeAPI(w, req, config.ID, "v1/custom", auth.Principal{ID: "caller", Role: tc.role})
+		r.ServeAPI(w, req, config.ID, "v1/custom", auth.Principal{ID: "caller", Role: tc.role, PluginAccess: tc.access})
 		mu.Lock()
-		forwarded := append([]string(nil), roles...)
+		forwarded := append([]string(nil), levels...)
 		mu.Unlock()
-		if w.Code != tc.want || (tc.want == 200) != (len(forwarded) == 1 && forwarded[0] == tc.role) || (tc.want != 200 && len(forwarded) != 0) {
-			t.Fatalf("%s %s: status %d, forwarded roles %v", tc.role, tc.method, w.Code, forwarded)
+		if w.Code != tc.want || (tc.want == 200) != (len(forwarded) == 1 && forwarded[0] == tc.access[config.ID]) || (tc.want != 200 && len(forwarded) != 0) {
+			t.Fatalf("%s %v %s: status %d, forwarded levels %v", tc.role, tc.access, tc.method, w.Code, forwarded)
 		}
 	}
-	for _, role := range []string{"reader", "operator", "admin"} {
-		if _, err := r.Status(context.Background(), config.ID, auth.Principal{ID: "caller", Role: role}); errors.Is(err, auth.ErrForbidden) {
-			t.Fatalf("%s was refused plugin status", role)
+	for _, level := range []string{"read", "write", "admin"} {
+		if _, err := r.Status(context.Background(), config.ID, auth.Principal{ID: "caller", Role: "reader", PluginAccess: grant(level)}); errors.Is(err, auth.ErrForbidden) {
+			t.Fatalf("%s was refused plugin status", level)
 		}
+	}
+	if _, err := r.Status(context.Background(), config.ID, auth.Principal{ID: "caller", Role: "admin"}); !errors.Is(err, auth.ErrForbidden) {
+		t.Fatal("an admin without a grant read plugin status")
 	}
 }
 

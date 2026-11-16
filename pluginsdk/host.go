@@ -16,9 +16,9 @@ import (
 // credentials.introspect covers introspection.
 const (
 	CredentialsIntrospect = "credentials.introspect"
-	AgentsResolvePath     = "/fleet-host/v3/agents/resolve"
-	GroupsResolvePath     = "/fleet-host/v3/groups/resolve"
-	IntrospectPath        = "/fleet-host/v3/credentials/introspect"
+	AgentsResolvePath     = "/fleet-host/v4/agents/resolve"
+	GroupsResolvePath     = "/fleet-host/v4/groups/resolve"
+	IntrospectPath        = "/fleet-host/v4/credentials/introspect"
 )
 
 // Host bounds. A group that resolves to more than the requested limit is

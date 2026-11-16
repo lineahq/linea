@@ -24,7 +24,8 @@ const DefaultPendingSessions = 400
 // unused. Waiting is cheap and keeps the order of arrival. opamp-go, which
 // the Collector's OpAMP extension and the supervisor use, gives a handshake
 // 45 s; the wait leaves room for the credential check and the upgrade.
-// Waiting handshakes are bounded by the agent TCP connection limit.
+// Waiting handshakes are bounded by the agent listener's limit on connections
+// that have not authenticated, which also covers incomplete TLS handshakes.
 const admissionWait = 25 * time.Second
 
 // responseWrite is the time to write a response once a handshake is admitted.

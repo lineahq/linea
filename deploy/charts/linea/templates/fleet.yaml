@@ -14,8 +14,15 @@ uses, so it connects on its own.
 {{- $hostToken := include "linea.livecaptureToken" (list . "host-token") }}
 {{- $serviceToken := include "linea.livecaptureToken" (list . "service-token") }}
 {{- $metricsToken := include "linea.livecaptureToken" (list . "metrics-token") }}
-{{- $pluginsJSON := dict "plugins" (list (dict "id" "livecapture" "version" "0.4.0" "api_version" "2" "endpoint" (printf "http://%s-plugin:8090" $capture) "enabled" true "allow_insecure_http" true "permissions" (list "agents.read" "credentials.introspect") "host_token_file" "/etc/fleet/plugins/host-token" "service_token_file" "/etc/fleet/plugins/service-token")) | toJson }}
-{{- $configJSON := dict "id" "livecapture" "version" "0.4.0" "host_endpoint" (printf "http://%s:8081" $fleet) "allow_insecure_host" true "host_token_file" "/etc/livecapture/host-token" "service_token_file" "/etc/livecapture/service-token" "metrics_token_file" "/etc/livecapture/metrics-token" "http_listen" "0.0.0.0:8090" "control_listen" "0.0.0.0:4340" "delivery_listen" "0.0.0.0:4341" "tls_cert_file" "/etc/livecapture/tls.crt" "tls_key_file" "/etc/livecapture/tls.key" "test_insecure" false "capture_label" "capture" "raw_principals" (ternary (list (index (splitList "_" (include "linea.fleetOperatorToken" .)) 1)) (list) (eq (toString $lc.rawCapture) "true")) "max_peers" 256 | toJson }}
+{{- $pluginTLS := eq (toString $lc.tls.pluginAPI) "true" }}
+{{- $registration := dict "id" "livecapture" "version" "0.5.0" "api_version" "3" "endpoint" (printf "%s://%s-plugin:8090" (ternary "https" "http" $pluginTLS) $capture) "enabled" true "permissions" (list "agents.read" "credentials.introspect") "host_token_file" "/etc/fleet/plugins/host-token" "service_token_file" "/etc/fleet/plugins/service-token" }}
+{{- if $pluginTLS }}
+{{- $_ := set $registration "ca_file" "/etc/fleet/plugins/ca.crt" }}
+{{- else }}
+{{- $_ := set $registration "allow_insecure_http" true }}
+{{- end }}
+{{- $pluginsJSON := dict "plugins" (list $registration) | toJson }}
+{{- $configJSON := dict "id" "livecapture" "version" "0.5.0" "host_endpoint" (printf "https://%s-internal:8081" $fleet) "host_ca_file" "/etc/livecapture/host-ca.crt" "http_tls" $pluginTLS "host_token_file" "/etc/livecapture/host-token" "service_token_file" "/etc/livecapture/service-token" "metrics_token_file" "/etc/livecapture/metrics-token" "http_listen" "0.0.0.0:8090" "control_listen" "0.0.0.0:4340" "delivery_listen" "0.0.0.0:4341" "tls_cert_file" "/etc/livecapture/tls.crt" "tls_key_file" "/etc/livecapture/tls.key" "capture_label" "capture" "raw_principals" (ternary (list (index (splitList "_" (include "linea.fleetOperatorToken" .)) 1)) (list) (eq (toString $lc.rawCapture) "true")) "max_peers" 256 | toJson }}
 # The fleet admin token (token) stays with the operator of the release: it
 # issues credentials and runs plugin operations, and the server never gets it.
 # The server's fleet operator token (operator-token) is the server's credential.
@@ -166,6 +173,20 @@ stringData:
   service-token: {{ $serviceToken | quote }}
   metrics-token: {{ $metricsToken | quote }}
 ---
+{{- $hostCert := include "linea.fleetHostCertificate" . | fromYaml }}
+# Fleet's self-signed certificate for the plugin host API on the internal
+# Service, generated once and kept. The plugin trusts tls.crt.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "linea.fleetHostTLSSecret" . }}
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  tls.crt: {{ index $hostCert "tls.crt" | b64enc }}
+  tls.key: {{ index $hostCert "tls.key" | b64enc }}
+---
 {{- if not $lc.tls.secretName }}
 {{- $cert := include "linea.livecaptureCertificate" . | fromYaml }}
 # The plugin's self-signed certificate, generated once and kept. Collectors
@@ -208,8 +229,23 @@ spec:
   selector:
     {{- include "linea.fleetSelector" . | nindent 4 }}
   ports:
-    - {name: management, port: {{ $d.service.managementPort }}, targetPort: management}
     - {name: opamp, port: {{ $d.service.agentPort }}, targetPort: opamp}
+---
+# The management API for the server and the plugin host API, never exposed
+# outside the cluster whatever type the OpAMP Service has.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fleet }}-internal
+  labels:
+    {{- include "linea.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fleet
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "linea.fleetSelector" . | nindent 4 }}
+  ports:
+    - {name: management, port: {{ $d.service.managementPort }}, targetPort: management}
     - {name: plugin-host, port: 8081, targetPort: plugin-host}
 ---
 apiVersion: apps/v1
@@ -267,11 +303,12 @@ spec:
           volumeMounts:
             - {name: migrate-url, mountPath: /etc/fleet/migrate, readOnly: true}
         # Installs the admin token as the first admin and the server's token as
-        # an operator; no change once they are.
+        # an operator that may write live captures and act for its users; a
+        # repeat only reapplies those grants.
         - name: bootstrap
           image: {{ include "linea.image" (dict "repository" $d.image.repository "tag" ($d.image.tag | default .Chart.AppVersion)) | quote }}
           imagePullPolicy: {{ $d.image.pullPolicy }}
-          args: [bootstrap, --server-id, {{ $d.serverID | quote }}, --name, deployment-admin, --operator-name, linea-server]
+          args: [bootstrap, --server-id, {{ $d.serverID | quote }}, --name, deployment-admin, --plugin-access, livecapture=admin, --operator-name, linea-server, --operator-plugin-access, livecapture=write, --operator-delegate]
           env:
             - {name: LINEA_FLEET_DATABASE_URL_FILE, value: /etc/fleet/runtime/url}
             - {name: LINEA_FLEET_BOOTSTRAP_TOKEN_FILE, value: /etc/fleet/bootstrap/token}
@@ -294,6 +331,10 @@ spec:
             - --allow-insecure-remote
             - --plugins-config=/etc/fleet/plugins/plugins.json
             - --plugin-listen=0.0.0.0:8081
+            # The plugin host API carries the host token: TLS even inside
+            # the cluster.
+            - --plugin-tls-cert=/etc/fleet/host-tls/tls.crt
+            - --plugin-tls-key=/etc/fleet/host-tls/tls.key
             - --config-management={{ $d.configManagement | default false }}
           env:
             - {name: LINEA_FLEET_DATABASE_URL_FILE, value: /etc/fleet/runtime/url}
@@ -319,8 +360,13 @@ spec:
           volumeMounts:
             - {name: runtime-url, mountPath: /etc/fleet/runtime, readOnly: true}
             - {name: plugins, mountPath: /etc/fleet/plugins, readOnly: true}
+            - {name: host-tls, mountPath: /etc/fleet/host-tls, readOnly: true}
             - {name: tmp, mountPath: /tmp}
       volumes:
+        - name: host-tls
+          secret:
+            secretName: {{ include "linea.fleetHostTLSSecret" . }}
+            items: [{key: tls.crt, path: tls.crt}, {key: tls.key, path: tls.key}]
         - name: migrate-url
           secret:
             secretName: {{ $dbSecret }}
@@ -344,6 +390,12 @@ spec:
                   items:
                     - {key: host-token, path: host-token}
                     - {key: service-token, path: service-token}
+              {{- if $pluginTLS }}
+              # Fleet trusts the plugin's certificate for its API.
+              - secret:
+                  name: {{ include "linea.livecaptureTLSSecret" . }}
+                  items: [{key: tls.crt, path: ca.crt}]
+              {{- end }}
         - {name: tmp, emptyDir: {sizeLimit: 16Mi}}
       {{- with $d.nodeSelector }}
       nodeSelector:
@@ -497,6 +549,10 @@ spec:
                   items:
                     - {key: tls.crt, path: tls.crt}
                     - {key: tls.key, path: tls.key}
+              # The plugin trusts fleet's plugin host certificate.
+              - secret:
+                  name: {{ include "linea.fleetHostTLSSecret" . }}
+                  items: [{key: tls.crt, path: host-ca.crt}]
               - secret:
                   name: {{ $dbSecret }}
                   items: [{key: capture-runtime-url, path: runtime-url}]

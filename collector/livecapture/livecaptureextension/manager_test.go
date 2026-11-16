@@ -18,6 +18,8 @@ import (
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/ptrace"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 type testHost map[component.ID]component.Component
@@ -449,6 +451,32 @@ func TestLimitsQueueFailuresPanicAndKillSwitch(t *testing.T) {
 			t.Fatal(m.Statuses())
 		}
 	})
+	t.Run("panic is logged once without its value", func(t *testing.T) {
+		m, sink := testManager(t)
+		core, logs := observer.New(zap.WarnLevel)
+		m.settings.Logger = zap.New(core)
+		sink.panics = true
+		r := traceRequest("panic-log")
+		s := start(t, m, r)
+		// A second concurrent call may panic too; only the first is logged.
+		var wg sync.WaitGroup
+		for range 2 {
+			wg.Go(func() { m.CaptureTraces(context.Background(), r.CapturePoints[0], testTraces()) })
+		}
+		wg.Wait()
+		<-s.done
+		entries := logs.All()
+		if len(entries) != 1 {
+			t.Fatalf("%d warnings", len(entries))
+		}
+		fields := entries[0].ContextMap()
+		if fields["session_id"] != "panic-log" || fields["signal"] != "traces" || fields["point"] != r.CapturePoints[0].Point || len(fields) != 4 {
+			t.Fatal(fields)
+		}
+		if strings.Contains(fmt.Sprint(entries[0]), "private payload") {
+			t.Fatal("panic value logged")
+		}
+	})
 	t.Run("kill switch", func(t *testing.T) {
 		m, _ := testManager(t)
 		s := start(t, m, traceRequest("disabled"))
@@ -649,5 +677,37 @@ func TestRawPointCopiesAreNotRedacted(t *testing.T) {
 	wantTraces, _ := (&ptrace.ProtoMarshaler{}).MarshalTraces(traces)
 	if !bytes.Equal(gotTraces, wantTraces) {
 		t.Fatal("raw trace copy was modified")
+	}
+}
+
+// A raw point refuses an oversized original before copying it, and the copy
+// keeps no group for it.
+func TestRawPointRefusesOversizedRecordBeforeCopy(t *testing.T) {
+	m, sink := testManager(t)
+	p := CapturePoint{Point: Point{Pipeline: "traces", Point: "raw"}, Signal: Traces, Sensitivity: "raw"}
+	if err := m.Register(p); err != nil {
+		t.Fatal(err)
+	}
+	r := traceRequest("raw-size")
+	r.CapturePoints = []Point{p.Point}
+	r.Limits.RecordBytes = 256
+	if _, err := m.StartSession(context.Background(), r, Access{AllowRaw: true}); err != nil {
+		t.Fatal(err)
+	}
+	s := m.active.Load()
+	data := ptrace.NewTraces()
+	large := data.ResourceSpans().AppendEmpty()
+	span := large.ScopeSpans().AppendEmpty().Spans().AppendEmpty()
+	span.SetName("large")
+	span.Attributes().PutStr("payload", strings.Repeat("x", 1024))
+	small := data.ResourceSpans().AppendEmpty()
+	small.ScopeSpans().AppendEmpty().Spans().AppendEmpty().SetName("small")
+	m.CaptureTraces(context.Background(), p.Point, data)
+	stats := s.stats()
+	if stats.Dropped["record_size"] != 1 || stats.EnqueuedRecords != 1 || len(sink.trace) != 1 {
+		t.Fatalf("stats %+v", stats)
+	}
+	if copy := sink.trace[0]; copy.ResourceSpans().Len() != 1 || copy.ResourceSpans().At(0).ScopeSpans().At(0).Spans().At(0).Name() != "small" {
+		t.Fatal("oversized raw record left a group in the copy")
 	}
 }

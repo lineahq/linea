@@ -81,13 +81,16 @@ type OperationError struct {
 	// Diagnostics are the findings of a validation_failed failure, such as
 	// a manifest refused before building.
 	Diagnostics []platform.Diagnostic `json:"diagnostics,omitempty"`
+	// Affected is how many connected agents a refused fleet group change
+	// would give a new config; resend with that max_affected to accept it.
+	Affected int `json:"affected,omitempty"`
 }
 
 func writeOperationError(w http.ResponseWriter, err error) {
 	body := OperationError{Code: string(platform.ErrorCode(err)), Error: err.Error()}
 	var e *platform.Error
 	if errors.As(err, &e) {
-		body.Error, body.CurrentStatement, body.Diagnostics = e.Message, e.CurrentStatement, e.Diagnostics
+		body.Error, body.CurrentStatement, body.Diagnostics, body.Affected = e.Message, e.CurrentStatement, e.Diagnostics, e.Affected
 	}
 	writeJSON(w, statusOf(err), body)
 }

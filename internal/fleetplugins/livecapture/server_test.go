@@ -7,8 +7,11 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,23 +22,77 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+type memoryPeer struct {
+	generation uint64
+	seen       time.Time
+}
+
+// memoryRepo applies the same peer rules as Store: a new peer starts above the
+// generation floor, and MaintainPeers deletes only unused peers.
 type memoryRepo struct {
 	mu     sync.Mutex
 	ops    map[string]Operation
 	leases map[string]string
-	gen    uint64
+	peers  map[string]*memoryPeer
+	floor  uint64
+	now    func() time.Time
+	probes atomic.Int32
 }
 
 func newMemoryRepo() *memoryRepo {
-	return &memoryRepo{ops: map[string]Operation{}, leases: map[string]string{}}
+	return &memoryRepo{ops: map[string]Operation{}, leases: map[string]string{}, peers: map[string]*memoryPeer{}, now: time.Now}
 }
-func (r *memoryRepo) AuthorityID() string         { return strings.Repeat("f", 32) }
-func (r *memoryRepo) Ready(context.Context) error { return nil }
-func (r *memoryRepo) NextGeneration(context.Context, string) (uint64, error) {
+func (r *memoryRepo) AuthorityID() string { return strings.Repeat("f", 32) }
+
+// Ready counts probes so tests can show that only the maintenance loop pings.
+func (r *memoryRepo) Ready(context.Context) error { r.probes.Add(1); return nil }
+func (r *memoryRepo) NextGeneration(_ context.Context, id string) (uint64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.gen++
-	return r.gen, nil
+	p := r.peers[id]
+	if p == nil {
+		if len(r.peers) >= 10000 {
+			return 0, ErrCapacity
+		}
+		p = &memoryPeer{generation: r.floor}
+		r.peers[id] = p
+	}
+	p.generation++
+	p.seen = r.now()
+	return p.generation, nil
+}
+func (r *memoryRepo) MaintainPeers(_ context.Context, connected []string, idle time.Duration, limit int) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := r.now()
+	live := map[string]bool{}
+	for _, id := range connected {
+		live[id] = true
+		if p := r.peers[id]; p != nil {
+			p.seen = now
+		}
+	}
+	referenced := map[string]bool{}
+	for _, op := range r.ops {
+		for _, t := range op.Targets {
+			referenced[t.PeerID] = true
+		}
+	}
+	var candidates []string
+	for id, p := range r.peers {
+		if now.Sub(p.seen) > idle && !live[id] && r.leases[id] == "" && !referenced[id] {
+			candidates = append(candidates, id)
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool { return r.peers[candidates[i]].seen.Before(r.peers[candidates[j]].seen) })
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	for _, id := range candidates {
+		r.floor = max(r.floor, r.peers[id].generation)
+		delete(r.peers, id)
+	}
+	return len(candidates), nil
 }
 func (r *memoryRepo) Get(_ context.Context, id string) (Operation, error) {
 	r.mu.Lock()
@@ -54,7 +111,7 @@ func (r *memoryRepo) Insert(_ context.Context, op Operation) error {
 	}
 	for _, t := range op.Targets {
 		if r.leases[t.PeerID] != "" {
-			return ErrConflict
+			return ErrPeerBusy
 		}
 	}
 	r.ops[op.ID] = cloneOperation(op)
@@ -82,7 +139,7 @@ func fixture(t *testing.T) (*Server, CreateRequest, *peer) {
 	t.Helper()
 	token := strings.Repeat("d", 64)
 	c := Config{ID: "test", Version: "1", serviceToken: strings.Repeat("b", 64), HostEndpoint: "http://127.0.0.1:1"}
-	s, err := New(context.Background(), c, newMemoryRepo())
+	s, err := New(context.Background(), c, newMemoryRepo(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,6 +198,7 @@ func TestAdmissionOwnerRawGenerationAndIdempotency(t *testing.T) {
 	if _, err := s.Stop(context.Background(), "owner", op.ID, 100); !errors.Is(err, ErrPrecondition) {
 		t.Fatal("stale stop admitted")
 	}
+	send(t, s, p)
 	stop, err := s.Stop(context.Background(), "owner", op.ID, 1)
 	if err != nil || stop.State != "stopping" || p.operation != "" {
 		t.Fatal("stop did not fence desired start")
@@ -153,8 +211,8 @@ func TestAdmissionOwnerRawGenerationAndIdempotency(t *testing.T) {
 	}
 	r.ID = pluginsdk.RandomID()
 	r.Limits.TotalRecords = 0
-	if _, err := s.Create(context.Background(), "owner", r); !errors.Is(err, ErrConflict) {
-		t.Fatal("uncertain stop released durable reservation")
+	if _, err := s.Create(context.Background(), "owner", r); !errors.Is(err, ErrPeerBusy) {
+		t.Fatal("uncertain stop released durable reservation", err)
 	}
 	wire := s.operations[op.ID].op.Targets[0].WireID
 	s.mu.Lock()
@@ -248,81 +306,131 @@ func TestExpiryEndsUnfinishedTargets(t *testing.T) {
 	}
 }
 
-func TestDeliveryRequiresReceiptAndPreservesPartialOutcome(t *testing.T) {
+// sourceOf returns the resource attributes the Collector stamps on copies for
+// the operation's first target, and an authenticated delivery context.
+func sourceOf(s *Server, op Operation) (pcommon.Map, context.Context) {
+	attributes := pcommon.NewMap()
+	for key, value := range map[string]string{"capture.session.id": s.operations[op.ID].op.Targets[0].WireID, "capture.point": "egress", "capture.pipeline": "traces", "capture.collector.pod": "pod", "capture.cluster": "cluster"} {
+		attributes.PutStr(key, value)
+	}
+	return attributes, metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+strings.Repeat("d", 64)))
+}
+
+// Every bound export is answered at once; the consumer's ACK only frees the
+// buffer, and a repeated ACK does nothing.
+func TestDeliveryAnswersAtOnceAndAckFrees(t *testing.T) {
 	s, r, p := fixture(t)
 	op, err := s.Create(context.Background(), "owner", r)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wire := s.operations[op.ID].op.Targets[0].WireID
-	attributes := pcommon.NewMap()
-	for key, value := range map[string]string{"capture.session.id": wire, "capture.point": "egress", "capture.pipeline": "traces", "capture.collector.pod": "pod", "capture.cluster": "cluster"} {
-		attributes.PutStr(key, value)
-	}
-	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+strings.Repeat("d", 64)))
-	result := make(chan struct {
-		accepted int64
-		err      error
-	}, 1)
-	go func() {
-		accepted, err := s.deliver(ctx, "traces", []pcommon.Map{attributes}, 2, []byte("bounded-synthetic"))
-		result <- struct {
-			accepted int64
-			err      error
-		}{accepted, err}
-	}()
-	var envelope *Envelope
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		envelope, err = s.Next("owner", r.ChannelID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if envelope != nil {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	if envelope == nil {
-		t.Fatal("no delivery offered")
-	}
-	select {
-	case <-result:
-		t.Fatal("OTLP acknowledged before consumer receipt")
-	default:
-	}
-	ack := Acknowledgement{ID: envelope.ID, Accepted: 1}
-	if err := s.Ack("other", r.ChannelID, ack); !errors.Is(err, ErrForbidden) {
-		t.Fatal("cross-owner receipt accepted")
-	}
-	if err := s.Ack("owner", r.ChannelID, ack); err != nil {
+	attributes, ctx := sourceOf(s, op)
+	if err := s.deliver(ctx, "traces", []pcommon.Map{attributes}, 2, []byte("bounded-synthetic")); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Ack("owner", r.ChannelID, ack); err != nil {
-		t.Fatal("identical receipt not reconciled")
+	envelope, err := s.Next("owner", r.ChannelID)
+	if err != nil || envelope == nil || envelope.Records != 2 {
+		t.Fatalf("offered %v, %v", envelope, err)
 	}
-	out := <-result
-	if out.err != nil || out.accepted != 1 {
-		t.Fatal("partial acceptance lost")
+	ack := Acknowledgement{ID: envelope.ID}
+	if err := s.Ack("other", r.ChannelID, ack); !errors.Is(err, ErrForbidden) {
+		t.Fatal("cross-owner ACK accepted")
+	}
+	for range 2 {
+		if err := s.Ack("owner", r.ChannelID, ack); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if next, err := s.Next("owner", r.ChannelID); next != nil || err != nil {
+		t.Fatalf("acknowledged batch offered again: %v, %v", next, err)
 	}
 	m := s.Metrics()
-	if m.Counters["consumer_accepted_traces_records_total"] != 1 || m.Counters["consumer_rejected_traces_records_total"] != 1 || m.Counters["receipt_retries_total"] != 1 || m.Gauges["pending_bytes"] != 0 {
-		t.Fatal("partial/duplicate receipt metrics lost or double counted")
+	if m.Counters["delivered_traces_records_total"] != 2 || m.Counters["acks_total"] != 1 || m.Gauges["pending_bytes"] != 0 {
+		t.Fatalf("metrics %v %v", m.Counters, m.Gauges)
+	}
+	got, err := s.Get(context.Background(), "owner", op.ID)
+	if err != nil || got.Targets[0].Delivery != (TargetDelivery{ReceivedRecords: 2}) {
+		t.Fatalf("delivery %+v, %v", got.Targets[0].Delivery, err)
 	}
 	s.mu.Lock()
 	s.peers[p.info.ID].info.Generation = 2
 	s.mu.Unlock()
-	if _, err := s.deliver(ctx, "traces", []pcommon.Map{attributes}, 1, []byte("x")); status.Code(err) != codes.PermissionDenied {
+	if err := s.deliver(ctx, "traces", []pcommon.Map{attributes}, 1, []byte("x")); status.Code(err) != codes.PermissionDenied {
 		t.Fatal("old-generation samples accepted")
 	}
 }
 
+// What the buffer cannot hold is dropped and counted for its target. The
+// export still succeeds and the capture keeps running.
+func TestDeliveryDropsAndCountsWhatDoesNotFit(t *testing.T) {
+	for name, tc := range map[string]struct {
+		prepare func(s *Server, c *channel, clock *time.Time)
+		dropped int64
+	}{
+		"room":          {func(*Server, *channel, *time.Time) {}, 0},
+		"channel bytes": {func(_ *Server, c *channel, _ *time.Time) { c.bytes = channelBytes }, 3},
+		"channel count": {func(_ *Server, c *channel, clock *time.Time) {
+			for range channelBatches {
+				c.batches = append(c.batches, &batch{received: *clock})
+			}
+		}, 3},
+		"all channels": {func(s *Server, _ *channel, _ *time.Time) { s.pending = pendingBytes }, 3},
+		"consumer gone": {func(_ *Server, c *channel, clock *time.Time) {
+			*clock = clock.Add(6 * time.Second)
+			c.expires = clock.Add(time.Minute)
+		}, 3},
+		"aged in buffer": {nil, 3},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, r, _ := fixture(t)
+			clock := time.Now()
+			s.now = func() time.Time { return clock }
+			op, err := s.Create(context.Background(), "owner", r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.channels[r.ChannelID].lastSeen = clock
+			if tc.prepare != nil {
+				s.mu.Lock()
+				tc.prepare(s, s.channels[r.ChannelID], &clock)
+				s.mu.Unlock()
+			}
+			attributes, ctx := sourceOf(s, op)
+			if err := s.deliver(ctx, "traces", []pcommon.Map{attributes}, 3, []byte("xyz")); err != nil {
+				t.Fatalf("export answered %v", err)
+			}
+			if tc.prepare == nil {
+				clock = clock.Add(batchAge + time.Millisecond)
+				s.channels[r.ChannelID].lastSeen = clock
+				if next, err := s.Next("owner", r.ChannelID); next != nil || err != nil {
+					t.Fatalf("aged batch offered: %v, %v", next, err)
+				}
+			}
+			got, err := s.Get(context.Background(), "owner", op.ID)
+			want := TargetDelivery{ReceivedRecords: 3, DroppedRecords: tc.dropped}
+			if tc.dropped > 0 {
+				want.DroppedBatches = 1
+			}
+			if err != nil || got.Targets[0].Delivery != want {
+				t.Fatalf("delivery %+v, want %+v, %v", got.Targets[0].Delivery, want, err)
+			}
+			if got.State != "starting" && got.State != "active" {
+				t.Fatalf("capture ended as %s (%s)", got.State, got.Reason)
+			}
+			if m := s.Metrics(); m.Counters["dropped_traces_records_total"] != uint64(tc.dropped) {
+				t.Fatalf("dropped metric %d", m.Counters["dropped_traces_records_total"])
+			}
+		})
+	}
+}
+
 func TestStoppingTargetDrainsUntilReleased(t *testing.T) {
-	s, r, _ := fixture(t)
+	s, r, p := fixture(t)
 	op, err := s.Create(context.Background(), "owner", r)
 	if err != nil {
 		t.Fatal(err)
 	}
+	send(t, s, p)
 	attributes := pcommon.NewMap()
 	for key, value := range map[string]string{"capture.session.id": s.operations[op.ID].op.Targets[0].WireID, "capture.point": "egress", "capture.pipeline": "traces", "capture.collector.pod": "pod", "capture.cluster": "cluster"} {
 		attributes.PutStr(key, value)
@@ -350,43 +458,21 @@ func TestStoppingTargetDrainsUntilReleased(t *testing.T) {
 	}
 }
 
-func TestMissingConsumerReceiptStopsAndExposesUncertainty(t *testing.T) {
-	s, r, _ := fixture(t)
-	op, err := s.Create(context.Background(), "owner", r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wire := s.operations[op.ID].op.Targets[0].WireID
-	attributes := pcommon.NewMap()
-	for key, value := range map[string]string{"capture.session.id": wire, "capture.point": "egress", "capture.pipeline": "traces", "capture.collector.pod": "pod", "capture.cluster": "cluster"} {
-		attributes.PutStr(key, value)
-	}
-	ctx, cancel := context.WithTimeout(metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+strings.Repeat("d", 64))), 20*time.Millisecond)
-	defer cancel()
-	if _, err := s.deliver(ctx, "traces", []pcommon.Map{attributes}, 1, []byte("x")); status.Code(err) != codes.Unavailable {
-		t.Fatal("uncertain receipt falsely accepted")
-	}
-	stored, err := s.Get(context.Background(), "owner", op.ID)
-	if err != nil || stored.State != "stopping" || stored.Reason != "receipt_uncertain" {
-		t.Fatal("loss not visible in execution metadata", stored.State, stored.Reason)
-	}
-}
-
 func TestPluginHTTPAuthorizesOwnerAndEpoch(t *testing.T) {
 	s, r, _ := fixture(t)
 	call := func(role, owner, epoch string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest("POST", pluginsdk.APIPath+"v1/captures", strings.NewReader("{}"))
 		req.Header.Set("Authorization", "Bearer "+s.config.serviceToken)
 		req.Header.Set(pluginsdk.CallerIDHeader, owner)
-		req.Header.Set(pluginsdk.CallerRoleHeader, role)
+		req.Header.Set(pluginsdk.CallerAccessHeader, role)
 		req.Header.Set(pluginsdk.InstanceHeader, s.instance)
 		req.Header.Set(pluginsdk.EpochHeader, epoch)
 		w := httptest.NewRecorder()
 		s.ServeHTTP(w, req)
 		return w
 	}
-	if call("reader", "owner", s.epoch).Code != 403 || call("admin", "owner", strings.Repeat("e", 32)).Code != 409 {
-		t.Fatal("role/epoch not enforced")
+	if call("read", "owner", s.epoch).Code != 403 || call("write", "owner", strings.Repeat("e", 32)).Code != pluginsdk.StatusMisdirected {
+		t.Fatal("access/epoch not enforced")
 	}
 	if _, err := s.Create(context.Background(), "owner", r); err != nil {
 		t.Fatal(err)
@@ -395,7 +481,7 @@ func TestPluginHTTPAuthorizesOwnerAndEpoch(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, pluginsdk.APIPath+"v1/captures", strings.NewReader(string(encoded[:len(encoded)-1])+`,"authorized_raw":true}`))
 	req.Header.Set("Authorization", "Bearer "+s.config.serviceToken)
 	req.Header.Set(pluginsdk.CallerIDHeader, "owner")
-	req.Header.Set(pluginsdk.CallerRoleHeader, "admin")
+	req.Header.Set(pluginsdk.CallerAccessHeader, "write")
 	req.Header.Set(pluginsdk.InstanceHeader, s.instance)
 	req.Header.Set(pluginsdk.EpochHeader, s.epoch)
 	w := httptest.NewRecorder()
@@ -405,58 +491,38 @@ func TestPluginHTTPAuthorizesOwnerAndEpoch(t *testing.T) {
 	}
 }
 
-func TestPluginHTTPRoleWrites(t *testing.T) {
+// Write and admin access may write; read and anything else may not.
+func TestPluginHTTPAccessWrites(t *testing.T) {
 	s, _, _ := fixture(t)
 	call := func(role string) int {
 		req := httptest.NewRequest("POST", pluginsdk.APIPath+"v1/captures", strings.NewReader("{}"))
 		req.Header.Set("Authorization", "Bearer "+s.config.serviceToken)
 		req.Header.Set(pluginsdk.CallerIDHeader, "owner")
-		req.Header.Set(pluginsdk.CallerRoleHeader, role)
+		req.Header.Set(pluginsdk.CallerAccessHeader, role)
 		req.Header.Set(pluginsdk.InstanceHeader, s.instance)
 		req.Header.Set(pluginsdk.EpochHeader, s.epoch)
 		w := httptest.NewRecorder()
 		s.ServeHTTP(w, req)
 		return w.Code
 	}
-	admin := call("admin")
-	if admin == 403 {
-		t.Fatal("admin write was refused")
+	write := call("write")
+	if write == 403 {
+		t.Fatal("write access was refused")
 	}
-	for role, refused := range map[string]bool{"admin": false, "operator": false, "reader": true, "agent": true, "": true} {
-		if got := call(role); (got == 403) != refused || !refused && got != admin {
-			t.Fatalf("role %q answered %d, admin answered %d", role, got, admin)
+	for level, refused := range map[string]bool{"admin": false, "write": false, "read": true, "operator": true, "reader": true, "": true} {
+		if got := call(level); (got == 403) != refused || !refused && got != write {
+			t.Fatalf("access %q answered %d, write answered %d", level, got, write)
 		}
-	}
-}
-
-func TestDeliveryCapacityWithdrawsCapture(t *testing.T) {
-	s, r, _ := fixture(t)
-	op, err := s.Create(context.Background(), "owner", r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	attributes := pcommon.NewMap()
-	for key, value := range map[string]string{"capture.session.id": s.operations[op.ID].op.Targets[0].WireID, "capture.point": "egress", "capture.pipeline": "traces", "capture.collector.pod": "pod", "capture.cluster": "cluster"} {
-		attributes.PutStr(key, value)
-	}
-	s.channels[r.ChannelID].bytes = 1 << 20
-	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+strings.Repeat("d", 64)))
-	if _, err := s.deliver(ctx, "traces", []pcommon.Map{attributes}, 1, []byte("x")); status.Code(err) != codes.ResourceExhausted {
-		t.Fatal("bounded channel falsely accepted data")
-	}
-	stored, err := s.Get(context.Background(), "owner", op.ID)
-	if err != nil || stored.State != "stopping" || stored.Reason != "delivery_capacity" {
-		t.Fatal("capacity withdrawal not visible", stored.State, stored.Reason)
 	}
 }
 
 func TestLateAuthorityContextCannotAdmit(t *testing.T) {
 	s, r, _ := fixture(t)
 	ctx := context.WithValue(context.Background(), authorityContextKey{}, pluginsdk.RandomID())
-	if _, err := s.Create(ctx, "owner", r); !errors.Is(err, ErrConflict) {
+	if _, err := s.Create(ctx, "owner", r); !errors.Is(err, ErrStaleAuthority) {
 		t.Fatal("stale host epoch admitted capture")
 	}
-	if _, err := s.NewChannel(ctx, "owner", time.Now().Add(time.Minute)); !errors.Is(err, ErrConflict) {
+	if _, err := s.NewChannel(ctx, "owner", time.Now().Add(time.Minute)); !errors.Is(err, ErrStaleAuthority) {
 		t.Fatal("stale host epoch opened a channel")
 	}
 	if len(s.operations) != 0 {
@@ -477,7 +543,7 @@ func TestCaptureRecordsActingForAndNamesBusyCollector(t *testing.T) {
 		}
 		req.Header.Set("Authorization", "Bearer "+s.config.serviceToken)
 		req.Header.Set(pluginsdk.CallerIDHeader, "owner")
-		req.Header.Set(pluginsdk.CallerRoleHeader, "admin")
+		req.Header.Set(pluginsdk.CallerAccessHeader, "write")
 		req.Header.Set(pluginsdk.InstanceHeader, s.instance)
 		req.Header.Set(pluginsdk.EpochHeader, s.epoch)
 		w := httptest.NewRecorder()
@@ -508,5 +574,171 @@ func TestCaptureRecordsActingForAndNamesBusyCollector(t *testing.T) {
 	}
 	if w.Code != 409 || json.Unmarshal(w.Body.Bytes(), &refusal) != nil || refusal.Error.Code != "collector_busy" {
 		t.Fatalf("busy collector = %d %s", w.Code, w.Body)
+	}
+}
+
+// A capture leaves starting once every target has started, also when one
+// target already ended before the last one reported active.
+func TestStartingLeavesWhenOneTargetEndsFirst(t *testing.T) {
+	s, request, p := fixture(t)
+	q := &peer{credential: p.credential, info: p.info, lastSeen: time.Now(), wake: make(chan struct{}, 1), done: make(chan struct{})}
+	q.info.ID = strings.Repeat("e", 64)
+	q.info.Identity.Pod = "pod-2"
+	s.peers[q.info.ID] = q
+	request.Targets = append(request.Targets, TargetRequest{q.info.ID, 1})
+	op, err := s.Create(context.Background(), "owner", request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire := func(peerID string) string {
+		for _, target := range s.operations[op.ID].op.Targets {
+			if target.PeerID == peerID {
+				return target.WireID
+			}
+		}
+		t.Fatal("no target for", peerID)
+		return ""
+	}
+	s.mu.Lock()
+	s.applyReportLocked(p, report{Statuses: []collectorStatus{{SessionID: wire(p.info.ID), State: "completed"}}})
+	state := s.operations[op.ID].op.State
+	s.mu.Unlock()
+	if state != "starting" {
+		t.Fatalf("state %q after one target ended, want starting", state)
+	}
+	s.mu.Lock()
+	s.applyReportLocked(q, report{Statuses: []collectorStatus{{SessionID: wire(q.info.ID), State: "active"}}})
+	state = s.operations[op.ID].op.State
+	s.mu.Unlock()
+	if state != "active" {
+		t.Fatalf("state %q after the last target started, want active", state)
+	}
+}
+
+// send builds p's desired state as its sender would, so the sessions in it
+// count as sent.
+func send(t *testing.T, s *Server, p *peer) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.desiredLocked(p); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A capture stopped before its session went into a desired state never ran,
+// so the stop ends it at once and frees the Collector.
+func TestStopBeforeSendReleasesTheCollector(t *testing.T) {
+	s, request, p := fixture(t)
+	op, err := s.Create(context.Background(), "owner", request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped, err := s.Stop(context.Background(), "owner", op.ID, op.Revision)
+	if err != nil || stopped.State != "stopped" || !stopped.Targets[0].Released {
+		t.Fatalf("stop before send: %+v %v", stopped, err)
+	}
+	s.mu.Lock()
+	_, held := s.operations[op.ID]
+	message, err := s.desiredLocked(p)
+	s.mu.Unlock()
+	if held || err != nil || len(message.GetSessions()) != 0 {
+		t.Fatal("stopped capture kept or sent", held, err)
+	}
+	s.saves.waitSettled()
+	request.ID = pluginsdk.RandomID()
+	if _, err := s.Create(context.Background(), "owner", request); err != nil {
+		t.Fatal("collector still reserved after a stop before send", err)
+	}
+}
+
+// Admin access lists and stops every owner's capture; write access sees and
+// stops only its own, and nobody but the owner reads a channel.
+func TestAdminListsAndStopsAnyCapture(t *testing.T) {
+	s, r, _ := fixture(t)
+	op, err := s.Create(context.Background(), "owner", r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(method, path, access, owner string, header http.Header) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, pluginsdk.APIPath+path, nil)
+		for k, v := range header {
+			req.Header[k] = v
+		}
+		req.Header.Set("Authorization", "Bearer "+s.config.serviceToken)
+		req.Header.Set(pluginsdk.CallerIDHeader, owner)
+		req.Header.Set(pluginsdk.CallerAccessHeader, access)
+		req.Header.Set(pluginsdk.InstanceHeader, s.instance)
+		req.Header.Set(pluginsdk.EpochHeader, s.epoch)
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, req)
+		return w
+	}
+	list := func(access, owner string) []RunningOperation {
+		w := call("GET", "v1/captures", access, owner, nil)
+		var page struct {
+			Items []RunningOperation `json:"items"`
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &page) != nil {
+			t.Fatalf("list as %s/%s = %d", access, owner, w.Code)
+		}
+		return page.Items
+	}
+	if got := list("write", "owner"); len(got) != 1 || got[0].ID != op.ID || got[0].Owner != "owner" {
+		t.Fatalf("owner list = %+v", got)
+	}
+	for _, access := range []string{"read", "write"} {
+		if got := list(access, "other"); len(got) != 0 {
+			t.Fatalf("%s access listed another owner's capture", access)
+		}
+	}
+	if got := list("admin", "admin"); len(got) != 1 || got[0].Owner != "owner" {
+		t.Fatalf("admin list = %+v", got)
+	}
+	if w := call("GET", "v1/captures/"+op.ID, "write", "other", nil); w.Code != 403 {
+		t.Fatalf("other owner read = %d", w.Code)
+	}
+	if w := call("GET", "v1/captures/"+op.ID, "admin", "admin", nil); w.Code != 200 {
+		t.Fatalf("admin read = %d", w.Code)
+	}
+	if w := call("GET", "v1/channels/"+r.ChannelID+"/next", "admin", "admin", nil); w.Code != 403 {
+		t.Fatalf("admin read a channel: %d", w.Code)
+	}
+	ifMatch := http.Header{"If-Match": {`"` + strconv.FormatInt(op.Revision, 10) + `"`}}
+	if w := call("POST", "v1/captures/"+op.ID+"/stop", "write", "other", ifMatch); w.Code != 403 {
+		t.Fatalf("other owner stop = %d", w.Code)
+	}
+	w := call("POST", "v1/captures/"+op.ID+"/stop", "admin", "admin", ifMatch)
+	var stopped Operation
+	if w.Code != 202 || json.Unmarshal(w.Body.Bytes(), &stopped) != nil || stopped.Reason != "requested_stop" {
+		t.Fatalf("admin stop = %d %s", w.Code, w.Body)
+	}
+}
+
+// One owner cannot take more than its share of operations and channels; the
+// share defaults to the plugin's limit.
+func TestSlotsPerOwner(t *testing.T) {
+	s, r, _ := fixture(t)
+	s.config.MaxChannelsPerOwner, s.config.MaxOperationsPerOwner = 2, 1
+	if _, err := s.NewChannel(context.Background(), "owner", time.Now().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.NewChannel(context.Background(), "owner", time.Now().Add(time.Minute)); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("third channel of one owner: %v", err)
+	}
+	if _, err := s.NewChannel(context.Background(), "other", time.Now().Add(time.Minute)); err != nil {
+		t.Fatalf("another owner was starved: %v", err)
+	}
+	s.operations["held"] = &activeOperation{op: Operation{ID: "held", Owner: "owner"}}
+	if _, err := s.Create(context.Background(), "owner", r); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("second operation of one owner: %v", err)
+	}
+	delete(s.operations, "held")
+	s.operations["held"] = &activeOperation{op: Operation{ID: "held", Owner: "other"}}
+	if _, err := s.Create(context.Background(), "owner", r); err != nil {
+		t.Fatalf("another owner's operation counted: %v", err)
+	}
+	if ownerLimit(0, maxOperations) != maxOperations || ownerLimit(3, maxOperations) != 3 {
+		t.Fatal("unset limit is not the plugin's")
 	}
 }

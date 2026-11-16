@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/lineahq/linea/internal/fleet/auth"
 	"github.com/lineahq/linea/internal/fleet/fleet"
 )
@@ -106,7 +107,9 @@ func (s *Store) PutGroup(ctx context.Context, actor string, g fleet.Group, expec
 			return err
 		}
 		var revision int64
-		err := tx.QueryRow(ctx, "SELECT revision FROM fleet.groups WHERE id=$1", g.ID).Scan(&revision)
+		// The row stays locked until commit, so a concurrent write to this
+		// group waits and then sees the revision this one stores.
+		err := tx.QueryRow(ctx, "SELECT revision FROM fleet.groups WHERE id=$1 FOR UPDATE", g.ID).Scan(&revision)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
@@ -114,18 +117,26 @@ func (s *Store) PutGroup(ctx context.Context, actor string, g fleet.Group, expec
 			return fleet.ErrPrecondition
 		}
 		if revision == 0 {
-			var count int
-			if err := tx.QueryRow(ctx, "SELECT count(*) FROM fleet.groups").Scan(&count); err != nil {
+			if err := capped(ctx, tx, "fleet.groups", 1000); err != nil {
 				return err
-			}
-			if count >= 1000 {
-				return fleet.ErrCapacity
 			}
 		}
 		g.Revision = revision + 1
-		if _, err := tx.Exec(ctx, `INSERT INTO fleet.groups(id,name,kind,selector,revision) VALUES($1,$2,$3,$4,$5)
-			ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name,kind=EXCLUDED.kind,selector=EXCLUDED.selector,revision=EXCLUDED.revision`, g.ID, g.Name, g.Kind, selector, g.Revision); err != nil {
+		// The write is conditional on the revision read above. A group
+		// created by a concurrent request after that read also refuses.
+		var written pgconn.CommandTag
+		if revision == 0 {
+			written, err = tx.Exec(ctx, `INSERT INTO fleet.groups(id,name,kind,selector,revision) VALUES($1,$2,$3,$4,$5)
+				ON CONFLICT(id) DO NOTHING`, g.ID, g.Name, g.Kind, selector, g.Revision)
+		} else {
+			written, err = tx.Exec(ctx, `UPDATE fleet.groups SET name=$2,kind=$3,selector=$4,revision=$5 WHERE id=$1 AND revision=$6`,
+				g.ID, g.Name, g.Kind, selector, g.Revision, revision)
+		}
+		if err != nil {
 			return err
+		}
+		if written.RowsAffected() != 1 {
+			return fleet.ErrPrecondition
 		}
 		if _, err := tx.Exec(ctx, "DELETE FROM fleet.group_members WHERE group_id=$1", g.ID); err != nil {
 			return err
@@ -153,7 +164,7 @@ func (s *Store) DeleteGroup(ctx context.Context, actor, id string, expected int6
 			return err
 		}
 		var revision int64
-		if err := tx.QueryRow(ctx, "SELECT revision FROM fleet.groups WHERE id=$1", id).Scan(&revision); err != nil {
+		if err := tx.QueryRow(ctx, "SELECT revision FROM fleet.groups WHERE id=$1 FOR UPDATE", id).Scan(&revision); err != nil {
 			return err
 		}
 		if revision != expected {

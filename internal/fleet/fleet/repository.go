@@ -133,9 +133,84 @@ type PluginLifecycle struct {
 	Revision int64  `json:"revision"`
 }
 
+// Plugin state timing, in database time. A probe refreshes the shared seen_at
+// only when it is older than PluginSeenRefresh, so the whole cluster writes
+// about once a second per plugin; a plugin is not ready, and an unanswered
+// probe may rotate its epoch, once it was unseen for PluginSeenWindow.
+const (
+	PluginSeenRefresh = 500 * time.Millisecond
+	PluginSeenWindow  = 3 * time.Second
+	// MaxPluginRows bounds fleet.plugin_lifecycle.
+	MaxPluginRows = 256
+)
+
+// PluginState is one plugin's shared row: the single source of its epoch.
+// Absence of a row means desired enabled at revision 0.
+type PluginState struct {
+	ID      string
+	Desired string
+	// Epoch is 32 hex characters and changes only through the transitions on
+	// PluginLifecycleRepository.
+	Epoch string
+	// InstanceID is the plugin process the epoch was issued to; empty until
+	// a probe has seen one.
+	InstanceID string
+	Revision   int64
+	// SeenAge is now() - seen_at computed by the store, never below zero when
+	// seen, and negative when the plugin was never seen under this epoch.
+	SeenAge time.Duration
+}
+
+// Seen reports whether any replica has seen the plugin under this epoch.
+func (s PluginState) Seen() bool { return s.SeenAge >= 0 }
+
+// Ready is the readiness rule: enabled, an instance known, seen within
+// PluginSeenWindow.
+func (s PluginState) Ready() bool {
+	return s.Desired == "enabled" && s.InstanceID != "" && s.Seen() && s.SeenAge < PluginSeenWindow
+}
+
+// ValidPluginLifecycle checks a lifecycle change before a store applies it.
+func ValidPluginLifecycle(item PluginLifecycle, expected int64) error {
+	switch {
+	case !pluginsdk.ValidID(item.ID) || expected < 0:
+		return ErrInvalid
+	case item.Desired != "enabled" && item.Desired != "draining" && item.Desired != "disabled":
+		return Invalid("desired must be enabled, draining or disabled")
+	}
+	return nil
+}
+
+// PluginLifecycleRepository keeps each plugin's shared state so that every
+// core replica sees one epoch. Every transition is conditional on the epoch
+// the caller last read; when it no longer matches, nothing changes and the
+// current state comes back for the caller to adopt. All timing is the store's
+// own clock (the database's, for PostgreSQL). A successful change sends the
+// plugin's ID on the fleet_plugin channel in the same transaction.
 type PluginLifecycleRepository interface {
+	// PluginLifecycles lists desired state and revision, including rows
+	// created by a probe (revision 0, enabled).
 	PluginLifecycles(context.Context) ([]PluginLifecycle, error)
+	// SetPluginLifecycle is T5: an admin changes desired state. It locks the
+	// row, requires expected to be its revision (0 when absent or created by
+	// a probe), increments the revision, rotates the epoch and clears the
+	// seen time. A stale revision is ErrPrecondition.
 	SetPluginLifecycle(context.Context, string, PluginLifecycle, int64) (PluginLifecycle, error)
+	// PluginStates lists every row.
+	PluginStates(context.Context) ([]PluginState, error)
+	// SeenPlugin is T1, T2 and the first insert, for a successful probe whose
+	// manifest matches. epoch is the caller's last read value. With the same
+	// instance it keeps the epoch and refreshes seen_at when older than
+	// PluginSeenRefresh. With another instance, or none yet, it records the
+	// instance, rotates the epoch and marks the plugin seen. A missing row is
+	// inserted enabled at revision 0, seen now.
+	SeenPlugin(ctx context.Context, id, epoch, instance string) (PluginState, error)
+	// FencePlugin is T3 and T4. With unseenOnly false (the plugin refused) it
+	// rotates the epoch and clears seen_at at once. With unseenOnly true (no
+	// answer) it does so only when the plugin was seen, but not within
+	// PluginSeenWindow; a plugin never seen under this epoch has nothing to
+	// fence. A missing row is ErrNotFound.
+	FencePlugin(ctx context.Context, id, epoch string, unseenOnly bool) (PluginState, error)
 }
 
 // The memory store remains a deliberately ephemeral development adapter.
@@ -262,4 +337,48 @@ func NormalizeGroup(g Group) (Group, error) {
 	slices.Sort(g.AgentIDs)
 	g.Kind, g.AgentIDs = GroupStatic, slices.Compact(g.AgentIDs)
 	return g, nil
+}
+
+// Audit retention: administrative records are kept by time, with a row cap
+// as a safety bound.
+const (
+	AuditRetentionDays = 400
+	MaxAuditRows       = 1_000_000
+	MaxAuditPage       = 500
+)
+
+// AuditQuery selects administrative records, newest first. Before is the
+// NextBefore of the previous page; Kind and Actor match exactly; Since and
+// Until bound occurred_at (Since inclusive, Until exclusive).
+type AuditQuery struct {
+	Before       int64
+	Kind, Actor  string
+	Since, Until time.Time
+	Limit        int
+}
+
+type AuditPage struct {
+	Items      []Event `json:"items"`
+	NextBefore string  `json:"next_before,omitempty"`
+}
+
+// AuditRepository reads the administrative record: changes to credentials,
+// groups, configs, assignments, rollouts and plugin lifecycle, written with
+// the change itself and never touched by agent activity.
+type AuditRepository interface {
+	Audit(context.Context, AuditQuery) (AuditPage, error)
+}
+
+// Audited reports whether an event kind is administrative. Holds the gateway
+// sets or clears for an agent are not; an operator clearing one is.
+func Audited(kind, actor string) bool {
+	if kind == "config.held" || kind == "config.hold_cleared" && actor == "server" {
+		return false
+	}
+	for _, prefix := range []string{"credential.", "group.", "config.", "rollout.", "plugin."} {
+		if strings.HasPrefix(kind, prefix) {
+			return true
+		}
+	}
+	return false
 }

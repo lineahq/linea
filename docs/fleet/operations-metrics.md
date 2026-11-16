@@ -36,7 +36,7 @@ All names start with `linea_fleet_`.
 | `agent_admission_refused_total` | Refused gateway admissions: connection ceiling, no handshake slot within 25 s, or writer backpressure |
 | `agent_admission_held_total` | Handshakes that waited for a slot |
 | `agent_handshakes_pending`, `agent_handshake_limit` | Handshakes between admission and first commit, and `--max-pending-sessions`. Pending at the limit during a storm means admission is the bound |
-| `tcp_connections`, `tcp_connection_limit`, `tcp_refused_total` | Agent and management TCP budgets, including incomplete handshakes |
+| `tcp_connections`, `tcp_unauthenticated_connections`, `tcp_connection_limit`, `tcp_refused_total` | Agent and management TCP connections: all open ones, those that hold a slot, the slots, and refusals. On the agent listener a connection frees its slot once it presents an agent credential; management connections hold theirs until they close |
 | `agent_credential_refused_total` | Connections refused because another credential holds the instance UID (see [identity](README.md#register-collectors-with-a-deployment-token)) |
 | `agent_takeovers_total`, `agents_reaped_total` | Sessions this replica took over from another connection, and agents the leader released from crashed replicas |
 | `replica_leader`, `replica_heartbeat_age_seconds` | 1 while this replica holds the leader lease, and the age of its last successful heartbeat |
@@ -109,9 +109,9 @@ object.
 
 | Family | Covers |
 | --- | --- |
-| Gauges | Peers, channels, current in-memory operations by state, host and storage readiness, draining state, pending bytes and batches, retained receipts, inflight deliveries, connections, storage waiters. Operation gauges are not historical database totals |
-| Counters | Admitted, refused and withdrawn captures; delivery errors and capacity; uncertain receipts; first and duplicate ACKs; accepted and rejected records by signal; TCP refusals; storage errors; peers closed because their fleet credential was revoked, expired or no longer allows their group (`peers_credential_closed_total`) |
-| Durations | Delivery (authentication, queueing and consumer receipt wait) and storage operations (excluding their separately measured gate wait) |
+| Gauges | Peers, channels, current in-memory operations by state, host and storage readiness, draining state, pending bytes and batches, connections, storage waiters. Operation gauges are not historical database totals |
+| Counters | Admitted, refused and withdrawn captures; delivery errors; ACKs; delivered and dropped records by signal and dropped batches; TCP refusals; storage errors; peers closed because their fleet credential was revoked, expired or no longer allows their group (`peers_credential_closed_total`); peer link attempts by outcome, one counter each (`peer_link_linked_total`, `peer_link_no_match_total`, `peer_link_ambiguous_total`, `peer_link_error_total`; a refresh of a linked peer counts too); transition log lines dropped because the log's queue was full (`log_lines_dropped_total`) |
+| Durations | Delivery (authentication and buffering) and storage operations (excluding their separately measured gate wait) |
 | Snapshot freshness | `metadata_snapshot_available`, `metadata_snapshot_stale`, `metadata_snapshot_age_seconds` |
 
 - Identical ACK retries do not count accepted records twice.
@@ -143,6 +143,8 @@ object.
 
 ## Related
 
+- [Transition log](deployment.md#transition-log): one line per state change
+  with its reason, for what the counters cannot say.
 - [Capacity harness](../../tools/fleet-capacity/README.md): execution modes,
   resource budgets, output interpretation and the dedicated-host profiles.
 - [OpAMP simulator](../../tools/fleet-capacity/simulator.md): exercises

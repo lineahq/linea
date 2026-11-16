@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/tap"
 )
 
 // fakeHost serves the fleet host services the plugin uses.
@@ -140,7 +141,7 @@ func TestAuthenticateIntrospectsAndCaches(t *testing.T) {
 	}}
 	withHost(t, s, h)
 	for range 2 {
-		c, err := s.authenticate(bearer(allowed))
+		c, err := s.authenticate(bearer(allowed), false)
 		if err != nil || c.id != "allowed" || !c.allows("test") {
 			t.Fatal("labeled agent credential rejected", err)
 		}
@@ -148,21 +149,102 @@ func TestAuthenticateIntrospectsAndCaches(t *testing.T) {
 	if h.introspects != 1 {
 		t.Fatalf("introspected %d times, want cached", h.introspects)
 	}
-	if _, err := s.authenticate(bearer(unlabeled)); status.Code(err) != codes.Unauthenticated {
+	if _, err := s.authenticate(bearer(unlabeled), false); status.Code(err) != codes.Unauthenticated {
 		t.Fatal("credential without capture label admitted", err)
 	}
-	if _, err := s.authenticate(context.Background()); status.Code(err) != codes.Unauthenticated {
+	if _, err := s.authenticate(context.Background(), false); status.Code(err) != codes.Unauthenticated {
 		t.Fatal("missing credential admitted", err)
 	}
 	s.host.Endpoint = "http://127.0.0.1:1"
-	if _, err := s.authenticate(bearer(strings.Repeat("3", 64))); status.Code(err) != codes.Unavailable {
+	if _, err := s.authenticate(bearer(strings.Repeat("3", 64)), false); status.Code(err) != codes.Unavailable {
 		t.Fatal("unreachable host did not fail closed", err)
 	}
 	s.mu.Lock()
 	s.hostOK = false
 	s.mu.Unlock()
-	if _, err := s.authenticate(bearer(allowed)); status.Code(err) != codes.Unavailable {
+	if _, err := s.authenticate(bearer(allowed), false); status.Code(err) != codes.Unavailable {
 		t.Fatal("cached credential admitted without host authority", err)
+	}
+}
+
+// TestControlStreamIgnoresCachedAdmission: a credential revoked after it was
+// cached still passes a delivery request until the cache expires, but a new
+// control stream asks the host again and is refused.
+func TestControlStreamIgnoresCachedAdmission(t *testing.T) {
+	s, _, _ := fixture(t)
+	token := strings.Repeat("4", 64)
+	revoked := false
+	h := &fakeHost{introspect: func(pluginsdk.IntrospectRequest) pluginsdk.Introspection {
+		return pluginsdk.Introspection{Active: !revoked, CredentialID: "agent", Role: "agent", Labels: map[string]string{"capture": "*"}}
+	}}
+	withHost(t, s, h)
+	if _, err := s.authenticate(bearer(token), true); err != nil {
+		t.Fatal(err)
+	}
+	revoked = true
+	if _, err := s.authenticate(bearer(token), false); err != nil {
+		t.Fatalf("cached delivery admission: %v", err)
+	}
+	if _, err := s.authenticate(bearer(token), true); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("control stream after revocation: %v, want Unauthenticated", err)
+	}
+	if h.introspects != 2 {
+		t.Fatalf("introspected %d times, want once per control stream", h.introspects)
+	}
+	if _, err := s.authenticate(bearer(token), false); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("delivery after the fresh refusal: %v", err)
+	}
+}
+
+func TestPreauthenticateRefusesBeforeDecoding(t *testing.T) {
+	s, _, _ := fixture(t)
+	allowed, unlabeled := strings.Repeat("1", 64), strings.Repeat("2", 64)
+	h := &fakeHost{introspect: func(in pluginsdk.IntrospectRequest) pluginsdk.Introspection {
+		sum := sha256.Sum256([]byte(allowed))
+		if in.TokenSHA256 == hex.EncodeToString(sum[:]) {
+			return pluginsdk.Introspection{Active: true, CredentialID: "allowed", Role: "agent", Labels: map[string]string{"capture": "test"}}
+		}
+		return pluginsdk.Introspection{Active: true, CredentialID: "unlabeled", Role: "agent"}
+	}}
+	withHost(t, s, h)
+	info := func(values ...string) *tap.Info {
+		md := metadata.MD{}
+		for _, v := range values {
+			md.Append("authorization", v)
+		}
+		return &tap.Info{FullMethodName: "/opentelemetry.proto.collector.trace.v1.TraceService/Export", Header: md}
+	}
+	tapCode := func(i *tap.Info) codes.Code {
+		_, err := s.preauthenticate(context.Background(), i)
+		return status.Code(err)
+	}
+	for name, i := range map[string]*tap.Info{"missing": info(), "not bearer": info("Basic x"), "two": info("Bearer a", "Bearer b"), "long": info("Bearer " + strings.Repeat("x", 1024))} {
+		if code := tapCode(i); code != codes.Unauthenticated {
+			t.Fatalf("%s credential: %v, want Unauthenticated", name, code)
+		}
+	}
+	// A miss is left to deliver: the tap holds the transport lock and never
+	// introspects.
+	if code := tapCode(info("Bearer " + unlabeled)); code != codes.OK || h.introspects != 0 {
+		t.Fatalf("cache miss: %v after %d introspections, want passed on without one", code, h.introspects)
+	}
+	if _, err := s.authenticate(bearer(unlabeled), false); status.Code(err) != codes.Unauthenticated {
+		t.Fatal("credential without capture label admitted", err)
+	}
+	if _, err := s.authenticate(bearer(allowed), false); err != nil {
+		t.Fatal(err)
+	}
+	if code := tapCode(info("Bearer " + unlabeled)); code != codes.Unauthenticated {
+		t.Fatalf("cached refusal: %v, want Unauthenticated before decoding", code)
+	}
+	if code := tapCode(info("Bearer " + allowed)); code != codes.OK {
+		t.Fatalf("cached admission: %v", code)
+	}
+	s.mu.Lock()
+	s.hostOK = false
+	s.mu.Unlock()
+	if code := tapCode(info("Bearer " + allowed)); code != codes.Unavailable {
+		t.Fatalf("not ready: %v, want Unavailable", code)
 	}
 }
 
@@ -224,6 +306,10 @@ func TestLinkPeersRequiresUniqueMatch(t *testing.T) {
 		t.Fatalf("resolve request %+v", first)
 	}
 
+	if p.info.Link.State != linkLinked {
+		t.Fatalf("link state %q", p.info.Link.State)
+	}
+
 	// A linked peer is not re-resolved until its refresh is due.
 	requests = nil
 	s.linkPeers(s.session)
@@ -233,17 +319,24 @@ func TestLinkPeersRequiresUniqueMatch(t *testing.T) {
 
 	matches["k8s"] = nil
 	matches["host"] = []string{agent}
-	p.linkedAt, p.info.AgentID = time.Time{}, ""
+	p.linkNext, p.info.AgentID = time.Time{}, ""
 	s.linkPeers(s.session)
 	if p.info.AgentID != agent || len(requests) != 2 {
 		t.Fatal("host.name fallback was not linked")
 	}
 
 	matches["k8s"] = []string{agent, pluginsdk.RandomID()}
-	p.linkedAt = time.Time{}
+	p.linkNext = time.Time{}
 	s.linkPeers(s.session)
-	if p.info.AgentID != "" {
-		t.Fatal("ambiguous match was linked")
+	if p.info.AgentID != "" || p.info.Link.State != linkAmbiguous {
+		t.Fatalf("ambiguous match gave agent %q, state %q", p.info.AgentID, p.info.Link.State)
+	}
+
+	matches["k8s"], matches["host"] = nil, nil
+	p.linkNext = time.Time{}
+	s.linkPeers(s.session)
+	if p.info.AgentID != "" || p.info.Link.State != linkNoMatch {
+		t.Fatalf("no match gave agent %q, state %q", p.info.AgentID, p.info.Link.State)
 	}
 }
 
@@ -289,12 +382,10 @@ func TestFleetTargeting(t *testing.T) {
 	if seen.GroupID != group || seen.Connected == nil || !*seen.Connected {
 		t.Fatalf("group resolve request %+v", seen)
 	}
-	if _, err := s.Stop(context.Background(), "owner", op.ID, op.Revision); err != nil {
-		t.Fatal(err)
+	// Never sent, so the stop frees the peer at once.
+	if stopped, err := s.Stop(context.Background(), "owner", op.ID, op.Revision); err != nil || stopped.State != "stopped" {
+		t.Fatal(stopped.State, err)
 	}
-	s.mu.Lock()
-	s.applyReportLocked(p, report{Statuses: []collectorStatus{{SessionID: s.operations[op.ID].op.Targets[0].WireID, State: "completed"}}})
-	s.mu.Unlock()
 
 	op, err = s.Create(context.Background(), "owner", request(func(c *CreateRequest) { c.Agents = []string{agent} }))
 	if err != nil || len(op.Targets) != 1 || op.Targets[0].AgentID != agent {
@@ -395,5 +486,71 @@ func TestValidateCreateNamesTheRule(t *testing.T) {
 		if err := validateCreate(c); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), want) {
 			t.Fatalf("want %q, got %v", want, err)
 		}
+	}
+}
+
+// TestRevalidateRechecksEveryPeriod drives the revalidation loop's rounds with
+// an injected clock: rounds from link wakeups and timers that fire early never
+// skip a recheck or move the next one.
+func TestRevalidateRechecksEveryPeriod(t *testing.T) {
+	const every = 10 * time.Second
+	s, _, _ := fixture(t)
+	h := &fakeHost{
+		introspect: func(pluginsdk.IntrospectRequest) pluginsdk.Introspection {
+			return pluginsdk.Introspection{Active: true, CredentialID: "credential", Role: "agent", Labels: map[string]string{"capture": "test"}}
+		},
+		resolve: func(pluginsdk.ResolveRequest) pluginsdk.ResolveResponse {
+			return pluginsdk.ResolveResponse{AgentIDs: []string{pluginsdk.RandomID()}}
+		},
+	}
+	withHost(t, s, h)
+	clock := time.Unix(1_700_000_000, 0)
+	s.now = func() time.Time { return clock }
+	schedule := newRecheckSchedule(clock, every)
+	rechecks := func() int {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return h.introspects
+	}
+	type round struct {
+		name     string
+		at       time.Duration
+		rechecks int // total after the round
+		wait     time.Duration
+	}
+	rounds := []round{
+		{"link wakeup before the first period", 3 * time.Second, 0, 7 * time.Second},
+		{"timer a moment early", every - 50*time.Millisecond, 0, 50 * time.Millisecond},
+		{"timer on time", every, 1, every},
+		{"link wakeup just before the next period", 2*every - time.Second, 1, time.Second},
+		{"timer on time again", 2 * every, 2, every},
+		{"late timer", 3*every + 4*time.Second, 3, every},
+		{"timer after a late one keeps the period", 4*every + 4*time.Second, 4, every},
+	}
+	for _, r := range rounds {
+		clock = time.Unix(1_700_000_000, 0).Add(r.at)
+		wait := s.revalidatePass(schedule)
+		if got := rechecks(); got != r.rechecks || wait != r.wait {
+			t.Fatalf("%s: rechecks=%d wait=%v, want %d and %v", r.name, got, wait, r.rechecks, r.wait)
+		}
+	}
+
+	// A host that is not ready skips the recheck and the loop retries soon
+	// instead of spinning on a deadline that stays due.
+	s.mu.Lock()
+	s.hostOK = false
+	s.mu.Unlock()
+	clock = clock.Add(every)
+	if wait := s.revalidatePass(schedule); wait != revalidateRetry || rechecks() != 4 {
+		t.Fatalf("host not ready: wait=%v rechecks=%d", wait, rechecks())
+	}
+	s.mu.Lock()
+	s.hostOK = true
+	s.mu.Unlock()
+	// The peer linked in the first round is due for its refresh before the next
+	// recheck, and the loop wakes for whichever comes first.
+	refresh := time.Unix(1_700_000_000, 0).Add(3*time.Second + linkedRefresh).Sub(clock)
+	if wait := s.revalidatePass(schedule); wait != min(every, refresh) || rechecks() != 5 {
+		t.Fatalf("host back: wait=%v rechecks=%d, want %v", wait, rechecks(), min(every, refresh))
 	}
 }

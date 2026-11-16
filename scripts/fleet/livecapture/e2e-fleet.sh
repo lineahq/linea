@@ -58,14 +58,14 @@ printf '%s' "postgres://capture_app:$(cat "$p/runtime_password")@capture-postgre
 openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=localhost -keyout "$p/tls_key.pem" -out "$p/tls_cert.pem" \
   -addext "subjectAltName=DNS:localhost,DNS:livecapture-plugin,IP:127.0.0.1" -addext "basicConstraints=critical,CA:TRUE" >/dev/null 2>&1 || fail "tls"
 cat > "$p/config.json" <<'EOF'
-{"id":"livecapture","version":"0.4.0","host_endpoint":"http://fleet:8081","allow_insecure_host":true,
+{"id":"livecapture","version":"0.5.0","host_endpoint":"http://fleet:8081","allow_insecure_host":true,
  "host_token_file":"/run/secrets/capture_host_token","service_token_file":"/run/secrets/capture_service_token",
  "http_listen":"0.0.0.0:8090","control_listen":"0.0.0.0:4340","delivery_listen":"0.0.0.0:4341",
- "tls_cert_file":"/run/secrets/capture_tls_cert","tls_key_file":"/run/secrets/capture_tls_key","test_insecure":false,
+ "tls_cert_file":"/run/secrets/capture_tls_cert","tls_key_file":"/run/secrets/capture_tls_key",
  "capture_label":"capture","raw_principals":[],"max_peers":256,"metrics_token_file":"/run/secrets/capture_metrics_token"}
 EOF
 chmod 444 "$p"/*
-printf "FLEET_SECRET_DIR='%s/fleet'\nFLEET_LIVECAPTURE_SECRET_DIR='%s/plugin'\nFLEET_SERVER_ID=e2e-%s\nFLEET_API_PORT=0\nFLEET_AGENT_PORT=0\nCAPTURE_CONTROL_PORT=0\nCAPTURE_DELIVERY_PORT=0\nFLEET_VERSION=m4-e2e\nCAPTURE_VERSION=m4-e2e\n" "$runw" "$runw" "$id" > "$run/compose.env"
+printf "FLEET_SECRET_DIR='%s/fleet'\nFLEET_LIVECAPTURE_SECRET_DIR='%s/plugin'\nFLEET_SERVER_ID=e2e-%s\nFLEET_API_PORT=0\nFLEET_AGENT_PORT=0\nCAPTURE_CONTROL_PORT=0\nCAPTURE_DELIVERY_PORT=0\nFLEET_VERSION=m4-e2e\nCAPTURE_VERSION=m4-e2e\nFLEET_BOOTSTRAP_PLUGIN_ACCESS=livecapture=admin\n" "$runw" "$runw" "$id" > "$run/compose.env"
 
 if [ "${SKIP_BUILD:-}" != 1 ]; then
   compose build fleet >"$run/build.log" 2>&1 || fail "fleet build"
@@ -87,13 +87,17 @@ compose up --detach --wait livecapture-plugin >"$run/plugin-up.log" 2>&1 || { ca
 wait_for 20 "plugin not ready" sh -c "curl -s -H 'Authorization: Bearer $admin' $base/api/v1/plugins/livecapture | grep -q '\"state\":\"ready\"'"
 status=$(req GET /api/v1/plugins/livecapture/status "$admin")
 echo "$status" | json "d['data']['host_permissions']" | grep -q True || fail "plugin lacks host permissions: $status"
-pass "plugin 0.4.0 ready with agents.read and credentials.introspect"
+pass "plugin 0.5.0 ready with agents.read and credentials.introspect"
 
 expires=$("$python" -c "import datetime;print((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(days=1)).isoformat())")
 unlabeled_id=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
 labeled_id=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
-req POST /api/v1/credentials "$admin" "{\"id\":\"$unlabeled_id\",\"name\":\"e2e unlabeled\",\"role\":\"agent\",\"expires_at\":\"$expires\"}" 201 | json "d['token']" > "$run/unlabeled_token"
-req POST /api/v1/credentials "$admin" "{\"id\":\"$labeled_id\",\"name\":\"e2e collectors\",\"role\":\"agent\",\"expires_at\":\"$expires\",\"labels\":{\"capture\":\"s4\"}}" 201 | json "d['token']" > "$run/agent_token"
+req POST /api/v1/credentials "$admin" "{\"id\":\"$unlabeled_id\",\"name\":\"e2e unlabeled\",\"role\":\"agent\",\"expires_at\":\"$expires\"}" 201 | json "d['plugin_token']" > "$run/unlabeled_token"
+req POST /api/v1/credentials "$admin" "{\"id\":\"$labeled_id\",\"name\":\"e2e collectors\",\"role\":\"agent\",\"expires_at\":\"$expires\",\"labels\":{\"capture\":\"s4\"}}" 201 > "$run/labeled.json"
+# The agent token is for OpAMP, the plugin token for the capture extension.
+json "d['token']" < "$run/labeled.json" > "$run/agent_token"
+json "d['plugin_token']" < "$run/labeled.json" > "$run/plugin_token"
+rm -f "$run/labeled.json"
 group=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
 code=$(curl -s -o "$run/resp" -w '%{http_code}' -X PUT -H "Authorization: Bearer $admin" -H 'If-Match: "0"' -H 'Content-Type: application/json' \
   --data '{"name":"e2e cluster","selector":"k8s.cluster.name=s4"}' "$base/api/v1/groups/$group")
@@ -141,14 +145,18 @@ children+=("$c")
 start_capture() { # name pod tokenfile
   docker run --detach --init --name "$project-$1" --network "${project}_capture-ingress" --network-alias "$2" --cpus 1 --memory 512m --pids-limit 128 --read-only --cap-drop ALL --security-opt no-new-privileges \
     --mount "type=bind,source=$root/examples/fleet-livecapture/collector.yaml,target=/fixture.yaml,readonly" --mount "type=bind,source=$runw/plugin/tls_cert.pem,target=/certs/ca.pem,readonly" \
-    --env "LINEA_FLEET_AGENT_TOKEN=$(cat "$3")" --env "POD_NAME=$2" -e GOMAXPROCS=1 "$collector_image" --config /fixture.yaml >/dev/null || fail "capture collector $1"
+    --env "LINEA_FLEET_PLUGIN_TOKEN=$(cat "$3")" --env "POD_NAME=$2" -e GOMAXPROCS=1 "$collector_image" --config /fixture.yaml >/dev/null || fail "capture collector $1"
   children+=("$project-$1")
 }
-start_capture capture-a collector-a "$run/agent_token"
+start_capture capture-a collector-a "$run/plugin_token"
 peer_count() { api GET v1/peers | json "len(d['items'])"; }
 linked() { api GET v1/peers | json "[p.get('agent_id','') for p in d['items']]" | grep -q "'[0-9a-f]\{32\}'"; }
 wait_for 40 "capture peer did not register" sh -c "[ \"\$(curl -s -H 'Authorization: Bearer $admin' $base/api/v1/plugins/livecapture/api/v1/peers | \"$python\" -c 'import json,sys;print(len(json.load(sys.stdin)[\"items\"]))')\" = 1 ]"
-pass "unchanged extension authenticated with a labeled fleet agent credential"
+pass "unchanged extension authenticated with a labeled fleet agent credential's plugin token"
+docker run --rm --network "${project}_capture-ingress" --cpus 1 --memory 128m --read-only --cap-drop ALL \
+  --mount "type=bind,source=$runw/plugin/tls_cert.pem,target=/certs/ca.pem,readonly" --mount "type=bind,source=$runw/agent_token,target=/fixture_token,readonly" \
+  linea-fleet-livecapture-fixture:m4-e2e --endpoint livecapture-plugin:4341 --tls-ca /certs/ca.pem --token-file /fixture_token --expect-code Unauthenticated >/dev/null || fail "agent token accepted for delivery"
+pass "the OpAMP agent token is refused by the plugin"
 agents=$(req GET "/api/v1/agents?connected=true" "$admin")
 agent=$(echo "$agents" | json "[a['id'] for a in d['items'] if a.get('attributes',{}).get('k8s.pod.name')=='collector-a'][0]") || fail "OpAMP agent missing: $agents"
 wait_for 30 "peer was not linked to the fleet agent" linked

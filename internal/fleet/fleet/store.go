@@ -163,13 +163,16 @@ type Store struct {
 	mu     sync.RWMutex
 	agents map[string]*record
 	max    int
+	// plugins is the plugin state of pluginstate.go; clock times it.
+	plugins map[string]*pluginRow
+	clock   func() time.Time
 }
 
 func NewStore(maxAgents int) *Store {
 	if maxAgents < 1 {
 		panic("maxAgents must be positive")
 	}
-	return &Store{agents: make(map[string]*record), max: maxAgents}
+	return &Store{agents: make(map[string]*record), max: maxAgents, plugins: make(map[string]*pluginRow), clock: time.Now}
 }
 
 func ValidID(id string) bool {

@@ -139,6 +139,11 @@ func NormalizeAssignment(a Assignment, validLabels func(map[string]string) bool)
 		return a, fleet.Invalid("an assignment has either a group_id or a selector")
 	case a.GroupID != "" && !fleet.ValidID(a.GroupID):
 		return a, fleet.Invalid("group_id " + fleet.IDRule)
+	case len(a.CredentialLabels) == 0:
+		// Attributes are self-reported: only credential labels, which an
+		// admin sets, keep a config body from any opted-in credential that
+		// claims the right attributes.
+		return a, fleet.Invalid("credential_labels must name at least one label")
 	case !validLabels(a.CredentialLabels):
 		return a, fleet.Invalid("credential_labels are invalid")
 	}
@@ -151,9 +156,6 @@ func NormalizeAssignment(a Assignment, validLabels func(map[string]string) bool)
 			return a, fleet.Invalid("selector must have a term")
 		}
 		a.Selector = s.String()
-	}
-	if len(a.CredentialLabels) == 0 {
-		a.CredentialLabels = nil
 	}
 	return a, nil
 }
@@ -204,8 +206,12 @@ func NewTarget(a Assignment, digest []byte, groupSelector string, members []stri
 }
 
 // Matches reports whether an agent with these attributes and credential
-// labels is targeted. Required labels must all be present with equal values.
+// labels is targeted. Required labels must all be present with equal values;
+// an assignment stored without labels targets nobody.
 func (t Target) Matches(agentID string, attributes, labels map[string]string) bool {
+	if len(t.CredentialLabels) == 0 {
+		return false
+	}
 	for k, v := range t.CredentialLabels {
 		if got, ok := labels[k]; !ok || got != v {
 			return false

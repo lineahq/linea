@@ -18,7 +18,11 @@ func GrantRuntime(ctx context.Context, url, role string) error {
 		statements := []string{
 			"GRANT USAGE ON SCHEMA fleet TO " + quoted,
 			"GRANT SELECT ON fleet.schema_version TO " + quoted,
-			"GRANT SELECT,INSERT,UPDATE ON fleet.metadata,fleet.credentials,fleet.groups TO " + quoted,
+			"GRANT SELECT,INSERT,UPDATE ON fleet.metadata TO " + quoted,
+			// Revoked credentials are deleted after their retention.
+			"GRANT SELECT,INSERT,UPDATE,DELETE ON fleet.credentials TO " + quoted,
+			// Groups are deleted through the management API.
+			"GRANT SELECT,INSERT,UPDATE,DELETE ON fleet.groups TO " + quoted,
 			// Agents are deleted by retention and capacity eviction.
 			"GRANT SELECT,INSERT,UPDATE,DELETE ON fleet.agents TO " + quoted,
 			"GRANT SELECT,INSERT,UPDATE ON fleet.plugin_lifecycle TO " + quoted,
@@ -27,6 +31,9 @@ func GrantRuntime(ctx context.Context, url, role string) error {
 			"GRANT SELECT,INSERT,UPDATE,DELETE ON fleet.events TO " + quoted,
 			"GRANT SELECT,INSERT,UPDATE,DELETE ON fleet.replicas,fleet.leases TO " + quoted,
 			"GRANT USAGE,SELECT ON SEQUENCE fleet.events_id_seq TO " + quoted,
+			// The audit record is appended to and deleted only by retention.
+			"GRANT SELECT,INSERT,DELETE ON fleet.audit TO " + quoted,
+			"GRANT USAGE,SELECT ON SEQUENCE fleet.audit_id_seq TO " + quoted,
 			"GRANT SELECT,INSERT,UPDATE,DELETE ON fleet.configs,fleet.config_versions,fleet.config_assignments TO " + quoted,
 			"GRANT SELECT,INSERT,UPDATE,DELETE ON fleet.rollouts,fleet.rollout_targets TO " + quoted,
 			// Component sets are inserted once per build and pruned by retention.

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lineahq/linea/internal/fleetplugins/livecapture/translog"
 	"github.com/lineahq/linea/pluginsdk"
 )
 
@@ -44,6 +45,8 @@ func fail(w http.ResponseWriter, err error) {
 		code = 403
 	case errors.Is(err, ErrNotFound):
 		code = 404
+	case errors.Is(err, ErrStaleAuthority):
+		code = pluginsdk.StatusMisdirected
 	case errors.Is(err, ErrConflict):
 		code = 409
 	case errors.Is(err, ErrPrecondition):
@@ -53,9 +56,9 @@ func fail(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrCursorExpired):
 		code = 410
 	}
-	if code == 429 {
-		w.Header().Set("Retry-After", "1")
-	}
+	// No Retry-After: no 429 here clears on a schedule the plugin can promise
+	// (a full store clears by purge, slots by captures ending), and fleet
+	// forwards only its own "Retry-After: 1".
 	reason := "capture_request_refused"
 	if errors.Is(err, ErrPeerBusy) {
 		reason = "collector_busy"
@@ -92,6 +95,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if r.URL.Path == "/metrics" {
 		if s.config.metricsToken == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+s.config.metricsToken)) != 1 {
+			s.authFailures.Record(translog.ListenerHTTP)
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			writeJSON(w, 401, map[string]string{"error": "metrics credential required"})
 			return
@@ -105,6 +109,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+s.config.serviceToken)) != 1 {
+		s.authFailures.Record(translog.ListenerHTTP)
 		writeJSON(w, 401, map[string]string{"error": "service credential required"})
 		return
 	}
@@ -112,12 +117,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(w, ErrInvalid)
 		return
 	}
-	// Metadata metrics intentionally remain nonblocking and payload-free. Every
-	// other service request verifies the pinned session before using memory state.
-	if r.URL.Path != pluginsdk.APIPath+"v1/metrics" && s.repo.Ready(r.Context()) != nil {
-		fail(w, ErrUnavailable)
-		return
-	}
+	// Database liveness is the flag maintain keeps (dbOK, read below); a request
+	// never pings, so a busy connection queue cannot make it look dead.
 	if r.Method == "GET" && r.URL.Path == pluginsdk.ManifestPath {
 		s.mu.Lock()
 		ready := s.dbOK && !s.draining
@@ -141,8 +142,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]string{"status": "ready"})
 		return
 	}
-	caller, roles := r.Header.Values(pluginsdk.CallerIDHeader), r.Header.Values(pluginsdk.CallerRoleHeader)
-	if len(caller) != 1 || len(roles) != 1 || !safeName(caller[0]) || (roles[0] != "admin" && roles[0] != "operator" && roles[0] != "reader") {
+	owner, access, ok := pluginsdk.Caller(r.Header)
+	if !ok || !safeName(owner) {
 		fail(w, ErrForbidden)
 		return
 	}
@@ -161,8 +162,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(w, ErrNotFound)
 		return
 	}
-	if r.Header.Get(pluginsdk.InstanceHeader) != s.instance || r.Header.Get(pluginsdk.EpochHeader) != epoch {
-		fail(w, ErrConflict)
+	if !pluginsdk.AuthorityMatches(r.Header, s.instance, epoch) {
+		fail(w, ErrStaleAuthority)
 		return
 	}
 	r = r.WithContext(context.WithValue(r.Context(), authorityContextKey{}, epoch))
@@ -190,11 +191,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, page)
 		return
 	}
-	if r.Method != "GET" && roles[0] != "admin" && roles[0] != "operator" {
+	// read lists peers and schemas; write opens channels and runs captures;
+	// admin also lists and stops every owner's captures, without reading them.
+	admin := access == pluginsdk.AccessAdmin
+	if r.Method != "GET" && access == pluginsdk.AccessRead {
 		fail(w, ErrForbidden)
 		return
 	}
-	owner := caller[0]
 	if path == "v1/channels" && r.Method == "POST" {
 		var request struct {
 			ExpiresAt time.Time `json:"expires_at"`
@@ -208,6 +211,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, 201, result)
+		return
+	}
+	if path == "v1/captures" && r.Method == "GET" {
+		writeJSON(w, 200, map[string]any{"items": s.Running(owner, admin)})
 		return
 	}
 	if path == "v1/captures" && r.Method == "POST" {
@@ -272,7 +279,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if len(parts) >= 3 && parts[1] == "captures" && pluginsdk.ValidUID(parts[2]) {
 		id := parts[2]
 		if len(parts) == 3 && r.Method == "GET" {
-			op, err := s.Get(r.Context(), owner, id)
+			op, err := s.get(r.Context(), owner, admin, id)
 			if err != nil {
 				fail(w, err)
 				return
@@ -286,7 +293,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			op, err := s.Stop(r.Context(), owner, id, rev)
+			op, err := s.stop(r.Context(), owner, admin, id, rev)
 			if err != nil {
 				fail(w, err)
 				return

@@ -16,6 +16,9 @@ import (
 	"github.com/lineahq/linea/pluginsdk"
 )
 
+// maxPeerIdentities caps the durable peer identities (capture.peers rows).
+const maxPeerIdentities = 10000
+
 //go:embed migrations/001_initial.sql
 var schema string
 
@@ -25,8 +28,11 @@ var coreCredentials string
 //go:embed migrations/003_acting_for.sql
 var actingFor string
 
+//go:embed migrations/004_peer_retention.sql
+var peerRetentionMigration string
+
 // migrations are applied in order; version N is migrations[N-1].
-var migrations = []string{schema, coreCredentials, actingFor}
+var migrations = []string{schema, coreCredentials, actingFor, peerRetentionMigration}
 
 func checksum(migration string) string {
 	sum := sha256.Sum256([]byte(migration))
@@ -47,7 +53,9 @@ type Store struct {
 
 func (s *Store) AuthorityID() string { return s.authority }
 
-func connect(ctx context.Context, url string) (*Store, error) {
+// dial opens a session with the plugin's timeouts and without the authority
+// lock. Only the online purge uses it on its own.
+func dial(ctx context.Context, url string) (*pgx.Conn, error) {
 	cfg, err := pgx.ParseConfig(url)
 	if err != nil {
 		return nil, ErrUnavailable
@@ -65,6 +73,13 @@ func connect(ctx context.Context, url string) (*Store, error) {
 	conn, err := pgx.ConnectConfig(ctx, cfg)
 	if err != nil {
 		return nil, ErrUnavailable
+	}
+	return conn, nil
+}
+func connect(ctx context.Context, url string) (*Store, error) {
+	conn, err := dial(ctx, url)
+	if err != nil {
+		return nil, err
 	}
 	var locked bool
 	if err = conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", ownerLock).Scan(&locked); err != nil || !locked {
@@ -87,6 +102,22 @@ func (s *Store) Close() {
 	_ = s.conn.Close(ctx)
 }
 func (s *Store) storageObservations() *storageMetrics { return &s.observed }
+
+// enter waits for the connection until ctx ends and returns its release.
+func (s *Store) enter(ctx context.Context) (func(), error) {
+	waiting := time.Now()
+	s.observed.waiters.Add(1)
+	select {
+	case s.gate <- struct{}{}:
+		s.observed.waiters.Add(-1)
+		s.observed.wait.Observe(time.Since(waiting))
+		return func() { <-s.gate }, nil
+	case <-ctx.Done():
+		s.observed.waiters.Add(-1)
+		s.observed.wait.Observe(time.Since(waiting))
+		return nil, ErrUnavailable
+	}
+}
 func (s *Store) access(ctx context.Context, fn func(context.Context) error) (result error) {
 	defer func() {
 		if result != nil {
@@ -95,18 +126,11 @@ func (s *Store) access(ctx context.Context, fn func(context.Context) error) (res
 	}()
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	waiting := time.Now()
-	s.observed.waiters.Add(1)
-	select {
-	case s.gate <- struct{}{}:
-		s.observed.waiters.Add(-1)
-		s.observed.wait.Observe(time.Since(waiting))
-		defer func() { <-s.gate }()
-	case <-ctx.Done():
-		s.observed.waiters.Add(-1)
-		s.observed.wait.Observe(time.Since(waiting))
-		return ErrUnavailable
+	release, err := s.enter(ctx)
+	if err != nil {
+		return err
 	}
+	defer release()
 	started := time.Now()
 	defer func() { s.observed.duration.Observe(time.Since(started)) }()
 	if s.closed.Load() {
@@ -199,12 +223,24 @@ func Migrate(ctx context.Context, url, runtimeRole string) error {
 		}
 	}
 	if runtimeRole != "" {
-		role := pgx.Identifier{runtimeRole}.Sanitize()
-		if _, err = s.conn.Exec(ctx, "GRANT USAGE ON SCHEMA capture TO "+role+"; GRANT SELECT ON capture.schema_version TO "+role+"; GRANT SELECT,INSERT ON capture.metadata TO "+role+"; GRANT SELECT,INSERT,UPDATE ON capture.peers,capture.operations TO "+role+"; GRANT SELECT,INSERT,DELETE ON capture.leases TO "+role); err != nil {
+		if _, err = s.conn.Exec(ctx, runtimeGrants(pgx.Identifier{runtimeRole}.Sanitize())); err != nil {
 			return ErrUnavailable
 		}
 	}
 	return nil
+}
+
+// runtimeGrants is what the restricted runtime role may do. role is already
+// quoted. Operations are never deleted by the runtime role (the purge uses the
+// migration role); peers are, by the plugin's own retention.
+func runtimeGrants(role string) string {
+	return "GRANT USAGE ON SCHEMA capture TO " + role +
+		"; GRANT SELECT ON capture.schema_version TO " + role +
+		"; GRANT SELECT,INSERT ON capture.metadata TO " + role +
+		"; GRANT UPDATE (generation_floor) ON capture.metadata TO " + role +
+		"; GRANT SELECT,INSERT,UPDATE ON capture.operations TO " + role +
+		"; GRANT SELECT,INSERT,UPDATE,DELETE ON capture.peers TO " + role +
+		"; GRANT SELECT,INSERT,DELETE ON capture.leases TO " + role
 }
 func Open(ctx context.Context, url, pluginID string) (*Store, error) {
 	s, err := connect(ctx, url)
@@ -232,26 +268,100 @@ WHERE state IN ('starting','active','stopping')`)
 	}
 	return s, nil
 }
+
+// probeQueueWait and probeTimeout bound the liveness probe. The probe waits
+// behind other statements for at most probeQueueWait; that wait is not part of
+// the sample. Only the ping itself, given probeTimeout from the moment it owns
+// the connection, can fail it.
+const (
+	probeQueueWait = time.Second
+	probeTimeout   = 2 * time.Second
+)
+
+// Ready probes the database through the working connection. It returns
+// ErrStorageBusy when the connection stayed occupied (no sample), ErrStorageLost
+// when it is closed, and ErrUnavailable when the ping failed on a live one.
+// Only the server's maintenance loop calls it.
 func (s *Store) Ready(ctx context.Context) error {
-	return s.access(ctx, func(ctx context.Context) error { return s.conn.Ping(ctx) })
+	queue, cancel := context.WithTimeout(ctx, probeQueueWait)
+	release, err := s.enter(queue)
+	cancel()
+	if err != nil {
+		if ctx.Err() != nil {
+			return ErrUnavailable
+		}
+		return ErrStorageBusy
+	}
+	defer release()
+	if s.closed.Load() || s.conn.IsClosed() {
+		s.observed.errors.Add(1)
+		return ErrStorageLost
+	}
+	started := time.Now()
+	defer func() { s.observed.duration.Observe(time.Since(started)) }()
+	ping, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	if err := s.conn.Ping(ping); err != nil {
+		s.observed.errors.Add(1)
+		if s.conn.IsClosed() {
+			return ErrStorageLost
+		}
+		return ErrUnavailable
+	}
+	return nil
 }
 func (s *Store) NextGeneration(ctx context.Context, id string) (uint64, error) {
 	var gen uint64
 	err := s.access(ctx, func(ctx context.Context) error {
-		var count int
-		if err := s.conn.QueryRow(ctx, "SELECT count(*) FROM capture.peers").Scan(&count); err != nil {
-			return err
-		}
-		var exists bool
-		if err := s.conn.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM capture.peers WHERE id=$1)", id).Scan(&exists); err != nil {
-			return err
-		}
-		if !exists && count >= 10000 {
+		// One statement: a known peer gets its next generation; a new one is
+		// admitted below the identity cap and starts above every generation
+		// ever deleted (the floor), so a peer that comes back after retention
+		// never repeats a generation. No row means the cap refused it.
+		err := s.conn.QueryRow(ctx, `INSERT INTO capture.peers(id,generation)
+SELECT $1,(SELECT generation_floor FROM capture.metadata WHERE singleton)+1
+WHERE EXISTS(SELECT 1 FROM capture.peers WHERE id=$1) OR (SELECT count(*) FROM capture.peers)<$2
+ON CONFLICT(id) DO UPDATE SET generation=capture.peers.generation+1,seen_at=now()
+RETURNING generation`, id, maxPeerIdentities).Scan(&gen)
+		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrCapacity
 		}
-		return s.conn.QueryRow(ctx, "INSERT INTO capture.peers(id,generation) VALUES($1,1) ON CONFLICT(id) DO UPDATE SET generation=capture.peers.generation+1 RETURNING generation", id).Scan(&gen)
+		return err
 	})
 	return gen, err
+}
+
+// MaintainPeers refreshes the connected peers and deletes at most limit peers
+// that have been unused for idle: not connected, not seen since the cutoff, no
+// lease and no retained operation refers to them. The highest deleted
+// generation is recorded in generation_floor in the same statement. It returns
+// how many peers were deleted.
+func (s *Store) MaintainPeers(ctx context.Context, connected []string, idle time.Duration, limit int) (int, error) {
+	var deleted int
+	err := s.access(ctx, func(ctx context.Context) error {
+		if len(connected) > 0 {
+			if _, err := s.conn.Exec(ctx, "UPDATE capture.peers SET seen_at=now() WHERE id=ANY($1)", connected); err != nil {
+				return err
+			}
+		}
+		if connected == nil {
+			connected = []string{}
+		}
+		return s.conn.QueryRow(ctx, `WITH gone AS (
+ DELETE FROM capture.peers WHERE id IN (
+  SELECT p.id FROM capture.peers p
+  WHERE p.seen_at < now()-make_interval(secs=>$1)
+   AND NOT p.id=ANY($2)
+   AND NOT EXISTS(SELECT 1 FROM capture.leases l WHERE l.peer_id=p.id)
+   AND p.id NOT IN (SELECT t->>'peer_id' FROM capture.operations o, jsonb_array_elements(o.targets) t WHERE t->>'peer_id' IS NOT NULL)
+  ORDER BY p.seen_at LIMIT $3)
+ RETURNING generation
+), bump AS (
+ UPDATE capture.metadata SET generation_floor=GREATEST(generation_floor,(SELECT max(generation) FROM gone))
+ WHERE singleton AND EXISTS(SELECT 1 FROM gone)
+)
+SELECT count(*) FROM gone`, idle.Seconds(), connected, limit).Scan(&deleted)
+	})
+	return deleted, err
 }
 func scanOperation(row pgx.Row) (Operation, error) {
 	var op Operation
@@ -318,8 +428,14 @@ func (s *Store) Insert(ctx context.Context, op Operation) error {
 			if gen != t.Generation {
 				return ErrConflict
 			}
-			if _, err = tx.Exec(ctx, "INSERT INTO capture.leases(peer_id,operation_id,expires_at) VALUES($1,$2,$3)", t.PeerID, op.ID, op.ExpiresAt.Add(5*time.Second)); err != nil {
+			// A lease left by an earlier operation, not yet released or
+			// expired, means the Collector may still run that capture.
+			leased, err := tx.Exec(ctx, "INSERT INTO capture.leases(peer_id,operation_id,expires_at) VALUES($1,$2,$3) ON CONFLICT (peer_id) DO NOTHING", t.PeerID, op.ID, op.ExpiresAt.Add(5*time.Second))
+			if err != nil {
 				return err
+			}
+			if leased.RowsAffected() == 0 {
+				return ErrPeerBusy
 			}
 		}
 		return tx.Commit(ctx)
@@ -351,21 +467,31 @@ func (s *Store) Save(ctx context.Context, op Operation, previous int64) error {
 	})
 }
 
-// Purge is an offline operator job. It acquires the same exclusive authority
-// lock and removes metadata only after the full expiry guard, never live leases.
+// Purge is an operator job that runs beside the running plugin and takes no
+// authority lock. It removes an operation only when all of these hold: it is
+// in a terminal state, its absolute expiry plus the 5 s guard is not after
+// before, and no lease refers to it. A running plugin writes an operation row
+// only while it is not terminal or while one of its targets still holds a
+// lease, so the purge never deletes a row the plugin will save again. Leases
+// are removed only after their own expiry. Peers are not touched; the plugin
+// retires unused peers itself.
 func Purge(ctx context.Context, url string, before time.Time) (int64, error) {
 	if before.IsZero() || before.After(time.Now()) {
 		return 0, ErrInvalid
 	}
-	s, err := connect(ctx, url)
+	conn, err := dial(ctx, url)
 	if err != nil {
 		return 0, err
 	}
-	defer s.Close()
-	if err := check(ctx, s.conn); err != nil {
+	defer func() {
+		closing, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = conn.Close(closing)
+	}()
+	if err := check(ctx, conn); err != nil {
 		return 0, err
 	}
-	tx, err := s.conn.Begin(ctx)
+	tx, err := conn.Begin(ctx)
 	if err != nil {
 		return 0, ErrUnavailable
 	}
@@ -373,7 +499,7 @@ func Purge(ctx context.Context, url string, before time.Time) (int64, error) {
 	if _, err := tx.Exec(ctx, "DELETE FROM capture.leases WHERE expires_at<=$1", before); err != nil {
 		return 0, ErrUnavailable
 	}
-	result, err := tx.Exec(ctx, "DELETE FROM capture.operations op WHERE op.expires_at+interval '5 seconds'<=$1 AND NOT EXISTS(SELECT 1 FROM capture.leases l WHERE l.operation_id=op.id)", before)
+	result, err := tx.Exec(ctx, "DELETE FROM capture.operations op WHERE op.state IN ('completed','stopped','failed','expired','interrupted') AND op.expires_at+interval '5 seconds'<=$1 AND NOT EXISTS(SELECT 1 FROM capture.leases l WHERE l.operation_id=op.id)", before)
 	if err != nil {
 		return 0, ErrUnavailable
 	}

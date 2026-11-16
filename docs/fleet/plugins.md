@@ -4,7 +4,7 @@ Plugins are separate processes that add a domain to the fleet server without
 core knowing about it. [Livecapture](livecapture.md) is the production
 plugin. [`examples/fleet-agent-summary-plugin`](../../examples/fleet-agent-summary-plugin)
 is a small, complete template. This page is the whole contract for host
-protocol 3.
+protocol 4.
 
 | Reader | Read |
 | --- | --- |
@@ -30,32 +30,46 @@ credential. Build a plugin when you need one of:
 ## How it works
 
 ```
- API client ── /api/v1/plugins/{id}/api/... ──▶ fleet ── /fleet-plugin/v3/api/... ──▶ plugin
+ API client ── /api/v1/plugins/{id}/api/... ──▶ fleet ── /fleet-plugin/v4/api/... ──▶ plugin
  (management credential)                       │  ▲      (service token, caller,       │
                                                │  │       instance, epoch)             │
-                    manifest probe every 1 s ──┘  └── /fleet-host/v3/... ◀─────────────┘
+                    manifest probe every 1 s ──┘  └── /fleet-host/v4/... ◀─────────────┘
                     (service token)                   (host token, instance, epoch)
                                                                                         ▲
- Collector component (unchanged) ── own protocol, fleet agent token as bearer ─────────┘
+ Collector component (unchanged) ── own protocol, plugin token as bearer ──────────────┘
 ```
 
 | Channel | Direction | Listener | Credential |
 | --- | --- | --- | --- |
 | Manifest, status, public API | fleet to plugin | The plugin's own listener (`endpoint` in the registration) | Service token, sent by fleet |
 | Host services | plugin to fleet | Fleet's private host listener (`--plugin-listen`) | Host token, sent by the plugin |
-| Collector-facing endpoint (optional) | Collector to plugin | Any listener the plugin owns | The Collector's fleet agent credential, checked by introspection |
+| Collector-facing endpoint (optional) | Collector to plugin | Any listener the plugin owns | The plugin token of the Collector's fleet agent credential, checked by introspection |
 
 - Each registration has its own host and service token. Fleet identifies the
   plugin on the host listener by its host token alone.
+- **The service token is the plugin's administrator.** Whoever holds it, and
+  reaches the plugin's listener with the public instance ID and epoch, can
+  call the plugin as any caller with any access level. The host token acts
+  as the plugin toward fleet's host services. Keep both like an admin
+  credential, and keep the plugin listener reachable only by fleet.
+- **Transport.** Bearer tokens, no mutual TLS. Use HTTPS to the plugin
+  (`ca_file` for a private CA) and `--tls-cert` or `--plugin-tls-cert` on
+  the host listener, with the plugin's own CA option for it, unless the network between them is
+  private: then plain HTTP is acceptable only if no other workload can reach
+  or observe that network.
 - **Instance ID:** the plugin picks a random one at every process start and
   reports it in its manifest.
-- **Epoch:** fleet keeps one per plugin and changes it on every lifecycle
-  change, plugin restart and loss of readiness. The plugin learns it from the
+- **Epoch:** fleet keeps one per plugin, shared by every fleet replica, and
+  changes it on every lifecycle change, plugin restart and refusal, and when
+  no replica has reached the plugin for 3 s. One lost probe changes nothing. The plugin learns it from the
   host session and sends it on every host request. Fleet sends it on every
-  API call. A request with an old epoch is refused with 409 on both sides, so
-  work admitted before a drain, disable or restart cannot continue after it.
+  API call. A request with an old instance or epoch is refused with 421
+  (Misdirected Request) on both sides, so work admitted before a drain,
+  disable or restart cannot continue after it. 421 means only that: 409 is
+  left to conflicts in the plugin's own domain, and fleet never forwards a
+  plugin's 421 to an API caller (it answers 503 with `Retry-After: 1`).
 - **Start:** fleet probes the manifest every second. After the first matching
-  answer the plugin is `ready` and its session poll succeeds (it got 409
+  answer the plugin is `ready` and its session poll succeeds (it got 421
   until then). Public API calls are forwarded only while the plugin is
   `ready` and its last successful probe is under 3 s old.
 
@@ -66,20 +80,20 @@ sequenceDiagram
   participant P as Plugin process
   participant K as Collector component
   loop every 1 s
-    F->>P: GET /fleet-plugin/v3/manifest (service token)
+    F->>P: GET /fleet-plugin/v4/manifest (service token)
     P-->>F: manifest with instance_id
   end
   Note over F: first matching manifest, state ready, epoch set
   loop about every 500 ms
-    P->>F: GET /fleet-host/v3/session (host token, instance)
+    P->>F: GET /fleet-host/v4/session (host token, instance)
     F-->>P: epoch, revision, permissions
   end
   C->>F: /api/v1/plugins/ID/api/PATH (reader, operator or admin token)
-  F->>P: /fleet-plugin/v3/api/PATH (service token, caller, instance, epoch)
+  F->>P: /fleet-plugin/v4/api/PATH (service token, caller, instance, epoch)
   P-->>F: JSON answer
   F-->>C: same status and body
   K->>P: plugin's own protocol (fleet agent token as bearer)
-  P->>F: POST /fleet-host/v3/credentials/introspect (host token, epoch)
+  P->>F: POST /fleet-host/v4/credentials/introspect (host token, epoch)
   F-->>P: active, credential_id, labels
 ```
 
@@ -94,8 +108,11 @@ internals](../internals/fleet-plugin-host.md).
 ## Try the example
 
 The example plugin counts agents and resolves groups. This runs it against
-fleet in memory mode (Git Bash, from the repository root). Memory mode has no
-lifecycle store, so drain and disable need PostgreSQL.
+fleet in memory mode (Git Bash, from the repository root). Memory mode keeps the
+lifecycle in the process, so drain and disable work there but do not survive a
+restart. The memory-mode management token gets `read` access on every
+registered plugin, and memory mode issues no plugin tokens, so introspection
+answers inactive.
 
 ```sh
 sh scripts/fleet/new-plugin-secrets.sh .local/agent-summary
@@ -132,12 +149,12 @@ Pass `--plugins-config FILE` to fleet.
   "plugins": [
     {
       "id": "livecapture",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "endpoint": "http://livecapture-plugin:8090",
       "allow_insecure_http": true,
       "enabled": true,
       "permissions": ["agents.read", "credentials.introspect"],
-      "api_version": "2",
+      "api_version": "3",
       "host_token_file": "host_token",
       "service_token_file": "service_token"
     }
@@ -155,11 +172,12 @@ Pass `--plugins-config FILE` to fleet.
 | `permissions` | yes | Array (possibly empty) of the permissions below, each at most once |
 | `api_version` | no | Grants the opaque public API. Same format as `version`; the manifest must match. Omit it for a plugin without a public API |
 | `host_token_file`, `service_token_file` | yes | Files holding 64 lowercase hex characters (surrounding whitespace ignored). Relative paths resolve beside the registration file |
+| `ca_file` | no | PEM bundle, at most 64 KiB, that fleet trusts for this plugin's `https` endpoint instead of the system roots, for a certificate from a private CA. Relative paths resolve beside the registration file. Refused with an `http` endpoint |
 
 | Permission | Grants |
 | --- | --- |
 | `agents.read` | Agent directory, attribute resolution and group resolution |
-| `credentials.introspect` | Introspection of agent credentials by token hash |
+| `credentials.introspect` | Introspection of agent credentials by plugin token hash |
 
 Tokens and the host listener:
 
@@ -170,7 +188,8 @@ Tokens and the host listener:
 - The private host listener (`--plugin-listen`, default `127.0.0.1:8081`)
   exists only when registrations are configured. Keep it private: in Compose,
   use an internal network and publish no host port. `--tls-cert` also
-  protects it.
+  protects it; `--plugin-tls-cert` and `--plugin-tls-key` protect it alone,
+  for a deployment whose other listeners sit behind a TLS ingress.
 - Invalid configuration fails startup. An absent or failing plugin does not.
 - Process separation is not a sandbox against malicious code an operator
   installs. Grant only the permissions a plugin documents.
@@ -200,8 +219,8 @@ exports `linea_fleet_plugins` by state and the plugin API metrics
 
 ## Lifecycle
 
-Admin lifecycle changes need PostgreSQL storage and a quoted `If-Match`
-revision:
+Admin lifecycle changes need a quoted `If-Match` revision. They survive a
+restart only with PostgreSQL storage:
 
 ```sh
 auth="Authorization: Bearer $ADMIN_TOKEN"
@@ -220,7 +239,7 @@ curl -s -X POST -H "$auth" -H "If-Match: \"$rev\"" -H 'Content-Type: application
 - Every change rotates the epoch and cancels admitted calls.
 - `draining` and `disabled` survive crashes, restarts and restores.
 - **What the plugin sees:** after `drain` or `disable`, session requests get
-  403 and requests under the old epoch get 409. It must stop work admitted
+  403 and requests under the old epoch get 421. It must stop work admitted
   under that epoch. Fleet stops probing it, so the process can keep running.
   After `enable` it gets a session with a new epoch.
 - **Replace a plugin version or its tokens:** drain or disable, update the
@@ -237,14 +256,14 @@ from a plugin and sends no other headers.
 
 | Route | Fleet sends | Plugin answers |
 | --- | --- | --- |
-| `GET /fleet-plugin/v3/manifest` | Service token only | 200 with the manifest, at most 4 KiB, within 750 ms |
-| `GET /fleet-plugin/v3/status` | Service token, caller ID and role | 200 with a JSON object, at most 32 KiB, within 750 ms |
-| `/fleet-plugin/v3/api/{path}` (only with `api_version`) | Service token, caller ID and role, instance, epoch, `Content-Type: application/json`, optional `If-Match`, the query string | JSON at most 1 MiB, or 204, within 2 s |
+| `GET /fleet-plugin/v4/manifest` | Service token only | 200 with the manifest, at most 4 KiB, within 750 ms |
+| `GET /fleet-plugin/v4/status` | Service token, caller ID and access level | 200 with a JSON object, at most 32 KiB, within 750 ms |
+| `/fleet-plugin/v4/api/{path}` (only with `api_version`) | Service token, caller ID and access level, instance, epoch, `Content-Type: application/json`, optional `If-Match`, the query string | JSON at most 1 MiB, or 204, within 2 s |
 
 ### Manifest and readiness
 
 ```json
-{"id": "agent-summary", "version": "0.1.0", "protocol_version": "3",
+{"id": "agent-summary", "version": "0.1.0", "protocol_version": "4",
  "instance_id": "292198670168b4a2ea6c81db31dda047", "api_version": "1"}
 ```
 
@@ -252,18 +271,19 @@ from a plugin and sends no other headers.
   (`pluginsdk.RandomID()`) and constant for the life of the process. A new
   one rotates the epoch.
 - `id`, `version` and `api_version` equal the registration. `protocol_version`
-  is `"3"`. Omit `api_version` when the registration has none.
-- Fleet decodes the manifest strictly. An extra field or trailing data makes
-  the answer invalid and the plugin `unavailable`.
+  is `"4"`. Omit `api_version` when the registration has none.
+- Fleet ignores manifest fields it does not know. Trailing data after the
+  JSON value makes the answer invalid and the plugin `unavailable`.
 - Answer non-200 (503) when the plugin cannot serve, for example while its
   database is down or it is shutting down. Fleet reports it `unavailable` and
-  stops forwarding. Going from `ready` to not ready rotates the epoch, so
-  admitted work is fenced; the next successful probe makes it `ready` under
-  the new epoch.
+  stops forwarding. A refusal rotates the epoch at once, so admitted work is
+  fenced; the next successful probe makes it `ready` under the new epoch. A
+  plugin that does not answer at all is fenced only after 3 s in which no
+  fleet replica reached it.
 
 ### Session and epoch
 
-`GET /fleet-host/v3/session` on the host listener, with the host token and
+`GET /fleet-host/v4/session` on the host listener, with the host token and
 `X-Fleet-Plugin-Instance`, returns:
 
 ```json
@@ -277,13 +297,19 @@ from a plugin and sends no other headers.
 | `revision` | The lifecycle revision |
 
 - Poll about every 500 ms for the life of the process.
-- It answers 409 until fleet's probe has seen this instance ID (up to about a
+- It answers 421 until fleet's probe has seen this instance ID (up to about a
   second after start), and 403 while the plugin is disabled, draining or not
   ready. Both are normal: keep polling.
-- When the epoch differs from the one you hold, or the session request
-  fails: cancel everything admitted under the old epoch, forget state derived
-  from host answers (for example cached introspection results), then adopt
-  the new session.
+- Poll with an HTTP client of its own (`HostClient.SessionHTTP`), not the one
+  for resolves and introspection. Fleet likewise serves the session route
+  from a host slot that no other host request uses, so a busy plugin cannot
+  starve its own session.
+- End the session when the epoch differs from the one you hold, when fleet
+  answers with a refusal (421 included), or when two polls in a row get no
+  answer (a timeout or transport error; a single one is not enough). Ending
+  it means: cancel everything admitted under the old epoch, forget state
+  derived from host answers (for example cached introspection results), then
+  adopt the next session.
 - Send the current epoch on every other host request.
 - The example's `watchSession` shows the pattern with a context per epoch.
 
@@ -302,7 +328,7 @@ the caller headers but without instance or epoch.
 ### Opaque public API
 
 With `api_version` granted, an authenticated request to
-`/api/v1/plugins/{id}/api/{path}` reaches `/fleet-plugin/v3/api/{path}`. Core
+`/api/v1/plugins/{id}/api/{path}` reaches `/fleet-plugin/v4/api/{path}`. Core
 interprets no domain fields: the plugin owns its schema, validation and
 authorization.
 
@@ -310,7 +336,7 @@ Fleet checks before forwarding:
 
 | Check | Rule |
 | --- | --- |
-| Caller | A management credential with role `reader`, `operator` or `admin`. Agent credentials never reach the API |
+| Caller | A management credential with a `plugin_access` grant on this plugin, else 403 (also for an unknown plugin). The role grants no plugin access. Agent credentials never reach the API |
 | Method | GET, POST, PUT, PATCH, DELETE |
 | Body | At most 64 KiB; valid JSON when present |
 | `{path}` | 1 to 512 bytes of segments of 1 to 128 characters from `A-Za-z0-9-_.`. Empty, `.`, `..` and percent-escaped segments are refused |
@@ -325,8 +351,8 @@ Headers the plugin receives:
 | --- | --- |
 | `Authorization` | Service token |
 | `X-Fleet-Caller-ID` | The credential ID |
-| `X-Fleet-Caller-Role` | `reader`, `operator` or `admin` |
-| `X-Fleet-Plugin-Instance`, `X-Fleet-Plugin-Epoch` | Check both equal your current session; answer 409 otherwise |
+| `X-Fleet-Caller-Access` | The caller's grant on this plugin: `read`, `write` or `admin`. Read both caller headers with `pluginsdk.Caller` |
+| `X-Fleet-Plugin-Instance`, `X-Fleet-Plugin-Epoch` | Check both equal your current session (`pluginsdk.AuthorityMatches`); answer 421 otherwise, never 409 |
 | `Content-Type` | `application/json` |
 | `If-Match` | Optional |
 | `X-Fleet-Acting-*` | Optional, validated (below) |
@@ -334,7 +360,8 @@ Headers the plugin receives:
 Fleet never forwards user credentials, cookies or other headers.
 
 **Acting for users.** A management client that acts for its own users, such
-as a shared team service, may send these headers, each once, as printable
+as a shared team service, and whose credential has `delegate` set may send
+these headers, each once, as printable
 UTF-8 without surrounding space:
 
 | Header | Limit |
@@ -343,7 +370,9 @@ UTF-8 without surrounding space:
 | `X-Fleet-Acting-Name` | At most 128 bytes |
 | `X-Fleet-Acting-Request` | At most 128 bytes |
 
-- Fleet refuses malformed values with 400 `invalid_acting_for`, records the
+- Fleet refuses them from a credential without `delegate` with 400
+  `acting_for_not_delegated`, refuses malformed values with 400
+  `invalid_acting_for`, records the
   value on the request's events (`acting_for`), and forwards only the
   validated headers. Copies a client sends are never passed through.
 - Read them with `pluginsdk.ReadActing`.
@@ -356,6 +385,7 @@ What fleet returns to the caller:
 | --- | --- |
 | 204 with an empty body | 204 |
 | 2xx, 400, 403, 404, 409, 410, 412, 413, 428, 429 or 503, with `Content-Type: application/json` and a valid JSON body | The same status and body |
+| 421 | 503 with `Retry-After: 1`. The plugin saw another instance or epoch than fleet sent; fleet refreshes what it knows about the plugin and the caller retries |
 | Any other status (including 401, 405, 422, 500), a non-JSON body, more than 1 MiB, a timeout, or an epoch change during the call | 503 with fleet's generic error |
 
 Fleet keeps only the content type, an `ETag` of at most 128 bytes, and
@@ -365,9 +395,11 @@ free of request data, secrets and upstream text.
 
 ### Authorization inside the plugin
 
-Fleet authenticates the caller and passes its identity. The plugin decides
-what each role may do. Livecapture, for example, lets readers list and
-admins and operators start captures, and scopes captures to the credential that created
+Fleet authenticates the caller, checks its grant and passes its identity
+and access level. An admin grants levels per credential with `plugin_access`
+on `POST /api/v1/credentials`. The plugin decides what each level may do.
+Livecapture, for example, lets `read` list and `write` or `admin` start
+captures, and scopes captures to the credential that created
 them. The caller ID is stable for a credential: use it as the owner of
 records the plugin creates. Document the rules in the plugin's API schema.
 
@@ -377,17 +409,19 @@ Fleet serves these on the private host listener.
 
 - Every request carries the host token and `X-Fleet-Plugin-Instance`. Every
   request except the session also carries `X-Fleet-Plugin-Epoch`.
-- POST bodies are at most 4 KiB of strict JSON (unknown fields and trailing
-  data refused), with no query string.
+- POST bodies are at most 4 KiB of JSON, with no query string. Unknown fields
+  are ignored; trailing data is refused. Every receiver of this protocol, fleet
+  and plugin, ignores fields it does not know, so fields may be added within a
+  protocol version.
 - Answers have `Cache-Control: no-store`.
 
 | Route | Permission | Result |
 | --- | --- | --- |
-| `GET /fleet-host/v3/session` | Enabled and ready | Session |
-| `GET /fleet-host/v3/agents` | `agents.read` | Directory page |
-| `POST /fleet-host/v3/agents/resolve` | `agents.read` | Connected agents matching attributes |
-| `POST /fleet-host/v3/groups/resolve` | `agents.read` | Members of a group or selector |
-| `POST /fleet-host/v3/credentials/introspect` | `credentials.introspect` | Agent credential by token hash |
+| `GET /fleet-host/v4/session` | Enabled and ready | Session |
+| `GET /fleet-host/v4/agents` | `agents.read` | Directory page |
+| `POST /fleet-host/v4/agents/resolve` | `agents.read` | Connected agents matching attributes |
+| `POST /fleet-host/v4/groups/resolve` | `agents.read` | Members of a group or selector |
+| `POST /fleet-host/v4/credentials/introspect` | `credentials.introspect` | Agent credential by token hash |
 
 ### Agent directory
 
@@ -421,7 +455,7 @@ Query parameters, each at most once; others are refused:
 | --- | --- | --- |
 | Attributes | `{"credential_id": "...", "attributes": {"k8s.pod.name": "edge-7d9f"}, "limit": 16}` | `{"agent_ids": [...], "more": false}`: connected agents whose attributes equal all 1 to 8 terms, optionally only those that connected with `credential_id`. `limit` defaults to 16, at most 100; `more` says more matched. Link a Collector to an agent only on exactly one match |
 | Group | `{"group_id": "..."}` or `{"selector": "..."}` (exactly one), optional `"connected": true`, `"limit"` (default and maximum 1000) | `{"agent_ids": [...], "revision": 4}`. `revision` is the group's revision (0 for a selector). A set above the limit returns 422, not a truncated list. An unknown group returns 404 |
-| Introspection | `{"token_sha256": "<64 lowercase hex>"}` | `{"active": true, "credential_id": "...", "role": "agent", "labels": {...}, "expires_at": "..."}` for an unrevoked, unexpired agent credential; `{"active": false}` for anything else, including management credentials and unknown hashes |
+| Introspection | `{"token_sha256": "<64 lowercase hex>"}` | `{"active": true, "credential_id": "...", "role": "agent", "labels": {...}, "expires_at": "..."}` for the plugin token of an unrevoked, unexpired agent credential; `{"active": false}` for anything else, including agent and management tokens and unknown hashes |
 
 The plugin hashes the bearer token a Collector presented, so the token itself
 never reaches fleet over the host channel.
@@ -445,23 +479,28 @@ Refusals are a fixed JSON error.
 | 403 | Not enabled and ready, or permission not granted |
 | 404 | Unknown route or group |
 | 405 | Wrong method |
-| 409 | Stale instance or epoch. Treat as the end of your session |
+| 421 | Stale instance or epoch. Treat as the end of your session |
 | 422 | Too many group members |
 | 503 | Busy or database unavailable. Retry (also timeouts) with backoff |
 
-Each plugin gets two concurrent host requests; a third gets 503. Each request
-has a 750 ms deadline and is canceled when the epoch changes.
+Each plugin gets two concurrent host requests besides the session route, which
+has one slot of its own; one more of either kind gets 503. Each request has a
+750 ms deadline and is canceled when the epoch changes.
+
+Limit: `groups/resolve` reads up to 1000 members inside that 750 ms deadline,
+so a very large group on a slow database may be refused with 503; keep group
+operations small or retry.
 
 ## Serving an unchanged Collector component
 
 A plugin often terminates its own Collector-facing endpoint, such as a gRPC
 stream from a Collector extension. Such components already send configurable
-headers, so the Collector presents its fleet agent credential to the plugin
-unchanged.
+headers, so the Collector presents its fleet agent credential's plugin token
+to the plugin unchanged.
 
 | Step | How |
 | --- | --- |
-| 1. Authenticate | The Collector configures its fleet agent token as the component's `Authorization: Bearer` header. The plugin hashes the token, calls introspection and caches the answer briefly (livecapture: 10 s, rejections 2 s, never past `expires_at`). It re-introspects connected credentials periodically and closes connections whose credential was revoked or expired. It clears the cache when the epoch changes |
+| 1. Authenticate | The Collector configures the plugin token (`plugin_token`, returned once when the agent credential is issued) as the component's `Authorization: Bearer` header. The plugin hashes the token, calls introspection and caches the answer briefly (livecapture: 10 s, rejections 2 s, never past `expires_at`). It re-introspects connected credentials periodically and closes connections whose credential was revoked or expired. It clears the cache when the epoch changes |
 | 2. Authorize with labels | Agent credentials carry up to 16 labels (`labels` on `POST /api/v1/credentials`: key at most 64 bytes of `A-Za-z0-9._-/`, value 1 to 128 bytes). A plugin documents the label it reads, for example livecapture's `capture=edge,gateway`, so operators grant plugin access per credential without a plugin-owned credential store. Config management also matches assignments on labels: choose a label key that names your plugin |
 | 3. Link to fleet agents | To address a connection by fleet agent, group or selector, resolve it with `agents/resolve`, using the introspected `credential_id` and identity attributes the component reports (for example `k8s.pod.name`). Link only a unique match. The Collector's OpAMP extension reports the same attributes through `agent_description.non_identifying_attributes` |
 | 4. Target groups | For a group or selector, call `groups/resolve` with `connected: true` and intersect the agent IDs with linked connections. Resolve once when an operation is admitted and keep that set |
@@ -494,7 +533,7 @@ the template.
 | --- | --- |
 | Fleet | Replaces `command` with the base command plus `--plugins-config /etc/linea-fleet/plugins.json --plugin-listen 0.0.0.0:8081`, mounts the registration, adds the token secrets and an internal `plugins` network |
 | Plugin | Joins only the `plugins` network (plus its own database network, if any); publishes no port for fleet traffic; reads both tokens from Docker secrets; runs non-root with a read-only root, dropped capabilities, `no-new-privileges` and CPU, memory and PID limits |
-| Registration | Uses `http://<service>:<port>` with `allow_insecure_http: true`, acceptable only because the network is internal |
+| Registration | Uses `http://<service>:<port>` with `allow_insecure_http: true`, acceptable only because the network is internal: it must hold only fleet and the plugin, and no other container may join it |
 
 ```sh
 # from the repository root
@@ -517,7 +556,7 @@ docker compose -f deploy/compose/fleet/compose.yaml -f examples/fleet-agent-summ
 
 | Version | Meaning |
 | --- | --- |
-| Protocol `"3"` | Fixed for this host protocol: routes, fields and bounds do not change within it |
+| Protocol `"4"` | Fixed for this host protocol: routes, field names and bounds do not change within it, and fields may be added. It replaced protocol 3 without a fallback: a plugin built for protocol 3 is `incompatible` until rebuilt on `pluginsdk` 4 |
 | `version` | The plugin build. The registration pins it, so an image upgrade changes the registration too |
 | `api_version` | Versions the plugin's public API. Change it on breaking API changes so the operator opts in |
 
@@ -530,7 +569,7 @@ does not pin stays `incompatible` and receives no traffic.
 - **Unit tests:** serve your handler with `httptest` and fake the host with
   an `httptest.Server` that answers the session and the services you use.
   Cover wrong service token (401), missing caller headers (403), stale epoch
-  (409), and host 409, 422 and 503 answers.
+  (421; 409 only for your own conflicts), and host 421, 422 and 503 answers.
 - **Against real fleet:** [Try the example](#try-the-example) runs fleet in
   memory mode without Docker. Simulated agents fill the directory:
   `go run ./cmd/linea-fleet-simulator -endpoint ws://127.0.0.1:4320/v1/opamp -allow-insecure-transport -token-file .local/agent_token -agents 5`.
@@ -542,8 +581,9 @@ does not pin stays `incompatible` and receives no traffic.
 
 - Compare the service token in constant time on every route, the manifest
   included.
-- Accept status and API calls only with exactly one caller ID and a role of
-  `reader`, `operator` or `admin`. Enforce your own per-role rules.
+- Accept status and API calls only with exactly one caller ID and an access
+  level of `read`, `write` or `admin` (`pluginsdk.Caller`). Enforce your own
+  per-level rules.
 - On API calls, check instance and epoch against your current session.
 - Stop admitted work and clear host-derived caches when the epoch changes.
 - Bound every request body, page and loop. Refuse rather than queue when busy.

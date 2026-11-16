@@ -212,10 +212,13 @@ type Rollout struct {
 	State       RolloutState
 	CurrentWave int
 	WaveCount   int
-	// PhaseStartedAt is when the current wave was released or the rollback
-	// began.
+	// PhaseStartedAt is when the current wave was released, the rollout was
+	// last resumed, or the rollback began.
 	PhaseStartedAt time.Time
 	Policy         Policy
+	// Delete marks a rollout that removes the assignment's layer. A target
+	// left without remote config (unmatched) is then what it aims for.
+	Delete bool
 }
 
 // Observation is one released target with its agent's current state.
@@ -241,13 +244,21 @@ type Observation struct {
 }
 
 // Tally counts settled targets and unaccepted failures.
+// Succeeded counts succeeded targets and Accepted the failures an operator
+// accepted by resuming; either lets a wave pass.
 type Tally struct {
-	Settled, Failures int
+	Settled, Failures, Succeeded, Accepted int
 }
 
 func (t *Tally) add(o Outcome, accepted bool) {
 	if o.Settled() {
 		t.Settled++
+	}
+	if o == OutcomeSucceeded {
+		t.Succeeded++
+	}
+	if o.Failure() && accepted {
+		t.Accepted++
 	}
 	if o.Failure() && !accepted {
 		t.Failures++
@@ -346,6 +357,8 @@ func Evaluate(r Rollout, open []Observation, settled map[int]Tally, now time.Tim
 		waves[w] = t
 		total.Settled += t.Settled
 		total.Failures += t.Failures
+		total.Succeeded += t.Succeeded
+		total.Accepted += t.Accepted
 	}
 	waiting := false
 	for _, o := range open {
@@ -373,6 +386,20 @@ func Evaluate(r Rollout, open []Observation, settled map[int]Tally, now time.Tim
 		return step
 	}
 	if waiting {
+		return step
+	}
+	// A wave passes only once one of its targets succeeded, or an operator
+	// accepted its failures: a canary whose agents are all offline,
+	// incompatible or gone proves nothing. Until the wave timeout an offline
+	// agent may still come back; after it the rollout pauses. Resuming
+	// restarts the wave timeout. A delete rollout also passes on an
+	// unmatched target: settled without a failure.
+	current := waves[r.CurrentWave]
+	removed := r.Delete && current.Settled > current.Failures+current.Accepted
+	if current.Succeeded == 0 && current.Accepted == 0 && !removed {
+		if now.Sub(r.PhaseStartedAt) >= r.Policy.WaveTimeout() {
+			step.Action = PauseAction
+		}
 		return step
 	}
 	if r.CurrentWave >= r.WaveCount-1 {

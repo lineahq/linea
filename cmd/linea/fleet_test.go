@@ -66,7 +66,7 @@ func TestFleetCLIManagesFleet(t *testing.T) {
 		t.Fatalf("version %+v", v)
 	}
 	var a platform.FleetAssignment
-	fleet(&a, "assignment-create", "--request", write("assign.json", `{"name":"edge","config_id":"`+c.ID+`","version":1,"layer":10,"selector":"service.name=gateway"}`))
+	fleet(&a, "assignment-create", "--request", write("assign.json", `{"name":"edge","config_id":"`+c.ID+`","version":1,"layer":10,"selector":"service.name=gateway","credential_labels":{"env":"prod"}}`))
 	var ro platform.FleetRollout
 	fleet(&ro, "rollout-action", "--id", a.RolloutID, "--action", "cancel")
 	if ro.State != "cancelled" {

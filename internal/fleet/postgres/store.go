@@ -21,6 +21,7 @@ import (
 	"github.com/lineahq/linea/internal/fleet/auth"
 	"github.com/lineahq/linea/internal/fleet/configmgmt"
 	"github.com/lineahq/linea/internal/fleet/fleet"
+	"github.com/lineahq/linea/internal/fleet/translog"
 	"github.com/lineahq/linea/pluginsdk/metrics"
 )
 
@@ -60,12 +61,23 @@ var credentialExpiryMigration string
 //go:embed migrations/012_operator_role.sql
 var operatorRoleMigration string
 
-var migrations = []string{migration, deploymentTokensMigration, lifecycleMigration, replicasMigration, inventoryMigration, pluginsMigration, configMigration, rolloutMigration, componentsMigration, actingMigration, credentialExpiryMigration, operatorRoleMigration}
+//go:embed migrations/013_plugin_state.sql
+var pluginStateMigration string
+
+//go:embed migrations/014_credential_scope.sql
+var credentialScopeMigration string
+
+//go:embed migrations/015_audit.sql
+var auditMigration string
+
+var migrations = []string{migration, deploymentTokensMigration, lifecycleMigration, replicasMigration, inventoryMigration, pluginsMigration, configMigration, rolloutMigration, componentsMigration, actingMigration, credentialExpiryMigration, operatorRoleMigration, pluginStateMigration, credentialScopeMigration, auditMigration}
 
 // adminLock serializes offline administration (migrate, bootstrap, grants).
 // v1 servers held the same lock, so a v1 server also blocks migration to v2.
 const adminLock int64 = 731281604309
-const schemaVersion = 12
+
+// schemaVersion is the newest migration; a database at it needs none.
+var schemaVersion = len(migrations)
 
 // ErrOwnerBusy is retryable contention, distinct from schema/identity conflicts.
 var ErrOwnerBusy = fmt.Errorf("fleet administration or a v1 server already active: %w", fleet.ErrConflict)
@@ -81,26 +93,34 @@ type Options struct {
 	Heartbeat, Alive, Flush, Rollouts time.Duration
 	// Retention deletes agents disconnected for longer; zero keeps them.
 	Retention time.Duration
+	// Log receives the store's transition lines; nil discards them.
+	Log *translog.Logger
 }
 
 type Store struct {
+	log       *translog.Logger
 	closeOnce sync.Once
 	stopOnce  sync.Once
 	closed    atomic.Bool
 	stopped   atomic.Bool
 	pool      *pgxpool.Pool
-	options   Options
-	replica   string
-	ctx       context.Context
-	cancel    context.CancelFunc
-	loops     sync.WaitGroup
-	writer    *writer
+	// beatConfig opens the heartbeat's own session, outside the pool.
+	beatConfig *pgx.ConnConfig
+	// agentWrites admits writes agents cause outside the writer queue.
+	agentWrites chan struct{}
+	options     Options
+	replica     string
+	ctx         context.Context
+	cancel      context.CancelFunc
+	loops       sync.WaitGroup
+	writer      *writer
 
 	heartbeat atomic.Int64 // UnixNano of the last successful heartbeat
 	leader    atomic.Bool
 	lost      chan struct{}
 	lostOnce  sync.Once
 	lostWhy   string // written once before lost closes
+	lostCause translog.Reason
 
 	seenMu sync.Mutex
 	seen   map[string]seenAt
@@ -109,6 +129,7 @@ type Store struct {
 	onTakeover func(string, uint64)
 	onRevoked  func(string)
 	onConfig   func(string)
+	onPlugin   func(string)
 	eventWake  chan struct{}
 
 	queryDuration metrics.Duration
@@ -169,12 +190,24 @@ func connConfig(url string) (*pgx.ConnConfig, error) {
 	return cfg, nil
 }
 
+// Administration and migrations run offline and may rewrite whole tables, so
+// their sessions and contexts allow longer statements than serving does.
+const (
+	adminTimeout          = 10 * time.Minute
+	adminStatementTimeout = "300000"
+	// streamTimeout bounds the restore rewrite of every retained event.
+	streamTimeout          = 5 * time.Minute
+	streamStatementTimeout = "240s"
+)
+
 // openAdmin returns one session holding the administration lock.
 func openAdmin(ctx context.Context, url string) (*pgx.Conn, error) {
 	cfg, err := connConfig(url)
 	if err != nil {
 		return nil, err
 	}
+	cfg.RuntimeParams["statement_timeout"] = adminStatementTimeout
+	cfg.RuntimeParams["lock_timeout"] = "10000"
 	conn, err := pgx.ConnectConfig(ctx, cfg)
 	if err != nil {
 		return nil, fleet.ErrUnavailable
@@ -199,7 +232,7 @@ func closeAdmin(conn *pgx.Conn) {
 
 // adminTx runs one offline administration transaction on the locked session.
 func adminTx(ctx context.Context, url string, work func(context.Context, pgx.Tx) error) error {
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, adminTimeout)
 	defer cancel()
 	conn, err := openAdmin(ctx, url)
 	if err != nil {
@@ -269,7 +302,7 @@ func checkSchema(ctx context.Context, c querier) error {
 }
 
 func Migrate(ctx context.Context, url string) error {
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, adminTimeout)
 	defer cancel()
 	conn, err := openAdmin(ctx, url)
 	if err != nil {
@@ -340,7 +373,7 @@ func Open(ctx context.Context, url string, options Options) (*Store, error) {
 	}
 	poolConfig.ConnConfig = cfg
 	poolConfig.MaxConns, poolConfig.MinConns = 8, 1
-	s := &Store{options: options, replica: randomID(), lost: make(chan struct{}), seen: map[string]seenAt{}, eventWake: make(chan struct{}), reapBatch: reapBatch,
+	s := &Store{beatConfig: cfg.Copy(), agentWrites: make(chan struct{}, maxAgentWrites), log: options.Log, options: options, replica: randomID(), lost: make(chan struct{}), seen: map[string]seenAt{}, eventWake: make(chan struct{}), reapBatch: reapBatch,
 		uses: configmgmt.NewUsesCache()}
 	cfg.Tracer = s
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
@@ -355,10 +388,12 @@ func Open(ctx context.Context, url string, options Options) (*Store, error) {
 		return nil, err
 	}
 	s.heartbeat.Store(time.Now().UnixNano())
+	s.log.Info(translog.ReplicaRegistered, translog.ID(translog.KeyReplica, s.replica))
 	s.writer = newWriter(s)
-	s.loops.Add(5)
+	s.loops.Add(6)
 	go s.writer.run()
 	go s.heartbeatLoop()
+	go s.leaderLoop()
 	go s.flushLoop()
 	go s.listen()
 	go s.rolloutLoop()
@@ -378,6 +413,9 @@ func (s *Store) register(ctx context.Context) error {
 	if err := checkSchema(ctx, s.pool); err != nil {
 		return err
 	}
+	if err := s.checkStream(ctx); err != nil {
+		return err
+	}
 	return s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if err := identity(ctx, tx, s.options.ServerID); err != nil {
 			return err
@@ -389,9 +427,6 @@ func (s *Store) register(ctx context.Context) error {
 		if admins == 0 {
 			return auth.ErrUnauthorized
 		}
-		if err := s.checkStream(ctx, tx); err != nil {
-			return err
-		}
 		if _, err := tx.Exec(ctx, "INSERT INTO fleet.replicas(id) VALUES($1)", s.replica); err != nil {
 			return err
 		}
@@ -402,7 +437,32 @@ func (s *Store) register(ctx context.Context) error {
 // checkStream rotates the event epoch once when the database is restored into
 // another cluster, detected by system identifier or a transaction counter
 // that moved backwards. Old events keep their order ahead of new ones.
-func (s *Store) checkStream(ctx context.Context, tx pgx.Tx) error {
+//
+// It runs in a transaction of its own, before registration: rewriting every
+// retained event (up to --max-events) can outlast the bounds of a serving
+// write, so it gets its own context and statement timeout. The metadata row
+// lock serializes replicas that start together.
+func (s *Store) checkStream(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), streamTimeout)
+	defer cancel()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fleet.ErrUnavailable
+	}
+	defer tx.Rollback(context.Background())
+	if _, err := tx.Exec(ctx, "SET LOCAL lock_timeout = '"+streamStatementTimeout+"'"); err != nil {
+		return normalize(err)
+	}
+	if err := identity(ctx, tx, s.options.ServerID); err != nil {
+		return normalize(err)
+	}
+	if err := rotateStream(ctx, tx); err != nil {
+		return normalize(err)
+	}
+	return normalize(tx.Commit(ctx))
+}
+
+func rotateStream(ctx context.Context, tx pgx.Tx) error {
 	var stored *string
 	if err := tx.QueryRow(ctx, "SELECT system_identifier FROM fleet.metadata WHERE singleton FOR UPDATE").Scan(&stored); err != nil {
 		return err
@@ -426,7 +486,10 @@ func (s *Store) checkStream(ctx context.Context, tx pgx.Tx) error {
 	}
 	changed := stored != nil && current != nil && *stored != *current
 	if regressed || changed {
-		if _, err := tx.Exec(ctx, "UPDATE fleet.events SET xid='0'"); err != nil {
+		if _, err := tx.Exec(ctx, "SET LOCAL statement_timeout = '"+streamStatementTimeout+"'"); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, "UPDATE fleet.events SET xid='0' WHERE xid <> '0'"); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, "UPDATE fleet.metadata SET event_epoch=$1, event_floor_xid='0' WHERE singleton", randomID()); err != nil {
@@ -474,12 +537,16 @@ func (s *Store) ReplicaID() string { return s.replica }
 // treat its agents as disconnected by then, so the process must shut down.
 func (s *Store) Lost() <-chan struct{} { return s.lost }
 
-func (s *Store) markLost(why string) {
+func (s *Store) markLost(cause translog.Reason, why string) {
 	s.lostOnce.Do(func() {
-		s.lostWhy = why
+		s.lostWhy, s.lostCause = why, cause
+		s.log.Error(translog.ReplicaFenced, translog.ID(translog.KeyReplica, s.replica), translog.Why(cause))
 		close(s.lost)
 	})
 }
+
+// LostCause is the enumerated form of LostReason, for the transition log.
+func (s *Store) LostCause() translog.Reason { return s.lostCause }
 
 // LostReason says why the replica fenced itself; valid once Lost is closed.
 // It names an error class, never connection details.
@@ -501,6 +568,15 @@ func (s *Store) SetConfigSignal(changed func(agentID string)) {
 	s.signalMu.Lock()
 	defer s.signalMu.Unlock()
 	s.onConfig = changed
+}
+
+// SetPluginSignal binds the plugin state hint: the payload is the plugin ID
+// whose row changed, and an empty ID after the listener reconnects means any
+// row may have changed. The callback must not block.
+func (s *Store) SetPluginSignal(changed func(pluginID string)) {
+	s.signalMu.Lock()
+	defer s.signalMu.Unlock()
+	s.onPlugin = changed
 }
 
 // EventSignal closes on the next event notification.
@@ -542,6 +618,23 @@ func (s *Store) write(ctx context.Context, work func(context.Context, pgx.Tx) er
 		return normalize(err)
 	}
 	return normalize(tx.Commit(ctx))
+}
+
+// capped refuses a new row in table once it holds limit rows. It locks the
+// table against other writes until commit (reads go on), so concurrent
+// creations cannot each see room for one more row. table is a constant.
+func capped(ctx context.Context, tx pgx.Tx, table string, limit int) error {
+	if _, err := tx.Exec(ctx, "LOCK TABLE "+table+" IN SHARE ROW EXCLUSIVE MODE"); err != nil {
+		return err
+	}
+	var count int
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM "+table).Scan(&count); err != nil {
+		return err
+	}
+	if count >= limit {
+		return fleet.ErrCapacity
+	}
+	return nil
 }
 
 func normalize(err error) error {
@@ -597,7 +690,8 @@ func (s *Store) event(ctx context.Context, tx pgx.Tx, kind, subject, actor strin
 	return appendEvent(ctx, tx, kind, subject, actor, detail)
 }
 
-// appendEvent records the request's acting-for value with the event.
+// appendEvent records the request's acting-for value with the event, and
+// writes an administrative event to the audit record as well.
 func appendEvent(ctx context.Context, tx pgx.Tx, kind, subject, actor string, detail []byte) error {
 	var acting []byte
 	if a := fleet.ActingFrom(ctx); a != nil {
@@ -606,7 +700,9 @@ func appendEvent(ctx context.Context, tx pgx.Tx, kind, subject, actor string, de
 			return err
 		}
 	}
-	_, err := tx.Exec(ctx, "WITH e AS (INSERT INTO fleet.events(kind,subject_id,actor_id,detail,acting_for) VALUES($1,$2,$3,$4,$5) RETURNING 1) SELECT pg_notify('fleet_events','') FROM e", kind, subject, actor, detail, acting)
+	_, err := tx.Exec(ctx, `WITH e AS (INSERT INTO fleet.events(kind,subject_id,actor_id,detail,acting_for) VALUES($1,$2,$3,$4,$5) RETURNING 1),
+		a AS (INSERT INTO fleet.audit(kind,subject_id,actor_id,detail,acting_for) SELECT $1,$2,$3,$4,$5 WHERE $6 RETURNING 1)
+		SELECT pg_notify('fleet_events','') FROM e`, kind, subject, actor, detail, acting, fleet.Audited(kind, actor))
 	return err
 }
 

@@ -153,7 +153,7 @@ app.kubernetes.io/component: livecapture
 {{/* The URL the server reaches fleet's management API at. */}}
 {{- define "linea.fleetURL" -}}
 {{- if include "linea.fleetDeployed" . -}}
-{{- printf "http://%s:%v" (include "linea.fleetName" .) .Values.fleet.deploy.service.managementPort -}}
+{{- printf "http://%s-internal:%v" (include "linea.fleetName" .) .Values.fleet.deploy.service.managementPort -}}
 {{- else -}}
 {{- .Values.fleet.url -}}
 {{- end -}}
@@ -202,8 +202,31 @@ app.kubernetes.io/component: livecapture
 {{- $_ := set $cache $name (dict "tls.crt" (b64dec (index $existing.data "tls.crt")) "tls.key" (b64dec (index $existing.data "tls.key"))) -}}
 {{- else -}}
 {{- $svc := include "linea.livecaptureName" . -}}
-{{- $hosts := concat (list $svc (printf "%s.%s" $svc .Release.Namespace) (printf "%s.%s.svc" $svc .Release.Namespace)) .Values.fleet.deploy.livecapture.tls.extraHosts -}}
+{{- $plugin := printf "%s-plugin" $svc -}}
+{{- $hosts := concat (list $svc (printf "%s.%s" $svc .Release.Namespace) (printf "%s.%s.svc" $svc .Release.Namespace) $plugin (printf "%s.%s" $plugin .Release.Namespace) (printf "%s.%s.svc" $plugin .Release.Namespace)) .Values.fleet.deploy.livecapture.tls.extraHosts -}}
 {{- $cert := genSelfSignedCert $svc nil $hosts 825 -}}
+{{- $_ := set $cache $name (dict "tls.crt" $cert.Cert "tls.key" $cert.Key) -}}
+{{- end -}}
+{{- $_ := set .Values "_generated" $cache -}}
+{{- end -}}
+{{- toYaml (index $cache $name) -}}
+{{- end -}}
+
+{{- define "linea.fleetHostTLSSecret" -}}
+{{- printf "%s-host-tls" (include "linea.fleetName" .) -}}
+{{- end -}}
+
+{{/* Fleet's generated plugin host certificate for the <fleet>-internal Service, kept across upgrades: tls.crt and tls.key as YAML. */}}
+{{- define "linea.fleetHostCertificate" -}}
+{{- $name := include "linea.fleetHostTLSSecret" . -}}
+{{- $cache := .Values._generated | default dict -}}
+{{- if not (hasKey $cache $name) -}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $name -}}
+{{- if and $existing $existing.data (hasKey $existing.data "tls.crt") (hasKey $existing.data "tls.key") -}}
+{{- $_ := set $cache $name (dict "tls.crt" (b64dec (index $existing.data "tls.crt")) "tls.key" (b64dec (index $existing.data "tls.key"))) -}}
+{{- else -}}
+{{- $svc := printf "%s-internal" (include "linea.fleetName" .) -}}
+{{- $cert := genSelfSignedCert $svc nil (list $svc (printf "%s.%s" $svc .Release.Namespace) (printf "%s.%s.svc" $svc .Release.Namespace)) 825 -}}
 {{- $_ := set $cache $name (dict "tls.crt" $cert.Cert "tls.key" $cert.Key) -}}
 {{- end -}}
 {{- $_ := set .Values "_generated" $cache -}}

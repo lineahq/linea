@@ -14,17 +14,17 @@ type pluginMetrics struct {
 	metadata         atomic.Pointer[metadataView]
 	delivery         [3]metrics.Duration
 	deliveryErrors   atomic.Uint64
-	deliveryCapacity atomic.Uint64
-	uncertain        atomic.Uint64
-	accepted         [3]atomic.Uint64
-	rejected         [3]atomic.Uint64
+	delivered        [3]atomic.Uint64
+	droppedRecords   [3]atomic.Uint64
+	droppedBatches   atomic.Uint64
 	acks             atomic.Uint64
-	ackRetries       atomic.Uint64
 	admitted         atomic.Uint64
 	admissionRefused atomic.Uint64
 	withdrawn        atomic.Uint64
 	credentialClosed atomic.Uint64
 	desiredRejected  atomic.Uint64
+	// linkOutcomes counts peer link attempts by outcome, in linkOutcomes order.
+	linkOutcomes [len(linkOutcomes)]atomic.Uint64
 }
 type metadataView struct {
 	gauges map[string]float64
@@ -57,7 +57,7 @@ func signalIndex(signal string) int {
 // Metrics reads only in-memory aggregates, never catalogs, telemetry or storage.
 func (s *Server) Metrics() MetricSnapshot {
 	m := MetricSnapshot{Gauges: map[string]float64{}, Counters: map[string]uint64{}, Durations: map[string]metrics.Snapshot{}, Limits: map[string]uint64{
-		"peers": uint64(s.config.peerLimit()), "control_connections": uint64(s.config.peerLimit() + 16), "data_connections": 64, "http_connections": 64, "operations": 32, "channels": 32, "channel_bytes": 1 << 20, "channel_batches": 16, "channel_receipts": 1024, "otlp_bytes": 256 << 10, "deliveries": 16, "peer_page_bytes": PeerPageBytes, "peer_page_count": 64,
+		"peers": uint64(s.config.peerLimit()), "control_connections": uint64(s.config.peerLimit() + 16), "data_connections": 64, "http_connections": 64, "operations": 32, "channels": 32, "channel_bytes": channelBytes, "channel_batches": channelBatches, "pending_bytes": pendingBytes, "batch_age_seconds": uint64(batchAge / time.Second), "otlp_bytes": 256 << 10, "peer_page_bytes": PeerPageBytes, "peer_page_count": 64,
 	}}
 	var view *metadataView
 	if s.mu.TryLock() {
@@ -84,13 +84,10 @@ func (s *Server) Metrics() MetricSnapshot {
 		for _, a := range s.operations {
 			m.Gauges["operations_"+a.op.State]++
 		}
-		for _, key := range []string{"pending_batches", "pending_bytes", "retained_receipts"} {
-			m.Gauges[key] = 0
-		}
+		m.Gauges["pending_batches"] = 0
+		m.Gauges["pending_bytes"] = float64(s.pending)
 		for _, c := range s.channels {
 			m.Gauges["pending_batches"] += float64(len(c.batches))
-			m.Gauges["pending_bytes"] += float64(c.bytes)
-			m.Gauges["retained_receipts"] += float64(len(c.receipts))
 		}
 		// Do not let a scrape queue behind storage IO performed by admission.
 		// Publish an immutable copy for scrapes that encounter a busy authority.
@@ -117,24 +114,25 @@ func (s *Server) Metrics() MetricSnapshot {
 	} else {
 		m.Gauges["metadata_snapshot_available"] = 0
 	}
-	m.Gauges["inflight_deliveries"] = float64(len(s.dataGate))
 	for i, name := range []string{"control", "data", "http"} {
 		m.Gauges["connections_"+name] = float64(len(s.budgets[i].slots))
 		m.Counters["connections_refused_"+name+"_total"] = s.budgets[i].refused.Load()
 	}
 	m.Counters["delivery_errors_total"] = s.observed.deliveryErrors.Load()
-	m.Counters["delivery_capacity_total"] = s.observed.deliveryCapacity.Load()
-	m.Counters["receipt_uncertain_total"] = s.observed.uncertain.Load()
-	m.Counters["receipts_total"] = s.observed.acks.Load()
-	m.Counters["receipt_retries_total"] = s.observed.ackRetries.Load()
+	m.Counters["acks_total"] = s.observed.acks.Load()
+	m.Counters["dropped_batches_total"] = s.observed.droppedBatches.Load()
 	m.Counters["captures_admitted_total"] = s.observed.admitted.Load()
 	m.Counters["capture_admission_refused_total"] = s.observed.admissionRefused.Load()
 	m.Counters["captures_withdrawn_total"] = s.observed.withdrawn.Load()
 	m.Counters["peers_credential_closed_total"] = s.observed.credentialClosed.Load()
 	m.Counters["desired_state_rejected_total"] = s.observed.desiredRejected.Load()
+	m.Counters["log_lines_dropped_total"] = s.log.Dropped()
+	for i, outcome := range linkOutcomes {
+		m.Counters["peer_link_"+outcome+"_total"] = s.observed.linkOutcomes[i].Load()
+	}
 	for i, signal := range []string{"traces", "logs", "metrics"} {
-		m.Counters["consumer_accepted_"+signal+"_records_total"] = s.observed.accepted[i].Load()
-		m.Counters["consumer_rejected_"+signal+"_records_total"] = s.observed.rejected[i].Load()
+		m.Counters["delivered_"+signal+"_records_total"] = s.observed.delivered[i].Load()
+		m.Counters["dropped_"+signal+"_records_total"] = s.observed.droppedRecords[i].Load()
 		m.Durations["delivery_"+signal+"_duration_seconds"] = s.observed.delivery[i].Snapshot()
 	}
 	if repo, ok := s.repo.(interface{ storageObservations() *storageMetrics }); ok {

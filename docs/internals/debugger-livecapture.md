@@ -118,10 +118,13 @@ the Collector components are documented under `docs/fleet/` and
 
 - For each capture the debugger creates a fleet capture channel and reads the
   batches fleet delivers on it. There is no OTLP listener.
-- Batches are acknowledged with the records stored; a redelivered batch is
-  acknowledged again without storing it twice. Repeated Collector deliveries
-  stay repeated records because the protocol has no unique delivery
-  identifier.
+- Each batch is acknowledged by its ID once it is handled, whatever was
+  stored. Fleet offers an unacknowledged batch again, so a batch whose ACK was
+  lost arrives twice; the runner remembers the last batch ID and acknowledges
+  the repeat without storing it. The Collector never retries, so it sends
+  each copy once.
+- Fleet reports each target's `delivery` counts (received, dropped records
+  and batches), which the target view carries as `delivery`.
 - The five capture routing tags (`capture.session.id`, `capture.point`,
   `capture.pipeline`, `capture.collector.pod`, `capture.cluster`) are removed
   from each resource on receipt. They are the Collector's, never the source's,
@@ -163,13 +166,13 @@ the Collector components are documented under `docs/fleet/` and
     about 342 KiB as base64 JSON, so the 1 MiB response cap is not the binding
     one. The Collector's delivery exporter batches to 256 KiB with one consumer
     (`collector/livecapture/livecaptureextension/exporter.go:113,120`).
-  - Plugin buffer per capture channel: 16 batches, 1 MiB
-    (`delivery.go:246`); full means `delivery_capacity`, withdrawn with
-    `ResourceExhausted` to the Collector (`delivery.go:246-252`); no ack in 2 s
-    means `receipt_uncertain` (`delivery.go:261-270`). Counters
-    `delivery_capacity_total` and `receipt_uncertain_total`
-    (`metrics.go:126-127`). Collector-side drops reach the debugger as the
-    target's `dropped` stats (`captures.go:99,782`).
+  - Plugin buffer per capture channel: 64 batches, 2 MiB, 32 MiB across
+    channels, 10 s per batch (`channelBatches`, `channelBytes`,
+    `pendingBytes`, `batchAge` in `delivery.go`). The plugin answers the
+    Collector at once; a batch that does not fit or ages out is dropped and
+    counted on the target's `delivery` and in `dropped_batches_total` and
+    `dropped_<signal>_records_total`. Collector-side drops reach the debugger
+    as the target's `dropped` stats.
   - Session caps that end a capture first on a fast link: 8 MiB, 10,000
     records (`capture_data.go:19,21`); a batch over 8,192 records, resources or
     scopes is refused whole (`capture_data.go:267`).

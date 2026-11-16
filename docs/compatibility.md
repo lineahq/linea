@@ -14,8 +14,8 @@ below changes, upgrade both sides together. The release notes in
 | Collector release line | Debugger built-in runtime and the release table | 0.162.0 built in; runtimes 0.160.0 to 0.165.0 verified | A runtime builds for any release from 0.160.0; one outside the support table builds as unverified. Every runtime runs a [self-check](debugger/runtime-builds.md#self-check) at start; a failed check warns on each run and refuses nothing. | `build/linea-runtime.yaml`, `build/versions/` |
 | Collector components | `collector/livecapture` and your Collector | Collector 0.162.0 / `v1.68.0`, OTTL 0.162.0 | Minimums. Later releases verified up to 0.165.0. | [Newer releases](internals/collector-components-compatibility.md) |
 | Live-capture control protocol | `livecapture` extension and the live-capture plugin | `livecapture.control.v1` | Additive. A Collector ignores fields it does not know; a desired state that must not be ignored names its `required_capabilities`, and a Collector lacking one rejects it. | `api/livecapture/control/v1/control.proto` |
-| Plugin host protocol | Fleet server and every plugin | 3 | Equal. A plugin whose manifest declares another protocol is not registered. | `pluginsdk/protocol.go` (`ProtocolVersion`) |
-| Plugin API version | Fleet plugin configuration and the plugin | live capture: 2 | Equal to the `api_version` in the fleet plugin configuration. | `internal/fleetplugins/livecapture/config.go` |
+| Plugin host protocol | Fleet server and every plugin | 4 | Equal. A plugin whose manifest declares another protocol is not registered and shows as incompatible. Fields are added within a version: every receiver ignores fields it does not know. | `pluginsdk/protocol.go` (`ProtocolVersion`) |
+| Plugin API version | Fleet plugin configuration and the plugin | live capture: 3 | Equal to the `api_version` in the fleet plugin configuration. | `internal/fleetplugins/livecapture/config.go` |
 | Plugin version | Fleet plugin configuration and the plugin | release | Equal to the `version` in the fleet plugin configuration. | `internal/fleet/plugins/registry.go` |
 | Debugger HTTP API | `linea-server` and the web client, connected CLI and MCP clients | `/api/v1` | The web client ships inside the server. Use a connected CLI from the same release. | `internal/debugger/api/openapi.json` |
 | Fleet HTTP API | Fleet server and the debugger's `--fleet-url` | `/api/v1` | The debugger uses fleet's management API and the plugin API through fleet. | `internal/debugger/fleetcapture` |
@@ -31,6 +31,16 @@ database restore.
 | Debugger | `linea-server` | Refused at start (`ErrUnsupportedSchema`) |
 | Fleet | `linea-fleet` | Refused at start |
 | Live capture | `linea-fleet-livecapture` | Refused at start |
+
+Fleet schema version 13 adds the shared plugin state (`epoch`, `instance_id`
+and `seen_at` on `fleet.plugin_lifecycle`), and version 14 adds
+`plugin_access`, `delegate` and `plugin_hash` to `fleet.credentials`.
+Version 15 adds the audit record `fleet.audit`. Run the fleet `migrate` step before
+starting the new release; an older fleet server refuses the newer schema.
+
+Live capture schema version 3 records the user a delegated request acts for,
+and version 4 adds peer retention. Run the plugin's `migrate` step before
+starting plugin 0.5.0.
 
 ## Upgrade order
 

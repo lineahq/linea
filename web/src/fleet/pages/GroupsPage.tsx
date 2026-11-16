@@ -9,7 +9,7 @@ import { chipClass } from '../../capture/phase';
 import { InlineConfirm } from '../../capture/pages/InlineConfirm';
 import { Icon } from '../../ui/Icon';
 import { groupKindText, groupMembership } from '../fleetGroups';
-import { agentSuggestions, attributeKeys, groupDraft, groupSave, parseAgentIDs, selectorSuggestions, selectorTail, type GroupDraft } from '../fleetView';
+import { affectedCount, agentSuggestions, attributeKeys, groupDraft, groupSave, parseAgentIDs, selectorSuggestions, selectorTail, type GroupDraft } from '../fleetView';
 import { FleetGate, FleetHead, Problem } from './FleetHead';
 import { Permitted } from '../../ui/Permitted';
 import { useDenial } from '../../ui/session';
@@ -248,12 +248,15 @@ ${v}` : v }));
       onDone(g);
     },
   });
-  const submit = () => {
+  const submit = (maxAffected?: number) => {
     const req = groupSave(draft, group);
     if (typeof req === 'string') { setFix(req); return; }
     setFix('');
-    save.mutate(req);
+    save.mutate(maxAffected ? { ...req, max_affected: maxAffected } : req);
   };
+  // A change that reconfigures more connected agents than fleet allows at
+  // once is saved only after the user accepts that count.
+  const affected = affectedCount(save.error);
   return (
     <form className="od-card" aria-label={group ? 'Edit group' : 'New group'} onSubmit={(e) => { e.preventDefault(); submit(); }}>
       <div className="od-card__head"><h2 className="od-card__title" style={{ margin: 0 }}>{group ? `Edit ${group.name}` : 'New group'}</h2></div>
@@ -287,7 +290,11 @@ ${v}` : v }));
           </div>
         )}
         {fix && <span role="alert" className="od-field__error">{fix}</span>}
-        {save.error && <Problem title="Could not save the group" error={save.error} />}
+        {affected > 0 ? (
+          <InlineConfirm confirmLabel={`Reconfigure ${affected} agents`} busy={save.isPending} onCancel={() => save.reset()} onConfirm={() => submit(affected)}>
+            This change gives <strong>{affected}</strong> connected agents a new config at once, without a rollout's waves. Save it anyway?
+          </InlineConfirm>
+        ) : save.error && <Problem title="Could not save the group" error={save.error} />}
         <div style={{ display: 'flex', gap: 8 }}>
           <button type="submit" className="od-btn od-btn--primary od-btn--sm">{save.isPending ? 'Saving…' : group ? 'Save group' : 'Create group'}</button>
           <button type="button" className="od-btn od-btn--sm" onClick={() => onDone()}>Cancel</button>

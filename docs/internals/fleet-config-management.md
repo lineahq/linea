@@ -36,6 +36,29 @@ config bisect are in [fleet-config-layers.md](fleet-config-layers.md).
 - Fleet sends no restart, package or connection-settings commands in any
   mode.
 
+## Verified OpAMP behavior
+
+Read in the sources of opamp-go v0.25.0 and the contrib `opampextension`
+v0.162.0 (the release the OCB manifest pins).
+
+- `opampextension` hashes its available components as SHA-256 of one
+  string: for the kinds `receiver`, `processor`, `exporter`, `extension` and
+  `connector` in that order, the kind and `:`, then `type=module;` for each
+  component type sorted by name, where the module is the builder reference
+  it also reports as `code.namespace` metadata
+  (`generateAvailableComponentsHash` in `opamp_agent.go`). The gateway
+  recomputes this hash from the reported list; a list that does not match
+  leaves the build unresolved for the session, so config stays withheld.
+  The fleet simulator builds its hashes the same way.
+- opamp-go's server checks a message it sends against the same
+  `MaxMessageSize` as a message it receives (`internal.WriteWSMessage`,
+  called from `wsConnection.Send`), and a WebSocket connection's read limit
+  is that value too. The largest remote config (8 layers of 128 KiB) is
+  above the default 1 MiB, so the gateway attaches with the larger of
+  `--max-message-bytes` and `MaxRemoteConfigBytes`.
+- `wsConnection.Send` ignores its context; the gateway closes the socket
+  when a send outlives its deadline.
+
 ## Measurements
 
 Replica restarts, kills and database failovers lose nothing and send nothing

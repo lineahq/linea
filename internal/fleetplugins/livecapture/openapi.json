@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Optional livecapture plugin API",
-    "version": "2.3.0",
-    "description": "Plugin-owned capture APIs. Single active authority per private database. Fixed 1-16 target roster chosen by peer generation, fleet agent, fleet group or selector, absolute expiry <=5 minutes, no automatic replay. Raw selection requires explicit operator principal grant. Captured payloads stay in bounded memory. Poll/ACK delivery preserves partial and uncertain OTLP outcomes; retries may duplicate records. No debugger dependency. Collectors authenticate with fleet agent credentials, introspected through the fleet host; the capture label lists the collector groups a credential may serve."
+    "version": "3.0.0",
+    "description": "Plugin-owned capture APIs. Single active authority per private database. Fixed 1-16 target roster chosen by peer generation, fleet agent, fleet group or selector, absolute expiry <=5 minutes, no automatic replay. Raw selection requires explicit operator principal grant. Captured payloads stay in bounded memory. Send-and-forget delivery: the plugin answers every bound OTLP export at once, buffers what fits and counts what it drops per target; nothing retries, so a batch arrives at most once. No debugger dependency. Collectors authenticate with fleet agent credentials, introspected through the fleet host; the capture label lists the collector groups a credential may serve."
   },
   "servers": [
     {
@@ -30,13 +30,13 @@
             "description": "Invalid general API credential"
           },
           "403": {
-            "description": "Plugin role, raw permission, or ownership denied"
+            "description": "Access level, raw permission, or ownership denied"
           },
           "404": {
             "description": "Resource absent/expired"
           },
           "409": {
-            "description": "Changed retry, stale generation/epoch, missing consumer or overlapping target"
+            "description": "Changed retry, stale generation, missing consumer or overlapping target"
           },
           "412": {
             "description": "Revision mismatch"
@@ -92,13 +92,13 @@
             "description": "Invalid general API credential"
           },
           "403": {
-            "description": "Plugin role, raw permission, or ownership denied"
+            "description": "Access level, raw permission, or ownership denied"
           },
           "404": {
             "description": "Resource absent/expired"
           },
           "409": {
-            "description": "Changed retry, stale generation/epoch, missing consumer or overlapping target"
+            "description": "Changed retry, stale generation, missing consumer or overlapping target"
           },
           "412": {
             "description": "Revision mismatch"
@@ -161,13 +161,13 @@
             "description": "Invalid general API credential"
           },
           "403": {
-            "description": "Plugin role, raw permission, or ownership denied"
+            "description": "Access level, raw permission, or ownership denied"
           },
           "404": {
             "description": "Resource absent/expired"
           },
           "409": {
-            "description": "Changed retry, stale generation/epoch, missing consumer or overlapping target"
+            "description": "Changed retry, stale generation, missing consumer or overlapping target"
           },
           "412": {
             "description": "Revision mismatch"
@@ -215,13 +215,13 @@
             "description": "Invalid general API credential"
           },
           "403": {
-            "description": "Plugin role, raw permission, or ownership denied"
+            "description": "Access level, raw permission, or ownership denied"
           },
           "404": {
             "description": "Resource absent/expired"
           },
           "409": {
-            "description": "Changed retry, stale generation/epoch, missing consumer or overlapping target"
+            "description": "Changed retry, stale generation, missing consumer or overlapping target"
           },
           "412": {
             "description": "Revision mismatch"
@@ -254,10 +254,10 @@
     },
     "/v1/channels/{id}/acks": {
       "post": {
-        "summary": "Owner explicitly accepts a count from the offered batch",
+        "summary": "Owner frees a stored batch; a batch that is not pending is a no-op",
         "responses": {
           "204": {
-            "description": "Owner explicitly accepts a count from the offered batch"
+            "description": "Owner frees a stored batch; a batch that is not pending is a no-op"
           },
           "400": {
             "description": "Malformed request"
@@ -266,13 +266,13 @@
             "description": "Invalid general API credential"
           },
           "403": {
-            "description": "Plugin role, raw permission, or ownership denied"
+            "description": "Access level, raw permission, or ownership denied"
           },
           "404": {
             "description": "Resource absent/expired"
           },
           "409": {
-            "description": "Changed retry, stale generation/epoch, missing consumer or overlapping target"
+            "description": "Changed retry, stale generation, missing consumer or overlapping target"
           },
           "412": {
             "description": "Revision mismatch"
@@ -324,13 +324,13 @@
             "description": "Invalid general API credential"
           },
           "403": {
-            "description": "Plugin role, raw permission, or ownership denied"
+            "description": "Access level, raw permission, or ownership denied"
           },
           "404": {
             "description": "Resource absent/expired"
           },
           "409": {
-            "description": "Changed retry, stale generation/epoch, missing consumer or overlapping target"
+            "description": "Changed retry, stale generation, missing consumer or overlapping target"
           },
           "412": {
             "description": "Revision mismatch"
@@ -359,11 +359,48 @@
       }
     },
     "/v1/captures": {
+      "get": {
+        "summary": "Running operations: the caller's own, or every owner's with admin access",
+        "responses": {
+          "200": {
+            "description": "Running operations: the caller's own, or every owner's with admin access",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "items"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "maxItems": 32,
+                      "items": {
+                        "$ref": "#/components/schemas/RunningOperation"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid general API credential"
+          },
+          "403": {
+            "description": "Access level, raw permission, or ownership denied"
+          },
+          "503": {
+            "description": "Plugin, host, database, or admission unavailable"
+          }
+        }
+      },
       "post": {
-        "summary": "Admin reserves fixed target generations before dispatch; admission is not activation",
+        "summary": "Caller with write access reserves fixed target generations before dispatch; admission is not activation",
         "responses": {
           "202": {
-            "description": "Admin reserves fixed target generations before dispatch; admission is not activation",
+            "description": "Caller with write access reserves fixed target generations before dispatch; admission is not activation",
             "content": {
               "application/json": {
                 "schema": {
@@ -379,13 +416,13 @@
             "description": "Invalid general API credential"
           },
           "403": {
-            "description": "Plugin role, raw permission, or ownership denied"
+            "description": "Access level, raw permission, or ownership denied"
           },
           "404": {
             "description": "Resource absent/expired"
           },
           "409": {
-            "description": "Changed retry, stale generation/epoch, missing consumer or overlapping target"
+            "description": "Changed retry, stale generation, missing consumer or overlapping target"
           },
           "412": {
             "description": "Revision mismatch"
@@ -414,10 +451,10 @@
     },
     "/v1/captures/{id}": {
       "get": {
-        "summary": "Owner reconciles durable operation metadata",
+        "summary": "Owner, or admin access, reconciles durable operation metadata",
         "responses": {
           "200": {
-            "description": "Owner reconciles durable operation metadata",
+            "description": "Owner, or admin access, reconciles durable operation metadata",
             "content": {
               "application/json": {
                 "schema": {
@@ -433,13 +470,13 @@
             "description": "Invalid general API credential"
           },
           "403": {
-            "description": "Plugin role, raw permission, or ownership denied"
+            "description": "Access level, raw permission, or ownership denied"
           },
           "404": {
             "description": "Resource absent/expired"
           },
           "409": {
-            "description": "Changed retry, stale generation/epoch, missing consumer or overlapping target"
+            "description": "Changed retry, stale generation, missing consumer or overlapping target"
           },
           "412": {
             "description": "Revision mismatch"
@@ -469,10 +506,10 @@
     },
     "/v1/captures/{id}/stop": {
       "post": {
-        "summary": "Owner withdraws desired state; reservations remain until terminal ACK or expiry guard",
+        "summary": "Owner, or admin access, withdraws desired state; reservations remain until terminal ACK or expiry guard",
         "responses": {
           "202": {
-            "description": "Owner withdraws desired state; reservations remain until terminal ACK or expiry guard",
+            "description": "Owner, or admin access, withdraws desired state; reservations remain until terminal ACK or expiry guard",
             "content": {
               "application/json": {
                 "schema": {
@@ -488,13 +525,13 @@
             "description": "Invalid general API credential"
           },
           "403": {
-            "description": "Plugin role, raw permission, or ownership denied"
+            "description": "Access level, raw permission, or ownership denied"
           },
           "404": {
             "description": "Resource absent/expired"
           },
           "409": {
-            "description": "Changed retry, stale generation/epoch, missing consumer or overlapping target"
+            "description": "Changed retry, stale generation, missing consumer or overlapping target"
           },
           "412": {
             "description": "Revision mismatch"
@@ -533,7 +570,7 @@
     },
     "/v1/metrics": {
       "get": {
-        "summary": "Reader/admin reads fixed-cardinality in-memory plugin metric aggregates",
+        "summary": "Any granted caller reads fixed-cardinality in-memory plugin metric aggregates",
         "responses": {
           "403": {
             "description": "Reader/admin required"
@@ -746,6 +783,7 @@
           "id",
           "generation",
           "credential_id",
+          "link",
           "identity",
           "authority_id",
           "plugin_instance"
@@ -770,6 +808,9 @@
             "pattern": "^[0-9a-f]{32}$",
             "description": "Connected fleet agent uniquely linked by credential and pod identity; absent while unlinked or ambiguous."
           },
+          "link": {
+            "$ref": "#/components/schemas/PeerLink"
+          },
           "identity": {
             "$ref": "#/components/schemas/Identity"
           },
@@ -780,6 +821,25 @@
           "plugin_instance": {
             "type": "string",
             "pattern": "^[0-9a-f]{32}$"
+          }
+        }
+      },
+      "PeerLink": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "linked",
+              "no_match",
+              "ambiguous"
+            ],
+            "description": "How linking the peer to a fleet agent stands. pending: no attempt has finished yet. linked: one connected agent matches (see agent_id). no_match: none matches. ambiguous: more than one does. The plugin retries an unlinked peer with a backoff from 2 s to 60 s and re-resolves a linked one every minute; a failed host call leaves the state as it was."
           }
         }
       },
@@ -807,7 +867,8 @@
         "required": [
           "peer_id",
           "generation",
-          "state"
+          "state",
+          "delivery"
         ],
         "properties": {
           "peer_id": {
@@ -837,6 +898,9 @@
           },
           "stats": {
             "$ref": "#/components/schemas/TargetStats"
+          },
+          "delivery": {
+            "$ref": "#/components/schemas/TargetDelivery"
           }
         }
       },
@@ -875,6 +939,30 @@
               "type": "integer",
               "minimum": 1
             }
+          }
+        }
+      },
+      "TargetDelivery": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "What reached the plugin from this target. Dropped records are part of the received ones: a full buffer, a batch older than 10 s, or a consumer that is gone. Any drop makes the capture incomplete. Live while the operation runs and saved with each state change.",
+        "required": [
+          "received_records",
+          "dropped_records",
+          "dropped_batches"
+        ],
+        "properties": {
+          "received_records": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "dropped_records": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "dropped_batches": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },
@@ -1176,6 +1264,88 @@
           }
         }
       },
+      "RunningOperation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "owner",
+          "id",
+          "state",
+          "revision",
+          "expires_at",
+          "targets",
+          "authority_id"
+        ],
+        "properties": {
+          "owner": {
+            "type": "string",
+            "description": "Fleet credential that owns the operation"
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "state": {
+            "enum": [
+              "starting",
+              "active",
+              "stopping",
+              "completed",
+              "stopped",
+              "failed",
+              "expired",
+              "interrupted"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TargetOutcome"
+            },
+            "minItems": 1,
+            "maxItems": 16
+          },
+          "authority_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "acting_for": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id"
+            ],
+            "description": "The user the owning fleet credential acted for, from fleet's X-Fleet-Acting-* headers on create. Attribution only; it grants nothing.",
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "name": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "request_id": {
+                "type": "string",
+                "maxLength": 128
+              }
+            }
+          }
+        },
+        "description": "An operation in a list, with the credential that owns it"
+      },
       "ChannelRequest": {
         "type": "object",
         "additionalProperties": false,
@@ -1296,17 +1466,12 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "batch_id",
-          "accepted_records"
+          "batch_id"
         ],
         "properties": {
           "batch_id": {
             "type": "string",
             "pattern": "^[0-9a-f]{32}$"
-          },
-          "accepted_records": {
-            "type": "integer",
-            "minimum": 0
           }
         }
       },

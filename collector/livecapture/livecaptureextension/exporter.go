@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/ptrace"
+	"go.uber.org/zap"
 )
 
 // delivery outlives sessions. ensure prepares the given signals before a
@@ -62,7 +63,11 @@ func (d *otlpDelivery) ensure(signals []Signal) error {
 	}
 	m := d.manager
 	factory := otlpexporter.NewFactory()
-	settings := exporter.Settings{ID: component.NewIDWithName(component.MustNewType("otlp"), "livecapture"), TelemetrySettings: m.settings.TelemetrySettings, BuildInfo: m.settings.BuildInfo}
+	// The exporter logs every failed export with its error. A lost capture is
+	// cheap and counted per session, so it must not reach the Collector log.
+	telemetrySettings := m.settings.TelemetrySettings
+	telemetrySettings.Logger = zap.NewNop()
+	settings := exporter.Settings{ID: component.NewIDWithName(component.MustNewType("otlp"), "livecapture"), TelemetrySettings: telemetrySettings, BuildInfo: m.settings.BuildInfo}
 	config := d.config()
 	// Exporters live as long as the extension, not the starting request.
 	ctx := context.Background()
@@ -122,10 +127,8 @@ func (d *otlpDelivery) config() otlpexporter.Config {
 	queue.Batch = configoptional.Some(batch)
 	config.QueueConfig = configoptional.Some(queue)
 	config.TimeoutConfig.Timeout = time.Second
-	config.RetryConfig.Enabled = true
-	config.RetryConfig.InitialInterval = 100 * time.Millisecond
-	config.RetryConfig.MaxInterval = time.Second
-	config.RetryConfig.MaxElapsedTime = 5 * time.Second
+	// Send and forget: a failed export is dropped, never retried.
+	config.RetryConfig.Enabled = false
 	return config
 }
 
@@ -139,8 +142,11 @@ func (d *otlpDelivery) shutdown(ctx context.Context) error {
 		}
 	}
 	d.mu.Unlock()
-	// The stock queue ignores the context while draining, so wait for each
-	// signal concurrently and give up at the deadline.
+	// The Collector's shutdown context has no deadline, and the stock queue
+	// ignores it while draining, so wait for each signal concurrently and
+	// give up after drainLimit.
+	ctx, cancel := context.WithTimeout(ctx, drainLimit)
+	defer cancel()
 	results := make(chan error, len(components))
 	for _, c := range components {
 		go func() { results <- c.Shutdown(ctx) }()

@@ -24,11 +24,11 @@ if [ -n "$unformatted" ]; then
     echo "Run gofmt on: $unformatted" >&2
     exit 1
 fi
-packages='./internal/fleet/fleet ./internal/fleet/inventory ./internal/fleet/auth ./pluginsdk ./pluginsdk/metrics ./internal/fleet/plugins ./internal/fleet/api ./internal/fleet/gateway ./internal/fleet/app ./internal/fleet/postgres ./internal/fleet/agentsimulator'
+packages='./internal/fleet/fleet ./internal/fleet/inventory ./internal/fleet/auth ./pluginsdk ./pluginsdk/metrics ./internal/fleet/plugins ./internal/fleet/api ./internal/fleet/gateway ./internal/fleet/app ./internal/fleet/postgres ./internal/fleet/agentsimulator ./internal/fleet/translog ./cmd/linea-fleet'
 # shellcheck disable=SC2086  # the package list is a fixed, space-free word list
 go test -p 1 $packages || { echo 'Package tests failed' >&2; exit 1; }
 # shellcheck disable=SC2086
-go vet -p 1 ./cmd/linea-fleet $packages || { echo 'Go vet failed' >&2; exit 1; }
+go vet -p 1 $packages || { echo 'Go vet failed' >&2; exit 1; }
 go build -p 1 -o "bin/linea-fleet$exe" ./cmd/linea-fleet || { echo 'Build failed' >&2; exit 1; }
 go vet -p 1 ./cmd/linea-fleet-simulator || { echo 'Simulator vet failed' >&2; exit 1; }
 go build -p 1 -o "bin/agent-simulator$exe" ./cmd/linea-fleet-simulator || { echo 'Simulator build failed' >&2; exit 1; }

@@ -191,6 +191,6 @@ message SessionStats {
   int64 enqueued_bytes = 3;
   int64 filter_errors = 4;
   // Records dropped by reason: queue_full, rate_bytes, rate_records,
-  // record_size, sampling, stopping, delivery, budget.
+  // record_size, sampling, stopping, delivery, budget, time.
   map<string, int64> dropped = 5;
 }

@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -84,18 +83,17 @@ func (c *Client) Request(ctx context.Context, method, path string, body, out any
 }
 
 type Summary struct {
-	Records  map[string]int64 `json:"records"`
-	Accepted int64            `json:"accepted_records"`
-	Rejected int64            `json:"rejected_records"`
-	Batches  int64            `json:"batches"`
+	Records map[string]int64 `json:"records"`
+	Batches int64            `json:"batches"`
 }
 
-func (c *Client) Consume(ctx context.Context, channel string, ratio float64, verifyRedaction bool) (Summary, error) {
+// Consume reads and acknowledges batches until ctx ends. Nothing retries a
+// delivery, so a batch arrives at most once.
+func (c *Client) Consume(ctx context.Context, channel string, verifyRedaction bool) (Summary, error) {
 	result := Summary{Records: map[string]int64{"traces": 0, "logs": 0, "metrics": 0}}
-	if !pluginsdk.ValidUID(channel) || math.IsNaN(ratio) || ratio < 0 || ratio > 1 {
+	if !pluginsdk.ValidUID(channel) {
 		return result, errors.New("invalid consumer options")
 	}
-	seen := map[string]capture.Acknowledgement{}
 	lastSuccess := time.Now()
 	for {
 		select {
@@ -132,26 +130,16 @@ func (c *Client) Consume(ctx context.Context, channel string, ratio float64, ver
 		if !pluginsdk.ValidUID(envelope.AuthorityID) || !pluginsdk.ValidUID(envelope.PluginInstance) || !pluginsdk.ValidUID(envelope.PluginEpoch) || !pluginsdk.ValidUID(envelope.ID) || envelope.Encoding != "otlp-protobuf" || envelope.Records <= 0 || len(envelope.Data) > 256<<10 {
 			return result, errors.New("invalid delivery envelope")
 		}
-		ack, duplicate := seen[envelope.ID]
-		if !duplicate {
-			if len(seen) >= 1024 {
-				return result, errors.New("consumer receipt bound reached")
-			}
-			count, err := inspect(envelope.Signal, envelope.Data, verifyRedaction)
-			if err != nil || count != envelope.Records {
-				return result, errors.New("capture payload validation failed")
-			}
-			ack = capture.Acknowledgement{ID: envelope.ID, Accepted: int64(math.Floor(float64(count) * ratio))}
-			seen[envelope.ID] = ack
-			result.Records[envelope.Signal] += count
-			result.Accepted += ack.Accepted
-			result.Rejected += count - ack.Accepted
-			result.Batches++
+		count, err := inspect(envelope.Signal, envelope.Data, verifyRedaction)
+		if err != nil || count != envelope.Records {
+			return result, errors.New("capture payload validation failed")
 		}
-		if _, err := c.Request(ctx, "POST", "v1/channels/"+channel+"/acks", ack, nil); err != nil {
+		if _, err := c.Request(ctx, "POST", "v1/channels/"+channel+"/acks", capture.Acknowledgement{ID: envelope.ID}, nil); err != nil {
 			return result, err
 		}
-		if !duplicate && c.OnReceipt != nil {
+		result.Records[envelope.Signal] += count
+		result.Batches++
+		if c.OnReceipt != nil {
 			c.OnReceipt(result)
 		}
 	}

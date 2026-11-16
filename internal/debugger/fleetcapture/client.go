@@ -35,8 +35,9 @@ const (
 type Config struct {
 	// Endpoint is fleet's management API base URL, such as https://fleet:8080.
 	Endpoint string
-	// Token is a fleet admin credential. Captures and channels are owned by
-	// it, so every debugger caller shares them.
+	// Token is a fleet operator credential with write access to the live
+	// capture plugin and delegate, so requests can name the user they are
+	// made for (WithActing).
 	Token string
 	// AllowHTTP permits plaintext to a non-loopback host on a protected network.
 	AllowHTTP bool
@@ -55,6 +56,9 @@ type Error struct {
 	Status  int
 	Code    string
 	Message string
+	// Affected is how many connected agents a group change refused with
+	// too_many_affected would give a new config.
+	Affected int
 }
 
 func (e *Error) Error() string {
@@ -187,9 +191,12 @@ func refusal(status int, data []byte) error {
 		Error json.RawMessage `json:"error"`
 	}
 	if json.Unmarshal(data, &structured) == nil && len(structured.Error) > 0 {
-		var detail struct{ Code, Message string }
+		var detail struct {
+			Code, Message string
+			Affected      int
+		}
 		if json.Unmarshal(structured.Error, &detail) == nil {
-			e.Code, e.Message = detail.Code, detail.Message
+			e.Code, e.Message, e.Affected = detail.Code, detail.Message, detail.Affected
 		} else {
 			_ = json.Unmarshal(structured.Error, &e.Message)
 		}
@@ -246,8 +253,7 @@ func (c *Client) Next(ctx context.Context, channel string) (*Envelope, error) {
 	return &e, nil
 }
 
-// Acknowledge reports a batch's accepted records. Repeating an identical
-// acknowledgement is safe.
+// Acknowledge frees a handled batch. Repeating it is safe.
 func (c *Client) Acknowledge(ctx context.Context, channel string, ack Ack) error {
 	_, err := c.do(ctx, http.MethodPost, c.pluginURL("v1/channels/"+url.PathEscape(channel)+"/acks", nil), nil, ack, nil)
 	return err

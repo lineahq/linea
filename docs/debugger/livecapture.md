@@ -100,7 +100,7 @@ linea-server --config config.yaml --mcp --fleet-url https://fleet.example:8080 -
 | Helm chart | Sets these flags from `fleet.url` and `fleet.existingSecret` (a Secret with the key `token`); with `fleet.deploy.enabled` it runs fleet and the plugin in the release and connects them on its own ([Fleet and live capture](deploy-kubernetes.md#fleet-and-live-capture)). |
 | Compose stack | Has no fleet connection; the overlay `compose.fleet.yaml` adds fleet and the plugin on the stack's PostgreSQL and sets these flags ([Fleet and live capture](deploy-compose.md#fleet-and-live-capture)). |
 | Token file | One fleet API token, at most 4 KiB, surrounding whitespace trimmed. Read once at startup; never accepted as an argument, logged or returned in errors. |
-| Credential | Needs fleet admin permission to create captures and channels; a reader credential can only discover. |
+| Credential | A fleet operator credential with `livecapture=write` plugin access creates captures and channels, and with `delegate` names the user each request is made for; without plugin access it can only discover inventory. |
 | Transport | HTTPS unless the fleet URL is loopback. On a protected network `--fleet-allow-http` permits plaintext HTTP to another host. |
 | Changes | Changing the fleet or token needs a restart. |
 | Without `--fleet-url` | Inventory reports `enabled: false`, capture creation is refused and recorded captures stay readable. |
@@ -243,7 +243,7 @@ linea capture stop --session <id> --server http://127.0.0.1:7070
 | Level | States |
 | --- | --- |
 | Capture `state` (fleet's operation state) | `starting`, `active`, `stopping`, then terminal `stopped`, `completed`, `expired`, `failed`, `interrupted`. The debugger adds terminal `uncertain` when it loses track of a capture fleet has not reported finished. |
-| Target | `pending`, `active`, `stopping`, then terminal `completed`, `expired`, `limit_reached`, `failed`, `disabled`, `unknown`. Fleet's per-target stats (selected and enqueued records, filter errors) appear when reported. |
+| Target | `pending`, `active`, `stopping`, then terminal `completed`, `expired`, `limit_reached`, `failed`, `disabled`, `unknown`. Fleet's per-target stats (selected and enqueued records, filter errors) appear when reported, and its `delivery`: records fleet received from the Collector and the records and batches it dropped before the debugger stored them. |
 
 - Targets of an `uncertain` capture become `unknown`, as does a target fleet
   leaves unfinished in an ended operation (for example after `interrupted`):
@@ -252,11 +252,13 @@ linea capture stop --session <id> --server http://127.0.0.1:7070
 
 | Field | Values |
 | --- | --- |
-| `reason` | Fleet's code (`absolute_expiry`, `collector_rejected`, `peer_disconnected`, `delivery_capacity`, `receipt_uncertain`; see [throughput limit](#throughput-limit)), or the debugger's loss reason: `capture_channel_lost`, `fleet_no_longer_reports_capture`, `no_terminal_state_from_fleet_after_expiry`, `platform_restarted; capture_not_resumed` |
+| `reason` | Fleet's code (`absolute_expiry`, `collector_rejected`, `peer_disconnected`, `consumer_unavailable`), or the debugger's loss reason: `capture_channel_lost`, `fleet_no_longer_reports_capture`, `no_terminal_state_from_fleet_after_expiry`, `platform_restarted; capture_not_resumed` |
 | `stop_reason` | Why the debugger asked fleet to stop: `stop_requested`, `capture_storage_error`, `capture_storage_limit`, `capture_processing_limit`, `capture_catalog_changed` |
 
-The web client turns these codes into sentences and marks a capture with failed
-or unknown targets as incomplete.
+The web client turns these codes into sentences and marks a capture as
+incomplete when a target failed or is unknown, or when the Collectors or fleet
+lost records on the way. Sampling, the record limit and records arriving
+while stopping are not losses.
 
 - Stop asks fleet to stop and waits for its terminal report; terminal status does
   not prove that every record was delivered.
@@ -309,6 +311,7 @@ batches fleet delivers on it; there is no OTLP listener.
 | Retention | None. A capture is kept until it is deleted, bounded by `store.storage_limit`, shared with ordinary runs and sources. Only terminal captures can be deleted. |
 | Storage | Immutable segments in the platform's store (metadata in PostgreSQL, segments in object storage); restart recovers committed records and frozen metadata. A service without any repository keeps captures memory-only and reports `lost_on_restart` after a restart. |
 | Raw points | Stored exactly as the source sent them, unencrypted like any capture. "Redacted" is the Collector's declared point classification, not a guarantee that telemetry contains no sensitive values. |
+| Filters | Run on the Collector before redaction, so a capture on a redacted point can still answer whether a hidden value matches its filter. `capture.start` is therefore a stronger permission than `capture.read`. |
 
 See [live capture internals](../internals/debugger-livecapture.md) and
 [artifact storage](../internals/artifact-storage.md#captures) for the details.
@@ -346,14 +349,12 @@ Above the limit nothing is spooled to disk:
 - The Collector queues copies, then drops them. Drops are counted per target in
   its `dropped` stats, by reason such as `queue_full`, `rate_bytes` and
   `rate_records`.
-- The plugin holds at most 16 batches and 1 MiB per capture. When that is full
-  it refuses the delivery and withdraws the capture with the reason
-  `delivery_capacity`.
-- A batch not acknowledged within 2 seconds withdraws the capture with the
-  reason `receipt_uncertain`.
+- The plugin holds at most 64 batches and 2 MiB per capture, 32 MiB in all.
+  A batch that does not fit, or that the debugger has not read within 10
+  seconds, is dropped and counted on its target's `delivery`
+  (`dropped_records`, `dropped_batches`). The capture goes on.
 
-Records already stored stay readable. A capture withdrawn this way is
-incomplete.
+A capture with drops is incomplete; the records it stored stay readable.
 
 For more volume, capture less: a `filter`, a `sampling` rate, lower `limits`,
 fewer points, signals or Collectors, or a shorter `duration_seconds`.

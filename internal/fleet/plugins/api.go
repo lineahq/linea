@@ -34,7 +34,8 @@ func validAPIPath(path string) bool {
 	return true
 }
 
-// ServeAPI routes opaque bounded JSON to an operator-granted plugin API.
+// ServeAPI routes opaque bounded JSON to an operator-registered plugin API,
+// for a caller with a grant on that plugin.
 // It deliberately has no knowledge of any plugin's routes or domain types.
 func (r *Registry) ServeAPI(w http.ResponseWriter, request *http.Request, id, path string, caller auth.Principal) {
 	started := time.Now()
@@ -56,7 +57,8 @@ func (r *Registry) ServeAPI(w http.ResponseWriter, request *http.Request, id, pa
 		fail(405)
 		return
 	}
-	if caller.ID == "" || (caller.Role != "reader" && caller.Role != "operator" && caller.Role != "admin") {
+	access := caller.Access(id)
+	if caller.ID == "" || !pluginsdk.ValidAccess(access) {
 		fail(403)
 		return
 	}
@@ -65,7 +67,7 @@ func (r *Registry) ServeAPI(w http.ResponseWriter, request *http.Request, id, pa
 		fail(404)
 		return
 	}
-	if !e.ready() || r.ctx.Err() != nil {
+	if !r.ready(e) || r.ctx.Err() != nil {
 		fail(503)
 		return
 	}
@@ -124,7 +126,7 @@ func (r *Registry) ServeAPI(w http.ResponseWriter, request *http.Request, id, pa
 	upstream.Header.Set("Authorization", "Bearer "+e.config.serviceToken)
 	upstream.Header.Set("Content-Type", "application/json")
 	upstream.Header.Set(pluginsdk.CallerIDHeader, caller.ID)
-	upstream.Header.Set(pluginsdk.CallerRoleHeader, caller.Role)
+	upstream.Header.Set(pluginsdk.CallerAccessHeader, access)
 	// Only the validated acting-for value is forwarded, never client copies.
 	fleet.ActingFrom(request.Context()).Set(upstream.Header)
 	upstream.Header.Set(pluginsdk.InstanceHeader, before.InstanceID)
@@ -142,6 +144,14 @@ func (r *Registry) ServeAPI(w http.ResponseWriter, request *http.Request, id, pa
 		return
 	}
 	defer response.Body.Close()
+	if response.StatusCode == pluginsdk.StatusMisdirected {
+		// The plugin refused the instance or epoch we sent. Never forward it:
+		// to the caller it is a transient 503 while the state is refreshed.
+		r.refresh(e)
+		w.Header().Set("Retry-After", "1")
+		fail(503)
+		return
+	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
 	if err != nil || len(data) > 1<<20 || e.snapshot().Epoch != before.Epoch || ctx.Err() != nil {
 		fail(503)

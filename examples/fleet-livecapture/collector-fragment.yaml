@@ -2,8 +2,9 @@
 # and exporters; insert capture/egress at the intended named capture point in
 # each selected pipeline. Requires the distribution's existing capture components.
 #
-# The livecapture extension is unchanged: it presents the Collector's fleet
-# agent credential to the plugin. That credential needs the label
+# The livecapture extension is unchanged: it presents the plugin token of the
+# Collector's fleet agent credential (plugin_token in the issue response) to
+# the plugin; OpAMP uses the credential's token. The credential needs the label
 # capture=<collector_group>[,...] (or *). To address the Collector by fleet
 # agent, group or selector, report the same pod identity over OpAMP; the
 # plugin links the two when exactly one connected agent matches.
@@ -29,13 +30,13 @@ extensions:
     control:
       endpoint: ${env:OTEL_CAPTURE_CONTROL_ENDPOINT}
       headers:
-        Authorization: "Bearer ${env:LINEA_FLEET_AGENT_TOKEN}"
+        Authorization: "Bearer ${env:LINEA_FLEET_PLUGIN_TOKEN}"
       tls:
         ca_file: /certs/capture-ca.pem
     delivery:
       endpoint: ${env:OTEL_CAPTURE_DELIVERY_ENDPOINT}
       headers:
-        Authorization: "Bearer ${env:LINEA_FLEET_AGENT_TOKEN}"
+        Authorization: "Bearer ${env:LINEA_FLEET_PLUGIN_TOKEN}"
       tls:
         ca_file: /certs/capture-ca.pem
 processors:

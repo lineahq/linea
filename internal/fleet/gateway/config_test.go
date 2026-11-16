@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -66,7 +67,7 @@ func (s *source) assign(t *testing.T, agentID string, version int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	digest := sha256.Sum256([]byte(s.bodies[version]))
-	target, err := configmgmt.NewTarget(configmgmt.Assignment{ID: "a1", Name: "base", ConfigID: "c1", Version: version, Layer: 10}, digest[:], "", []string{agentID})
+	target, err := configmgmt.NewTarget(configmgmt.Assignment{ID: "a1", Name: "base", ConfigID: "c1", Version: version, Layer: 10, CredentialLabels: map[string]string{"env": "prod"}}, digest[:], "", []string{agentID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,9 +212,14 @@ func (a *agent) quiet(caps uint64) {
 
 func serve(t *testing.T, src *source, hs *holds) (*Gateway, string, string) {
 	t.Helper()
+	return serveLimited(t, src, hs, 1<<20)
+}
+
+func serveLimited(t *testing.T, src *source, hs *holds, maxMessageBytes int64) (*Gateway, string, string) {
+	t.Helper()
 	token := strings.Repeat("a", 32)
 	a, _ := auth.New(token)
-	g, err := New(fleet.NewStore(4), a, 4, 1<<20)
+	g, err := New(fleet.NewStore(4), a, 4, maxMessageBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +233,7 @@ func TestConfigDeliveryAndFailureHold(t *testing.T) {
 	uid := bytes.Repeat([]byte{9}, 16)
 	id := hex.EncodeToString(uid)
 	src := &source{bodies: map[int]string{1: "receivers: {otlp: {}}\n", 2: "receivers: {otlp: {protocols: {grpc: {}}}}\n"},
-		credentials: map[string]map[string]string{"memory-agent": nil}}
+		credentials: map[string]map[string]string{"memory-agent": {"env": "prod"}}}
 	src.assign(t, id, 1)
 	hs := &holds{held: map[string]string{}}
 	g, url, token := serve(t, src, hs)
@@ -283,7 +289,7 @@ func TestConfigDeliveryAndFailureHold(t *testing.T) {
 
 func TestReconnectWaitsForFullStateBeforeResending(t *testing.T) {
 	uid := bytes.Repeat([]byte{7}, 16)
-	src := &source{bodies: map[int]string{1: "receivers: {otlp: {}}\n"}, credentials: map[string]map[string]string{"memory-agent": nil}}
+	src := &source{bodies: map[int]string{1: "receivers: {otlp: {}}\n"}, credentials: map[string]map[string]string{"memory-agent": {"env": "prod"}}}
 	src.assign(t, hex.EncodeToString(uid), 1)
 	g, url, token := serve(t, src, &holds{held: map[string]string{}})
 	a := &agent{t: t, g: g, c: dial(t, url, token), uid: uid}
@@ -306,7 +312,7 @@ func TestReconnectWaitsForFullStateBeforeResending(t *testing.T) {
 func TestHoldClearedThroughTheAPIIsRetried(t *testing.T) {
 	uid := bytes.Repeat([]byte{6}, 16)
 	id := hex.EncodeToString(uid)
-	src := &source{bodies: map[int]string{1: "receivers: {otlp: {}}\n"}, credentials: map[string]map[string]string{"memory-agent": nil}}
+	src := &source{bodies: map[int]string{1: "receivers: {otlp: {}}\n"}, credentials: map[string]map[string]string{"memory-agent": {"env": "prod"}}}
 	src.assign(t, id, 1)
 	hs := &holds{held: map[string]string{}}
 	g, url, token := serve(t, src, hs)
@@ -343,7 +349,7 @@ func TestConfigDeliveryRequiresOptIn(t *testing.T) {
 	a.quiet(acceptsRemoteConfig)
 	// With the opt-in, an agent that does not accept remote config gets none.
 	src.mu.Lock()
-	src.credentials = map[string]map[string]string{"memory-agent": nil}
+	src.credentials = map[string]map[string]string{"memory-agent": {"env": "prod"}}
 	src.mu.Unlock()
 	if a.report(1, nil).RemoteConfig != nil {
 		t.Fatal("config sent to an agent without AcceptsRemoteConfig")
@@ -371,15 +377,28 @@ func build(hash []byte, receivers ...string) *protobufs.AvailableComponents {
 	return ac
 }
 
+// buildHash is the Collector's OpAMP extension hash of a build that build
+// describes: these receivers and the debug exporter, without modules.
+func buildHash(receivers ...string) []byte {
+	sorted := slices.Sorted(slices.Values(receivers))
+	s := "receiver:"
+	for _, r := range sorted {
+		s += r + "=;"
+	}
+	s += "processor:exporter:debug=;extension:connector:"
+	sum := sha256.Sum256([]byte(s))
+	return sum[:]
+}
+
 func TestIncompatibleBuildIsWithheld(t *testing.T) {
 	uid, other := bytes.Repeat([]byte{5}, 16), bytes.Repeat([]byte{4}, 16)
 	src := &source{bodies: map[int]string{1: "receivers: {otlp: {}}\n", 2: "receivers: {filelog: {}}\n"},
-		credentials: map[string]map[string]string{"memory-agent": nil}}
+		credentials: map[string]map[string]string{"memory-agent": {"env": "prod"}}}
 	src.assign(t, hex.EncodeToString(uid), 1)
 	hs := &holds{held: map[string]string{}}
 	g, url, token := serve(t, src, hs)
 	a := &agent{t: t, g: g, c: dial(t, url, token), uid: uid}
-	hash := []byte{0xab, 0xcd}
+	hash := buildHash("filelog")
 	asked := uint64(protobufs.ServerToAgentFlags_ServerToAgentFlags_ReportAvailableComponents)
 
 	// An unknown build is asked for in full, and nothing is sent until the
@@ -393,7 +412,7 @@ func TestIncompatibleBuildIsWithheld(t *testing.T) {
 	if r := a.exchange(&protobufs.AgentToServer{Capabilities: reportsComponents, AvailableComponents: build(hash, "filelog")}); r.RemoteConfig != nil || r.Flags&asked != 0 {
 		t.Fatal("config sent to an incompatible build")
 	}
-	if set, _ := hs.ComponentSet(context.Background(), "abcd"); len(set["receivers"]) != 1 || set["receivers"][0] != "filelog" || set["exporters"][0] != "debug" {
+	if set, _ := hs.ComponentSet(context.Background(), hex.EncodeToString(hash)); len(set["receivers"]) != 1 || set["receivers"][0] != "filelog" || set["exporters"][0] != "debug" {
 		t.Fatalf("component set not stored: %v", set)
 	}
 	a.quiet(reportsComponents)
@@ -414,5 +433,120 @@ func TestIncompatibleBuildIsWithheld(t *testing.T) {
 	src.assign(t, hex.EncodeToString(uid), 2)
 	if r := a.pushed(); string(r.RemoteConfig.Config.ConfigMap["10-base"].Body) != src.bodies[2] {
 		t.Fatal("compatible config not delivered")
+	}
+}
+
+// TestClearedHoldOwesOneRetry covers an agent that failed the desired config
+// itself: clearing the hold sends it once more, a repeated failure (even an
+// identical report) holds it again, and a success leaves no hold.
+func TestClearedHoldOwesOneRetry(t *testing.T) {
+	const (
+		applying = protobufs.RemoteConfigStatuses_RemoteConfigStatuses_APPLYING
+		applied  = protobufs.RemoteConfigStatuses_RemoteConfigStatuses_APPLIED
+		failed   = protobufs.RemoteConfigStatuses_RemoteConfigStatuses_FAILED
+	)
+	cases := []struct {
+		name    string
+		answers []protobufs.RemoteConfigStatuses
+		held    bool
+	}{
+		{"retry fails with an identical report", []protobufs.RemoteConfigStatuses{failed}, true},
+		{"retry fails after applying", []protobufs.RemoteConfigStatuses{applying, failed}, true},
+		{"retry succeeds", []protobufs.RemoteConfigStatuses{applying, applied}, false},
+	}
+	for i, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			uid := bytes.Repeat([]byte{byte(20 + i)}, 16)
+			id := hex.EncodeToString(uid)
+			src := &source{bodies: map[int]string{1: "receivers: {otlp: {}}\n"}, credentials: map[string]map[string]string{"memory-agent": {"env": "prod"}}}
+			src.assign(t, id, 1)
+			hs := &holds{held: map[string]string{}}
+			g, url, token := serve(t, src, hs)
+			a := &agent{t: t, g: g, c: dial(t, url, token), uid: uid}
+			want := a.report(acceptsRemoteConfig, nil).RemoteConfig.ConfigHash
+			a.report(acceptsRemoteConfig, status(want, applying))
+			a.report(acceptsRemoteConfig, status(want, failed))
+			if hs.get(id) != hex.EncodeToString(want) {
+				t.Fatal("failed hash not held")
+			}
+
+			// The API clears the hold: the desired config is sent once more
+			// although the agent reports that very hash as failed.
+			hs.mu.Lock()
+			hs.held[id] = ""
+			hs.mu.Unlock()
+			n := g.config.sweeps.Load()
+			g.ConfigChanged(id)
+			waitFor(t, func() bool { return g.config.sweeps.Load() > n })
+			if r := read(t, a.c, 3*time.Second); r == nil || r.RemoteConfig == nil || !bytes.Equal(r.RemoteConfig.ConfigHash, want) {
+				t.Fatal("cleared hold did not send the desired config")
+			}
+			for _, s := range c.answers {
+				if a.report(acceptsRemoteConfig, status(want, s)).RemoteConfig != nil {
+					t.Fatal("the retry was sent a second time")
+				}
+			}
+			if got := hs.get(id) != ""; got != c.held {
+				t.Fatalf("hold set after the retry: %v, want %v", got, c.held)
+			}
+			// Nothing more is sent, now or on later sweeps.
+			a.quiet(acceptsRemoteConfig)
+		})
+	}
+}
+
+func TestUnverifiedBuildIsWithheld(t *testing.T) {
+	uid := bytes.Repeat([]byte{5}, 16)
+	src := &source{bodies: map[int]string{1: "receivers: {otlp: {}}\n"}, credentials: map[string]map[string]string{"memory-agent": {"env": "prod"}}}
+	src.assign(t, hex.EncodeToString(uid), 1)
+	hs := &holds{held: map[string]string{}}
+	g, url, token := serve(t, src, hs)
+	a := &agent{t: t, g: g, c: dial(t, url, token), uid: uid}
+	// The list claims the hash of a build with otlp but describes another:
+	// it is not stored, and nothing is sent while the build is unresolved.
+	hash := buildHash("otlp")
+	a.exchange(&protobufs.AgentToServer{Capabilities: reportsComponents, AvailableComponents: build(hash)})
+	if r := a.exchange(&protobufs.AgentToServer{Capabilities: reportsComponents, AvailableComponents: build(hash, "otlp", "filelog")}); r.RemoteConfig != nil {
+		t.Fatal("config sent to an unverified build")
+	}
+	if _, err := hs.ComponentSet(context.Background(), hex.EncodeToString(hash)); err == nil {
+		t.Fatal("a list that does not match its hash was stored")
+	}
+	a.quiet(reportsComponents)
+	if g.config.unmatched.Load() != 1 || g.config.unverified.Load() == 0 {
+		t.Fatalf("unmatched %d, unverified %d", g.config.unmatched.Load(), g.config.unverified.Load())
+	}
+}
+
+func TestUnmanagedCredentialResolvesNoBuild(t *testing.T) {
+	uid := bytes.Repeat([]byte{5}, 16)
+	src := &source{bodies: map[int]string{1: "receivers: {otlp: {}}\n"}}
+	src.assign(t, hex.EncodeToString(uid), 1)
+	hs := &holds{held: map[string]string{}}
+	g, url, token := serve(t, src, hs)
+	a := &agent{t: t, g: g, c: dial(t, url, token), uid: uid}
+	hash := buildHash("otlp")
+	asked := uint64(protobufs.ServerToAgentFlags_ServerToAgentFlags_ReportAvailableComponents)
+	if r := a.exchange(&protobufs.AgentToServer{Capabilities: reportsComponents, AvailableComponents: build(hash)}); r.Flags&asked != 0 {
+		t.Fatal("build asked of a credential without the opt-in")
+	}
+	a.exchange(&protobufs.AgentToServer{Capabilities: reportsComponents, AvailableComponents: build(hash, "otlp")})
+	if _, err := hs.ComponentSet(context.Background(), hex.EncodeToString(hash)); err == nil {
+		t.Fatal("component set stored for a credential without the opt-in")
+	}
+}
+
+// TestRemoteConfigAboveTheReceiveLimitIsSent covers the largest remote
+// config: it exceeds what agents may send and still reaches them.
+func TestRemoteConfigAboveTheReceiveLimitIsSent(t *testing.T) {
+	uid := bytes.Repeat([]byte{5}, 16)
+	body := "receivers: {otlp: {}}\n# " + strings.Repeat("x", 4096) + "\n"
+	src := &source{bodies: map[int]string{1: body}, credentials: map[string]map[string]string{"memory-agent": {"env": "prod"}}}
+	src.assign(t, hex.EncodeToString(uid), 1)
+	g, url, token := serveLimited(t, src, &holds{held: map[string]string{}}, 1024)
+	a := &agent{t: t, g: g, c: dial(t, url, token), uid: uid}
+	r := a.report(acceptsRemoteConfig, nil)
+	if r.RemoteConfig == nil || string(r.RemoteConfig.Config.ConfigMap["10-base"].Body) != body {
+		t.Fatal("remote config above the receive limit was not sent")
 	}
 }

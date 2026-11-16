@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/lineahq/linea/internal/fleetplugins/livecapture/translog"
 	"github.com/lineahq/linea/pluginsdk"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog/plogotlp"
@@ -13,22 +14,28 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// Delivery buffer bounds. The Collector sends and forgets: a batch that does
+// not fit, or waits longer than batchAge, is dropped and counted for its
+// target, never refused.
+const (
+	channelBytes   = 2 << 20
+	channelBatches = 64
+	pendingBytes   = 32 << 20
+	batchAge       = 10 * time.Second
+)
+
 type channel struct {
 	id, owner         string
 	expires, lastSeen time.Time
 	batches           []*batch
 	bytes             int
-	receipts          map[string]int64
 	closed            bool
 }
 type batch struct {
-	envelope  Envelope
-	offered   bool
-	done      chan struct{}
-	accepted  int64
-	finished  bool
-	uncertain bool
+	envelope Envelope
+	received time.Time
 }
+
 type ChannelInfo struct {
 	AuthorityID      string    `json:"authority_id"`
 	PluginInstance   string    `json:"plugin_instance"`
@@ -44,31 +51,59 @@ func (s *Server) NewChannel(ctx context.Context, owner string, expiry time.Time)
 		return ChannelInfo{}, ErrUnavailable
 	}
 	if expected, ok := ctx.Value(authorityContextKey{}).(string); ok && expected != s.epoch {
-		return ChannelInfo{}, ErrConflict
+		return ChannelInfo{}, ErrStaleAuthority
 	}
-	if !expiry.After(time.Now()) || expiry.After(time.Now().Add(5*time.Minute)) {
+	now := s.now()
+	if !expiry.After(now) || expiry.After(now.Add(5*time.Minute)) {
 		return ChannelInfo{}, ErrInvalid
 	}
-	if len(s.channels) >= 32 {
+	if len(s.channels) >= maxChannels || s.ownedChannelsLocked(owner) >= ownerLimit(s.config.MaxChannelsPerOwner, maxChannels) {
 		return ChannelInfo{}, ErrCapacity
 	}
-	c := &channel{id: pluginsdk.RandomID(), owner: owner, expires: expiry, lastSeen: time.Now(), receipts: map[string]int64{}}
+	c := &channel{id: pluginsdk.RandomID(), owner: owner, expires: expiry, lastSeen: now}
 	s.channels[c.id] = c
 	return ChannelInfo{AuthorityID: s.repo.AuthorityID(), PluginInstance: s.instance, ID: c.id, ExpiresAt: c.expires, HeartbeatSeconds: 5}, nil
 }
+
+// ownedChannelsLocked counts the owner's open channels.
+func (s *Server) ownedChannelsLocked(owner string) int {
+	n := 0
+	for _, c := range s.channels {
+		if c.owner == owner {
+			n++
+		}
+	}
+	return n
+}
+
+// ownerLimit is a per-owner limit; unset, it is the plugin's limit.
+func ownerLimit(set, plugin int) int {
+	if set == 0 {
+		return plugin
+	}
+	return set
+}
+
+// ownedLocked counts the owner's operations in memory.
+func (s *Server) ownedLocked(owner string) int {
+	n := 0
+	for _, a := range s.operations {
+		if a.op.Owner == owner {
+			n++
+		}
+	}
+	return n
+}
+
 func (s *Server) closeChannelLocked(c *channel) {
 	if c.closed {
 		return
 	}
 	c.closed = true
 	for _, b := range c.batches {
-		if !b.finished {
-			b.finished = true
-			b.uncertain = true
-			close(b.done)
-		}
-		b.envelope.Data = nil
+		s.dropLocked(b.envelope, false)
 	}
+	s.pending -= c.bytes
 	c.batches = nil
 	c.bytes = 0
 	for _, a := range s.operations {
@@ -76,68 +111,109 @@ func (s *Server) closeChannelLocked(c *channel) {
 			if a.op.Reason == "" {
 				a.op.Reason = "consumer_unavailable"
 			}
-			_ = s.stopLocked(a, "stopping")
+			s.stopLocked(a, "stopping")
 		}
 	}
 }
-func (s *Server) Next(owner, id string) (*Envelope, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+
+// liveChannelLocked returns the owner's channel while its consumer polls.
+func (s *Server) liveChannelLocked(owner, id string, now time.Time) (*channel, error) {
 	c := s.channels[id]
-	if c == nil || c.closed || !time.Now().Before(c.expires) || time.Since(c.lastSeen) > 5*time.Second {
+	if c == nil || c.closed || !now.Before(c.expires) || now.Sub(c.lastSeen) > 5*time.Second {
 		return nil, ErrNotFound
 	}
 	if c.owner != owner {
 		return nil, ErrForbidden
 	}
-	c.lastSeen = time.Now()
-	for _, b := range c.batches {
-		if !b.finished {
-			b.offered = true
-			copy := b.envelope
-			return &copy, nil
+	return c, nil
+}
+
+// ageLocked drops the batches that waited longer than batchAge. Batches are
+// in arrival order, so the expired ones are a prefix.
+func (s *Server) ageLocked(c *channel, now time.Time) {
+	n := 0
+	for n < len(c.batches) && now.Sub(c.batches[n].received) > batchAge {
+		s.dropLocked(c.batches[n].envelope, false)
+		n++
+	}
+	if n > 0 {
+		c.batches = s.removeLocked(c, 0, n)
+	}
+}
+
+// removeLocked frees batches [from, to) of c and returns the rest.
+func (s *Server) removeLocked(c *channel, from, to int) []*batch {
+	for _, b := range c.batches[from:to] {
+		c.bytes -= len(b.envelope.Data)
+		s.pending -= len(b.envelope.Data)
+		b.envelope.Data = nil
+	}
+	rest := append(c.batches[:from], c.batches[to:]...)
+	clear(c.batches[len(rest):])
+	return rest
+}
+
+// dropLocked counts a batch the consumer will never see, for its target and
+// in the plugin metrics. received is true when the batch is counted on
+// arrival and was never counted as received before.
+func (s *Server) dropLocked(e Envelope, received bool) {
+	index := signalIndex(e.Signal)
+	s.observed.droppedRecords[index].Add(uint64(e.Records))
+	s.observed.droppedBatches.Add(1)
+	a := s.operations[e.CaptureID]
+	if a == nil {
+		return
+	}
+	for i, t := range a.op.Targets {
+		if t.PeerID == e.PeerID && t.Generation == e.Generation {
+			d := &a.op.Targets[i].Delivery
+			if received {
+				d.ReceivedRecords += e.Records
+			}
+			d.DroppedRecords += e.Records
+			d.DroppedBatches++
+			return
 		}
 	}
-	return nil, nil
 }
+
+func (s *Server) Next(owner, id string) (*Envelope, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	c, err := s.liveChannelLocked(owner, id, now)
+	if err != nil {
+		return nil, err
+	}
+	c.lastSeen = now
+	s.ageLocked(c, now)
+	if len(c.batches) == 0 {
+		return nil, nil
+	}
+	copy := c.batches[0].envelope
+	return &copy, nil
+}
+
+// Ack frees a batch the consumer has stored. An ACK for a batch that is not
+// pending, such as a repeated one, succeeds without effect.
 func (s *Server) Ack(owner, id string, ack Acknowledgement) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	c := s.channels[id]
-	if c == nil || c.closed || time.Since(c.lastSeen) > 5*time.Second || !time.Now().Before(c.expires) {
-		return ErrNotFound
+	now := s.now()
+	c, err := s.liveChannelLocked(owner, id, now)
+	if err != nil {
+		return err
 	}
-	if c.owner != owner {
-		return ErrForbidden
-	}
-	if accepted, ok := c.receipts[ack.ID]; ok {
-		if accepted == ack.Accepted {
-			s.observed.ackRetries.Add(1)
-			return nil
-		}
-		return ErrConflict
-	}
-	for _, b := range c.batches {
+	c.lastSeen = now
+	for i, b := range c.batches {
 		if b.envelope.ID == ack.ID {
-			if !b.offered || b.finished || ack.Accepted < 0 || ack.Accepted > b.envelope.Records {
-				return ErrConflict
-			}
-			if len(c.receipts) >= 1024 {
-				return ErrCapacity
-			}
-			b.accepted = ack.Accepted
-			b.finished = true
-			c.receipts[ack.ID] = ack.Accepted
 			s.observed.acks.Add(1)
-			index := signalIndex(b.envelope.Signal)
-			s.observed.accepted[index].Add(uint64(ack.Accepted))
-			s.observed.rejected[index].Add(uint64(b.envelope.Records - ack.Accepted))
-			c.lastSeen = time.Now()
-			close(b.done)
+			s.observed.delivered[signalIndex(b.envelope.Signal)].Add(uint64(b.envelope.Records))
+			c.batches = s.removeLocked(c, i, i+1)
 			return nil
 		}
 	}
-	return ErrNotFound
+	return nil
 }
 func (s *Server) DeleteChannel(owner, id string) error {
 	s.mu.Lock()
@@ -211,79 +287,50 @@ func (s *Server) bindingLocked(credentialID, signal string, resources []pcommon.
 	}
 	return result, source, nil
 }
-func (s *Server) deliver(ctx context.Context, signal string, resources []pcommon.Map, count int64, data []byte) (accepted int64, resultErr error) {
+
+// deliver answers every authenticated, bound and bounded export at once. A
+// batch the buffer cannot hold, or whose consumer is gone, is dropped and
+// counted for its target; the Collector never learns of it and never waits.
+func (s *Server) deliver(ctx context.Context, signal string, resources []pcommon.Map, count int64, data []byte) (resultErr error) {
 	started := time.Now()
-	defer func() {
-		s.observeDelivery(signal, started, resultErr)
-		if status.Code(resultErr) == codes.ResourceExhausted {
-			s.observed.deliveryCapacity.Add(1)
-		}
-	}()
-	credential, err := s.authenticate(ctx)
+	defer func() { s.observeDelivery(signal, started, resultErr) }()
+	credential, err := s.authenticate(ctx, false)
 	if err != nil {
-		return 0, err
+		if status.Code(err) == codes.Unauthenticated {
+			s.authFailures.Record(translog.ListenerOTLP)
+		}
+		return err
 	}
 	if len(data) > 256<<10 || count <= 0 || len(resources) > 256 {
-		return 0, status.Error(codes.ResourceExhausted, "capture batch bound")
-	}
-	select {
-	case s.dataGate <- struct{}{}:
-		defer func() { <-s.dataGate }()
-	default:
-		return 0, status.Error(codes.ResourceExhausted, "capture delivery busy")
-	}
-	s.mu.Lock()
-	a, target, err := s.bindingLocked(credential.id, signal, resources)
-	if err != nil {
-		s.mu.Unlock()
-		return 0, status.Error(codes.PermissionDenied, "capture source/lease refused")
-	}
-	c := s.channels[a.op.ChannelID]
-	if c == nil || c.closed || time.Since(c.lastSeen) > 5*time.Second || !time.Now().Before(c.expires) {
-		s.mu.Unlock()
-		return 0, status.Error(codes.Unavailable, "capture consumer unavailable")
-	}
-	if len(c.batches) >= 16 || c.bytes+len(data) > 1<<20 || len(c.receipts) >= 1024 {
-		if a.op.Reason == "" {
-			a.op.Reason = "delivery_capacity"
-		}
-		_ = s.stopLocked(a, "stopping")
-		s.mu.Unlock()
-		return 0, status.Error(codes.ResourceExhausted, "capture consumer capacity")
-	}
-	b := &batch{envelope: Envelope{AuthorityID: s.repo.AuthorityID(), PluginInstance: s.instance, PluginEpoch: s.epoch, ID: pluginsdk.RandomID(), CaptureID: a.op.ID, PeerID: target.PeerID, Generation: target.Generation, Signal: signal, Records: count, Encoding: "otlp-protobuf", Data: data, ObservedAt: time.Now().UTC()}, done: make(chan struct{})}
-	c.batches = append(c.batches, b)
-	c.bytes += len(data)
-	s.mu.Unlock()
-	select {
-	case <-b.done:
-	case <-ctx.Done():
-	case <-time.After(2 * time.Second):
+		return status.Error(codes.ResourceExhausted, "capture batch bound")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !b.finished {
-		b.finished = true
-		b.uncertain = true
-		close(b.done)
-		if a.op.Reason == "" {
-			a.op.Reason = "receipt_uncertain"
+	a, target, err := s.bindingLocked(credential.id, signal, resources)
+	if err != nil {
+		return status.Error(codes.PermissionDenied, "capture source/lease refused")
+	}
+	now := s.now()
+	e := Envelope{AuthorityID: s.repo.AuthorityID(), PluginInstance: s.instance, PluginEpoch: s.epoch, ID: pluginsdk.RandomID(), CaptureID: a.op.ID, PeerID: target.PeerID, Generation: target.Generation, Signal: signal, Records: count, Encoding: "otlp-protobuf", Data: data, ObservedAt: now.UTC()}
+	c := s.channels[a.op.ChannelID]
+	if c == nil || c.closed || now.Sub(c.lastSeen) > 5*time.Second || !now.Before(c.expires) {
+		s.dropLocked(e, true)
+		return nil
+	}
+	s.ageLocked(c, now)
+	if len(c.batches) >= channelBatches || c.bytes+len(data) > channelBytes || s.pending+len(data) > pendingBytes {
+		s.dropLocked(e, true)
+		return nil
+	}
+	for i, t := range a.op.Targets {
+		if t.PeerID == target.PeerID && t.Generation == target.Generation {
+			a.op.Targets[i].Delivery.ReceivedRecords += count
 		}
-		_ = s.stopLocked(a, "stopping")
 	}
-	for i, entry := range c.batches {
-		if entry == b {
-			c.batches = append(c.batches[:i], c.batches[i+1:]...)
-			c.bytes -= len(b.envelope.Data)
-			break
-		}
-	}
-	b.envelope.Data = nil
-	if b.uncertain {
-		s.observed.uncertain.Add(1)
-		return 0, status.Error(codes.Unavailable, "capture receipt uncertain")
-	}
-	return b.accepted, nil
+	c.batches = append(c.batches, &batch{envelope: e, received: now})
+	c.bytes += len(data)
+	s.pending += len(data)
+	return nil
 }
 
 type traceReceiver struct {
@@ -300,13 +347,7 @@ func (r *traceReceiver) Export(ctx context.Context, request ptraceotlp.ExportReq
 	if err != nil {
 		return ptraceotlp.NewExportResponse(), status.Error(codes.InvalidArgument, "invalid OTLP")
 	}
-	accepted, err := r.server.deliver(ctx, "traces", resources, int64(request.Traces().SpanCount()), data)
-	response := ptraceotlp.NewExportResponse()
-	if err == nil && accepted < int64(request.Traces().SpanCount()) {
-		response.PartialSuccess().SetRejectedSpans(int64(request.Traces().SpanCount()) - accepted)
-		response.PartialSuccess().SetErrorMessage("consumer partially accepted capture")
-	}
-	return response, err
+	return ptraceotlp.NewExportResponse(), r.server.deliver(ctx, "traces", resources, int64(request.Traces().SpanCount()), data)
 }
 
 type logReceiver struct {
@@ -323,13 +364,7 @@ func (r *logReceiver) Export(ctx context.Context, request plogotlp.ExportRequest
 	if err != nil {
 		return plogotlp.NewExportResponse(), status.Error(codes.InvalidArgument, "invalid OTLP")
 	}
-	accepted, err := r.server.deliver(ctx, "logs", resources, int64(request.Logs().LogRecordCount()), data)
-	response := plogotlp.NewExportResponse()
-	if err == nil && accepted < int64(request.Logs().LogRecordCount()) {
-		response.PartialSuccess().SetRejectedLogRecords(int64(request.Logs().LogRecordCount()) - accepted)
-		response.PartialSuccess().SetErrorMessage("consumer partially accepted capture")
-	}
-	return response, err
+	return plogotlp.NewExportResponse(), r.server.deliver(ctx, "logs", resources, int64(request.Logs().LogRecordCount()), data)
 }
 
 type metricReceiver struct {
@@ -346,11 +381,5 @@ func (r *metricReceiver) Export(ctx context.Context, request pmetricotlp.ExportR
 	if err != nil {
 		return pmetricotlp.NewExportResponse(), status.Error(codes.InvalidArgument, "invalid OTLP")
 	}
-	accepted, err := r.server.deliver(ctx, "metrics", resources, int64(request.Metrics().DataPointCount()), data)
-	response := pmetricotlp.NewExportResponse()
-	if err == nil && accepted < int64(request.Metrics().DataPointCount()) {
-		response.PartialSuccess().SetRejectedDataPoints(int64(request.Metrics().DataPointCount()) - accepted)
-		response.PartialSuccess().SetErrorMessage("consumer partially accepted capture")
-	}
-	return response, err
+	return pmetricotlp.NewExportResponse(), r.server.deliver(ctx, "metrics", resources, int64(request.Metrics().DataPointCount()), data)
 }

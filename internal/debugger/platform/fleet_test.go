@@ -2,6 +2,7 @@ package platform
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 
@@ -74,12 +75,32 @@ func TestFleetGroupWritesFollowRevisions(t *testing.T) {
 	wantCode(t, err, CodeConflict)
 	_, err = s.SaveCollectorGroup(ctx, me, CollectorGroupSave{Name: "Both", Selector: "a", AgentIDs: []string{}})
 	wantCode(t, err, CodeInvalidRequest)
+	// A change that reconfigures more agents than fleet's unstaged limit
+	// names the count, and goes through once that count is accepted.
+	wide := CollectorGroupSave{ID: g.ID, Revision: 2, Name: "Edge two", Selector: fleetcapturetest.WideSelector}
+	_, err = s.SaveCollectorGroup(ctx, me, wide)
+	wantCode(t, err, CodeConflict)
+	var refused *Error
+	if !errors.As(err, &refused) || refused.Affected != fleetcapturetest.WideAffected {
+		t.Fatalf("refused wide change = %#v", err)
+	}
+	for _, n := range []int{-1, fleetcapturetest.WideAffected - 1} {
+		wide.MaxAffected = &n
+		if _, err = s.SaveCollectorGroup(ctx, me, wide); err == nil {
+			t.Fatalf("max_affected %d was accepted", n)
+		}
+	}
+	n := fleetcapturetest.WideAffected
+	wide.MaxAffected = &n
+	if g, err = s.SaveCollectorGroup(ctx, me, wide); err != nil || g.Revision != 3 {
+		t.Fatalf("accepted wide change = %+v, %v", g, err)
+	}
 	wantCode(t, s.DeleteCollectorGroup(ctx, me, g.ID, CollectorGroupDelete{Revision: 1}), CodeConflict)
-	if err := s.DeleteCollectorGroup(ctx, me, g.ID, CollectorGroupDelete{Revision: 2}); err != nil {
+	if err := s.DeleteCollectorGroup(ctx, me, g.ID, CollectorGroupDelete{Revision: 3}); err != nil {
 		t.Fatal(err)
 	}
 	events, err := s.ListFleetEvents(ctx, me, CollectorPageRequest{})
-	if err != nil || len(events.Items) != 3 || events.Items[0].Kind != "group.created" || events.NextCursor != "3" {
+	if err != nil || len(events.Items) != 4 || events.Items[0].Kind != "group.created" || events.NextCursor != "4" {
 		t.Fatalf("events = %+v, %v", events, err)
 	}
 	if more, err := s.ListFleetEvents(ctx, me, CollectorPageRequest{Cursor: events.NextCursor}); err != nil || len(more.Items) != 0 {
@@ -148,7 +169,7 @@ func TestFleetConfigLifecycle(t *testing.T) {
 	_, err = s.ListFleetConfigVersions(ctx, me, c.ID, CollectorPageRequest{Cursor: "x"})
 	wantCode(t, err, CodeInvalidRequest)
 
-	a, err := s.CreateFleetAssignment(ctx, me, FleetAssignmentCreate{Name: "edge", ConfigID: c.ID, Version: 1, Layer: 20, Selector: "service.name=gateway",
+	a, err := s.CreateFleetAssignment(ctx, me, FleetAssignmentCreate{Name: "edge", ConfigID: c.ID, Version: 1, Layer: 20, Selector: "service.name=gateway", CredentialLabels: map[string]string{"env": "prod"},
 		Rollout: &FleetRolloutPolicy{Waves: []FleetRolloutWave{{Percent: new(100)}}}})
 	if err != nil || a.RolloutID == "" || a.Layer != 20 {
 		t.Fatalf("assignment = %+v, %v", a, err)

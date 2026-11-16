@@ -7,9 +7,9 @@ The plugin owns everything else about capture.
 | Topic | Detail |
 | --- | --- |
 | Plugin owns | Capture authorization, schemas, execution, gRPC and OTLP listeners, consumer delivery, its own PostgreSQL database |
-| Collector side | Unchanged components. Collectors authenticate with fleet agent credentials, so one core revocation stops both reporting and capture |
+| Collector side | Unchanged components. Collectors authenticate with the plugin token of their fleet agent credential, so one core revocation stops both reporting and capture |
 | Targets | Fleet agents, groups or selectors |
-| Versions | Plugin 0.4.0, API schema 2.3.0, on [host protocol 3](plugins.md) |
+| Versions | Plugin 0.5.0, API schema 3.0.0, on [host protocol 4](plugins.md) |
 | Without it | Fleet reporting stays independently usable |
 
 Related: [operational metrics](operations-metrics.md), [how the plugin works
@@ -52,8 +52,8 @@ docker compose @captureCompose up -d --wait livecapture-plugin
   `--env-file PATH` after the project name), server ID and secrets. Back up
   first. No new bootstrap is needed.
 - **Versions are separate:** core database schema 10; plugin database schema
-  3 (own roles, volume and checksummed migrations 001 to 003); plugin 0.4.0;
-  plugin API schema 2.3.0.
+  4 (own roles, volume and checksummed migrations 001 to 004); plugin 0.5.0;
+  plugin API schema 3.0.0.
 - **Registration:** grants `agents.read` and `credentials.introspect`.
 - **Combined plugins:** several plugins need one explicit registration file
   and distinct mounted directional credentials for each.
@@ -130,10 +130,17 @@ ingress or load balancer.
 - For remote deployment use managed PKI, matching DNS names and protected
   ingress.
 - Collectors verify the server certificate and present their fleet agent
-  credential as a bearer token. This is not mutual TLS. Keep verification
-  enabled; `test_insecure` is a fixture option.
+  credential as a bearer token. This is not mutual TLS. The plugin always
+  serves TLS on both gRPC listeners; there is no plaintext option.
 - The private host and service HTTP links explicitly allow protected
-  plaintext. Remote links need a protected transport.
+  plaintext. Remote links need a protected transport: an `https`
+  `host_endpoint`, with `host_ca_file` (a PEM bundle of at most 16 KiB)
+  when fleet's host listener has a certificate from a private CA, and the
+  registration's [`ca_file`](plugins.md#register-a-plugin) for the plugin's
+  own HTTP listener, which serves TLS with `http_tls`. The Helm chart always
+  serves the host listener over TLS (`--plugin-tls-cert`, with a generated
+  certificate the plugin trusts), and turns TLS on for the plugin API with
+  `fleet.deploy.livecapture.tls.pluginAPI`.
 
 ## Connect existing Collectors
 
@@ -148,8 +155,12 @@ components](../collector-components/README.md#build-a-collector-with-the-compone
 - Enable the extension in `service.extensions`. No local-control listener is
   needed.
 
-Collectors use the same fleet agent credential for OpAMP and capture. Issue
-it with a `capture` label listing the collector groups it may serve, or `*`:
+Collectors use one fleet agent credential for OpAMP and capture. Issue it
+with a `capture` label listing the collector groups it may serve, or `*`.
+The response carries two one-time tokens: `token` for OpAMP
+(`LINEA_FLEET_AGENT_TOKEN`) and `plugin_token` for the livecapture extension
+(`LINEA_FLEET_PLUGIN_TOKEN`). The plugin refuses the agent token, and fleet
+refuses the plugin token:
 
 ```sh
 curl -s -H "$ADMIN" -H 'Content-Type: application/json' -X POST http://127.0.0.1:8080/api/v1/credentials -d '{
@@ -169,7 +180,7 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8080/api/v1/credentials -Headers
 | Item | Detail |
 | --- | --- |
 | Label key | The plugin option `capture_label` selects another key |
-| Collector settings | Provision the plugin CA and the returned token securely. Set matching control and delivery addresses. Supply `LINEA_FLEET_AGENT_TOKEN`, `OTEL_CAPTURE_GROUP`, `POD_NAME`, `CLUSTER_NAME`, `POD_NAMESPACE` |
+| Collector settings | Provision the plugin CA and the returned tokens securely. Set matching control and delivery addresses. Supply `LINEA_FLEET_AGENT_TOKEN`, `LINEA_FLEET_PLUGIN_TOKEN`, `OTEL_CAPTURE_GROUP`, `POD_NAME`, `CLUSTER_NAME`, `POD_NAMESPACE` |
 | Reuse | Every replica can reuse the same credential. No per-pod registration. A Collector instance UID is bound to the credential that registered it while connected: another credential is refused, and pod churn creates new UIDs ([identity](README.md#register-collectors-with-a-deployment-token)) |
 | Registration | The first authenticated control report registers the capture peer and its catalog. The credential's label must include its reported collector group |
 | Refusal | A credential that is not an active agent credential with a valid label is refused (`Unauthenticated`) |
@@ -186,6 +197,16 @@ OpAMP extension reports the same identity under the same credential:
 - Only a unique match is linked and shown as the peer's `agent_id`.
   Ambiguous or missing matches stay unlinked and remain addressable by peer
   ID.
+- `GET v1/peers` shows where linking stands in `link.state`: `pending` (no
+  attempt has finished yet), `linked`, `no_match` or `ambiguous`. A peer
+  that is not linked is tried again after 2 s, then 4 s, doubling to 60 s,
+  and a new connection is tried at once. A linked peer is resolved again
+  every minute. A failed call to core leaves the state as it was and backs
+  off the same way. Each pass takes the peers whose last attempt is oldest,
+  so peers that cannot link do not keep others from being tried. The
+  counters `peer_link_linked_total`, `peer_link_no_match_total`,
+  `peer_link_ambiguous_total` and `peer_link_error_total` count attempts by
+  outcome.
 
 ```mermaid
 sequenceDiagram
@@ -195,7 +216,7 @@ sequenceDiagram
   participant H as Fleet host services (8081)
   K->>F: OpAMP, agent token, agent description with k8s.pod.name, namespace, cluster
   Note over F: inventory records the agent
-  K->>L: control stream, same agent token, identity (pod, namespace, cluster, group)
+  K->>L: control stream, plugin token of the same credential, identity (pod, namespace, cluster, group)
   L->>H: credentials/introspect (token SHA-256)
   H-->>L: credential_id and labels, capture label must list the group
   L->>H: agents/resolve (credential_id and the same attributes)
@@ -210,8 +231,11 @@ services, using the shared credential.*
 Trust model: a bearer credential proves membership in the credential's
 Collectors. Reported pod, cluster, group and catalog fields are assertions by
 those Collectors, not independently verified workload identity. A
-simultaneous duplicate identity is refused. After disconnection, reconnecting
-advances a durable generation and withdraws old execution. No old desired
+simultaneous duplicate identity is refused while the connected one still
+reports (Collectors report every 2 s). A stream of the same identity whose
+peer missed reports for 3 s replaces it, so a Collector that reconnects
+before its old stream was noticed dead is admitted. After disconnection,
+reconnecting advances a durable generation and withdraws old execution. No old desired
 capture set is restored.
 
 ## Use the public API
@@ -222,11 +246,13 @@ at `v1/openapi.json` through this authenticated ingress.
 
 | Rule | Detail |
 | --- | --- |
-| Credential | A fleet admin or operator credential. Readers can discover peers and schemas but cannot create channels or captures |
-| Ownership | Capture and channel reads and receipts are owner-only, even between admins |
+| Credential | A fleet management credential with `plugin_access` `{"livecapture": "write"}`. `read` can discover peers and schemas but cannot create channels or captures. `admin` can do what `write` can, and also list (`GET v1/captures`), read and stop every owner's capture. The fleet role grants no access to the plugin |
+| Ownership | Channel reads and ACKs are owner-only, even for `admin`: an admin can end someone else's capture, not read its records. `GET v1/captures` lists the caller's running captures, or every owner's with `admin`, each with its `owner` credential ID |
+| Slots per owner | Operator `max_operations_per_owner` and `max_channels_per_owner` (1 to 32; default 32, the plugin's limit, so unset they change nothing) keep one credential from holding every slot. A debugger is one owner for all its users |
 | Raw data | Default selection permits only catalog points marked redacted. Operator `raw_principals` is an explicit grant of credential IDs; admin alone never grants raw |
+| Filters on redacted points | Filters run before redaction, so a filter can test a value the copy will not show and reveal whether it matches ([configuration](../collector-components/configuration.md#filters)). Creating a capture on a redacted point is therefore more than reading redacted records |
 | Delegating clients | A client acting for its users (a shared team service) may send fleet's `X-Fleet-Acting-ID`, `-Name` and `-Request` headers ([plugins](plugins.md#opaque-public-api)). The plugin records them on the capture as `acting_for` and persists them with the operation (plugin migration 3, API schema 2.2.0) |
-| Attribution only | Ownership, receipts and `raw_principals` still use the credential ID, so per-user raw decisions stay with the delegating client |
+| Attribution only | Ownership, ACKs and `raw_principals` still use the credential ID, so per-user raw decisions stay with the delegating client |
 
 One capture, end to end. The debugger (or any client) is the consumer: it
 opens a channel, admits the capture and polls the channel for batches.
@@ -252,19 +278,19 @@ sequenceDiagram
   L->>X: DesiredState with one Session (control stream)
   X->>L: CollectorReport, session active
   X->>L: OTLP gRPC export to port 4341, copies tagged with the session id
-  Note over L: batch held in bounded memory until the consumer acknowledges
+  L-->>X: export result at once
+  Note over L: batch held in bounded memory until the consumer acknowledges,<br/>dropped and counted when it does not fit or waits 10 s
   D->>L: GET v1/channels/ID/next
   L-->>D: envelope with base64 OTLP protobuf
   D->>L: POST v1/channels/ID/acks
-  L-->>X: export result, partial success if fewer records were accepted
   D->>L: POST v1/captures/ID/stop (If-Match)
   L->>X: DesiredState without sessions
   X->>L: CollectorReport, terminal state
 ```
 
 *A capture request reaches the Collector as a desired state on its open
-control stream. The Collector sends copies to the delivery endpoint and the
-plugin hands each batch to the polling consumer. Telemetry stays in bounded
+control stream. The Collector sends copies to the delivery endpoint and
+forgets them; the plugin hands each batch to the polling consumer. Telemetry stays in bounded
 plugin memory; the plugin database keeps metadata only.*
 
 ### 1. Select a peer and create a channel
@@ -372,20 +398,30 @@ Instead of `targets`, a request may name exactly one of:
 - A Collector serves one capture at a time.
 - A named peer or agent already serving one, or a group or selector whose
   eligible peers are all busy, is refused with HTTP 409 and error code
-  `collector_busy`. Other conflicts keep `capture_request_refused`.
+  `collector_busy`. That holds also after a stop, a reconnect or a plugin
+  restart, while the earlier capture still reserves the Collector. Other
+  conflicts keep `capture_request_refused`.
 - The Collector is free again once its target reports terminal, or 5 s after
-  the operation's expiry.
+  the operation's expiry. A capture stopped before its session was sent to a
+  Collector never ran there: the stop releases that target at once, and an
+  operation with no other target ends `stopped` in the stop's answer.
 
 ### Outcomes and retries
 
 - Outcomes report each target's `agent_id` when linked, and its `stats`: the
   Collector's last reported counters (selected, enqueued records and bytes,
   filter errors, nonzero drops by reason). They are counts, never telemetry.
+- Each target's `delivery` counts what the plugin did with its copies:
+  `received_records`, and the `dropped_records` and `dropped_batches` it
+  dropped before the consumer acknowledged them. Dropped records are part of
+  the received ones; any drop makes the capture incomplete.
 - Counters are read live while the operation runs without advancing its
   revision, and are saved with each state change, so a terminal outcome keeps
   the final report.
 - 202 confirms admission, not Collector activation. Read operation and target
-  outcomes until active or terminal.
+  outcomes until active or terminal. An operation becomes `active` once every
+  target is active or already ended, so a target that finishes early does not
+  hold it in `starting`.
 - A stop is also asynchronous. Retry with the latest revision on 412 and
   reconcile the terminal outcome.
 - After an uncertain transport response, GET or retry with the same ID and an
@@ -420,9 +456,10 @@ base64 OTLP protobuf.
 | Topic | Behavior |
 | --- | --- |
 | Polling | Renews a five-second consumer heartbeat. Does not acknowledge data |
-| ACK | After accepting a batch, POST `{batch_id,accepted_records}` to the channel's `acks` route. An identical ACK reconciles; changing its count conflicts. Partial acceptance maps to OTLP partial success (the sample consumer's `--accept-ratio` exercises it) |
-| No receipt in 2 s | A retryable OTLP error and capture withdrawn with `receipt_uncertain`. Delivery capacity also withdraws capture |
-| Duplicates | Exporter retries can produce them: consumers must deduplicate batch IDs |
+| Export answer | The plugin answers every valid OTLP export at once. The Collector sends and forgets: it never waits for the consumer and never retries |
+| ACK | After handling a batch, POST `{batch_id}` to the channel's `acks` route. That frees the batch. An ACK for a batch that is not pending is a no-op |
+| Drops | A batch that does not fit the channel's buffer, arrives when the consumer is gone, or waits 10 s without an ACK is dropped. Each drop counts on its target's `delivery` (`dropped_records`, `dropped_batches`) and in the metrics; capture goes on |
+| Repeats | An unacknowledged batch is offered again on the next read. A consumer whose ACK was lost may see it twice; the debugger stores it once |
 | Guarantees | No exactly-once claim, disk spool or durable payload store. Payloads exist only in bounded memory and are never logged |
 | Client control | Clients cannot select delivery endpoints or assert raw permission |
 | Withdrawal | Core loss, drain or disable, epoch replacement, expired or revoked owner credentials, peer loss and consumer loss withdraw desired execution. Epoch changes discard old channels |
@@ -443,24 +480,26 @@ its unchanged wire implementation, and clients may request lower limits.
 
 | Resource | Bound |
 | --- | --- |
-| Connected peers / durable peer generation identities | Default 256 (operator `max_peers` 1 to 4,096; restart required) / 10,000 |
-| Active operations / retained operation IDs | 32 / 10,000 |
+| Connected peers / durable peer generation identities | Default 256 (operator `max_peers` 1 to 4,096; restart required) / 10,000, of which the plugin deletes unused ones after 24 hours |
+| Active operations / retained operation IDs | 32, and `max_operations_per_owner` per credential / 10,000 |
 | Targets / points / signals per operation | 16 / 64 / 3 |
 | Capture and channel absolute lifetime | 5 minutes |
-| Channels / pending bytes / pending batches | 32 / 1 MiB each / 16 each |
-| Receipt history / receipt deadline | 1,024 per channel / 2 seconds |
-| OTLP request / resource groups / concurrent deliveries | 256 KiB / 256 / 16 |
+| Channels / pending bytes / pending batches | 32, and `max_channels_per_owner` per credential / 2 MiB each, 32 MiB in all / 64 each |
+| Pending batch age | 10 seconds |
+| OTLP request / resource groups | 256 KiB / 256 |
 | Per-target requested maximums | 1 MiB/s, 5,000 records/s, 16 MiB total, 10,000 records, 64 KiB/record |
 | Filters admitted | 32 expressions per context, 4,096 bytes per expression, 16 KiB total, and within each target's `filter_limits` |
 | Cached credential introspections | 1,024 hashes, 10 s (rejections 2 s) |
 | Group or selector members resolved / peers admitted | 1,000 / 16 |
-| Peer links resolved per 10 s pass | 64 |
-| Control TCP / HTTP and data TCP | `max_peers` + 16 handshake reserve / 64 each |
+| Peer links resolved per pass (passes at least 1 s apart) | 64 |
+| Control TCP / HTTP and data TCP | `max_peers` + 16 / 64 each. The 16 above `max_peers` leave room for handshakes, but any open connection, an idle one included, counts against the whole bound |
+| gRPC connections (control and data) | Keepalive ping after 30 s quiet, closed when unanswered for 10 s; closed after 30 s without a stream; request headers 16 KiB |
+| Data connection age | 5 minutes, then 5 s to finish exports; the exporter redials. Control connections do not age out, since closing one ends the peer's sessions |
 | Peer discovery page | Default 16, maximum 64 peers, encoded JSON at most 512 KiB |
 | Generic ingress | 64 KiB request, 1 MiB response, 2 reads + 2 writes, 2-second deadline |
 
-Admission refuses at metadata caps instead of silently losing deduplication
-or generation history. Rotate channels before their receipt-history cap.
+Admission refuses at metadata caps instead of silently losing generation
+history.
 
 **Filter limits per Collector.** Each Collector reports the largest filter it
 compiles in its identity. Peer discovery shows it as
@@ -482,6 +521,59 @@ compiles in its identity. Peer discovery shows it as
 - The Collector checks pattern length itself, so a pattern over its limit
   still ends the target failed with `collector_rejected`.
 
+## Transition log
+
+The plugin writes one JSON line on stderr per state transition, never per
+request, with Go's `log/slog` fields `time`, `level` and `msg` (the event
+name), plus `component` (always `livecapture`). With Docker Compose, read it
+with `docker compose logs livecapture-plugin`. A line holds only IDs, enum
+reasons, counts, durations and the version: no token, credential, filter,
+capture point, attribute value, payload, pod or cluster name, owner or error
+text ever reaches it. The IDs are those the plugin and API already show
+(operation, peer, credential and agent IDs, authority, instance, epoch).
+
+| `msg` | Level | Fields | Written when |
+| --- | --- | --- | --- |
+| `plugin_started` | info | `version` | `serve` begins |
+| `plugin_stopped` | info | `version`, `reason` | `serve` ends; `reason` is `shutdown` or the cause |
+| `command_failed` | error | `cause` | `migrate`, `purge`, `probe` or an unknown command fails |
+| `authority_acquired` | info | `authority`, `instance` | This process holds the database authority and starts serving |
+| `authority_standby` | warn | `reason` | Active/standby only: the first failed attempt to take the authority, such as `owner_busy`; not repeated until it is taken |
+| `authority_released` | info | `authority`, `reason` | Serving ended, with `shutdown` or the fatal cause |
+| `host_session_established` | info | `instance`, `epoch` | The fleet host session is usable, including after a new epoch |
+| `host_session_lost` | warn | `reason` | `host_unreachable` (the host refused the session, 421 included, or two polls in a row got no answer), `permissions_missing` or `epoch_changed`; captures stop with `host_authority_lost` |
+| `drain_started` | info | none | Drain began on shutdown |
+| `database_degraded` | warn | none | The first failed ping after good ones |
+| `database_recovered` | info | `count` | A good ping after `count` failed ones |
+| `database_lost` | error | `reason` | `storage_failures` (three failed pings in a row) or `storage_lost` (connection closed) |
+| `plugin_fatal` | error | `cause` | Every fatal exit, once, with its cause |
+| `operation_state` | info | `operation`, `from`, `to`, `reason` | A capture operation changed state; `from` is `none` at admission; `reason` is absent when there is none |
+| `peer_connected` | info | `peer`, `credential`, `link` | A Collector's control stream was accepted (`link` is `pending`) |
+| `peer_disconnected` | info | `peer`, `reason`, `duration_ms` | A control stream ended |
+| `peer_link` | info | `peer`, `link`, `agent` | A peer's link state changed (`agent` only when `linked`) |
+| `auth_failures` | warn | `listener`, `count`, `duration_ms` | Rejected credentials on one listener (`http_api`, `control_grpc`, `otlp_grpc`): one line per listener every 10 s, only when the count is above zero |
+
+`plugin_fatal` causes are `storage_lost`, `storage_failures`, `save_failed`
+(an operation could not be saved), `listener_stopped` and, before serving
+starts, `storage_unavailable`, `tls_invalid`, `listen_failed`, `config_invalid`,
+`invalid_input`, `owner_busy` and `supervisor_failed`. A plugin started with
+`--ha-listen` releases the authority on a fatal cause and tries to take it
+again; one without exits, and Compose restarts it. `peer_disconnected` reasons
+are `credential_rejected` (the credential was revoked or lost its `capture`
+label), `peer_stale`, `peer_retired`, `stream_closed`, `stream_error` and
+`shutdown`. The `reason` of `operation_state` is the operation's `reason` field
+in the API.
+
+`auth_failures` counts a credential the plugin refused: a wrong service or
+metrics token on the HTTP API, and a missing, inactive or not-allowed Collector
+credential on the control and OTLP gRPC listeners. A fleet host that cannot
+answer is no rejected credential; it shows as `host_session_lost`.
+
+Logging never delays the plugin or a Collector. Lines go through a bounded
+queue to the writer; when stderr is blocked and the queue is full, the line is
+dropped. Errors in command-line flags are printed by Go's `flag` package before
+the log starts.
+
 ## Rotation, backup, restore and upgrade
 
 Plugin configuration, token and certificate changes need a plugin restart.
@@ -491,7 +583,8 @@ never reuse the management, OpAMP or database credential.
 **Rotate a Collector credential** (it lives in core; no plugin restart):
 
 1. Issue a new labeled agent credential.
-2. Roll it out to the Collectors' OpAMP and livecapture headers.
+2. Roll out its `token` to the Collectors' OpAMP header and its
+   `plugin_token` to the livecapture headers.
 3. Revoke the old one with `DELETE /api/v1/credentials/{id}`. OpAMP
    disconnects immediately and capture streams within 10 s.
 
@@ -520,9 +613,13 @@ docker compose @captureCompose up -d --wait livecapture-plugin
   all secret files. Back up fleet independently.
 - The metadata holds owners, hashes, reservations, generations and a stable
   authority ID, but no filters or telemetry.
-- A database ownership or session loss exits the plugin. Compose does not
-  restart it: restore storage, then start it explicitly. Fleet stays ready
-  when this separate database fails.
+- The plugin pings its database once a second. It exits when the connection
+  is lost, or after three failed pings in a row; a ping that waits behind
+  other statements is not counted. Compose restarts it
+  (`restart: unless-stopped`), and it keeps trying while storage is down.
+  Captures end when it exits. To restore storage, stop the plugin first (the
+  command above), then start it. Fleet stays ready when this separate
+  database fails.
 
 **Restore** into a fresh plugin volume:
 
@@ -540,7 +637,7 @@ After restore:
   leases, reconnects peers with empty desired state and never replays
   capture.
 - Create a new channel and explicitly select fresh targets for a new
-  operation after any reservations expire. Old payloads and receipts cannot
+  operation after any reservations expire. Old payloads and ACKs cannot
   be recovered.
 
 **Upgrade.** Keep prior images and verified backups. Back up core and the
@@ -571,26 +668,48 @@ docker compose @captureCompose up -d --wait livecapture-plugin
 ```
 
 - Migration checks all installed checksums and refuses unknown versions. The
-  runtime cannot run DDL or delete operation history.
-- Registration, configuration and image versions must match (API version 2,
-  host protocol 3). The public API schema is 2.3.0.
+  runtime cannot run DDL or delete operation history; it deletes only unused
+  peers (see Retention).
+- Registration, configuration and image versions must match (API version 3,
+  host protocol 4). The public API schema is 3.0.0.
 - Clients must follow peer page cursors; the sample two-peer workflows fit a
   default page.
 - Roll back with matching images and a pre-upgrade backup in a fresh volume.
 
-**Retention.** Offline purge, with the plugin stopped, uses the migration
-role (in PowerShell, use `docker compose @captureCompose`):
+**Peer retention.** A peer is the durable identity of one Collector (credential,
+cluster, namespace, pod and group). Every new pod name is a new peer, and the
+database keeps at most 10,000. The running plugin deletes a peer once it has
+been unused for 24 hours: no Collector is connected for it (connected peers
+are marked seen once a minute), no lease holds it and no retained operation
+names it. At most 500 peers are deleted per pass, and a failed pass is retried
+without affecting captures. A peer that comes back after deletion gets a
+generation above every generation ever deleted, so it never repeats one an
+old operation or lease could refer to. A peer named by a retained operation
+stays until the purge below removes that operation. No operator action is
+needed: the grant is part of the plugin's migration step.
+
+**Retention.** The purge runs beside the running plugin; the plugin need not
+stop. It uses the migration role (in PowerShell, use
+`docker compose @captureCompose`):
 
 ```sh
 docker compose $capture_compose run --rm -T capture-migrate purge --before 2026-10-01T00:00:00Z
 ```
 
-- Only operations past absolute expiry plus guard, and eligible expired
-  leases, are removed. Generation counters remain.
+- Only operations in a terminal state, past absolute expiry plus the 5 s
+  guard and with no lease, are removed, together with expired leases.
+  Operations the plugin may still save are never touched. Peers and
+  generation counters remain (the plugin retires unused peers itself, see
+  above).
 - Purging forfeits historical ID reconciliation: clients must not retry old
   IDs after the retention boundary.
-- The exclusive authority lock prevents a purge while the runtime owns the
-  database.
+- The purge takes no authority lock. The operation table holds at most
+  10,000 rows; a create beyond that is refused with 429 until a purge frees
+  rows.
+- A 429 from the plugin carries no `Retry-After`: a full operation table
+  clears only by purge, and full operation or channel slots clear when
+  captures end, on no schedule the plugin can promise. Fleet forwards only
+  its own `Retry-After: 1`. Poll and back off.
 
 **Remove the plugin:** stop it, remove its registration and override, and
 restart core with base Compose. Keep the plugin volume and secrets until

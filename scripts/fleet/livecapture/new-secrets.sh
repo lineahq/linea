@@ -48,7 +48,7 @@ chmod 444 "$staging/tls_key.pem" "$staging/tls_cert.pem"
 
 write config.json '{
   "id": "livecapture",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "host_endpoint": "http://fleet:8081",
   "allow_insecure_host": true,
   "host_token_file": "/run/secrets/capture_host_token",
@@ -58,7 +58,6 @@ write config.json '{
   "delivery_listen": "0.0.0.0:4341",
   "tls_cert_file": "/run/secrets/capture_tls_cert",
   "tls_key_file": "/run/secrets/capture_tls_key",
-  "test_insecure": false,
   "capture_label": "capture",
   "raw_principals": [],
   "max_peers": 256,

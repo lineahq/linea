@@ -34,10 +34,16 @@ const (
 	dropStopping
 	dropDelivery
 	dropBudget
+	dropTime
 	dropReasonCount
 )
 
-var dropReasons = [dropReasonCount]string{"queue_full", "rate_bytes", "rate_records", "record_size", "sampling", "stopping", "delivery", "budget"}
+var dropReasons = [dropReasonCount]string{"queue_full", "rate_bytes", "rate_records", "record_size", "sampling", "stopping", "delivery", "budget", "time"}
+
+// timeBudget bounds the time capture calls of one session spend per second,
+// across all pipelines. Beyond it, calls are refused with the time drop
+// reason, so capture never takes more than this from the Collector.
+const timeBudget = 20 * time.Millisecond
 
 type captureKey struct {
 	Point
@@ -51,6 +57,8 @@ type termination struct{ state, reason string }
 type run struct {
 	manager  *Manager
 	id       string
+	remote   bool         // Started by the control service, so it ends when control is lost.
+	panicked atomic.Bool  // Set by the first recovered capture panic, which alone is logged.
 	deadline atomic.Int64 // Unix nanoseconds; only ever moves earlier.
 	expiry   *time.Timer
 	// ended closes when admission is over; done when the run is terminal.
@@ -64,6 +72,27 @@ type run struct {
 	windowStart, windowBytes, windowRecords atomic.Int64
 	selected, enqueued, bytes, filterErrors atomic.Int64
 	drops                                   [dropReasonCount]atomic.Int64
+	// Time spent in capture calls within the second that began at
+	// timeStart, without a lock: a race at the window's turn loses a call.
+	timeStart, timeSpent atomic.Int64
+}
+
+// spent returns the capture time of the current one-second window.
+func (r *run) spent(now int64) int64 {
+	if now-r.timeStart.Load() >= int64(time.Second) {
+		return 0
+	}
+	return r.timeSpent.Load()
+}
+
+// spend adds a capture call's time to the window it ended in.
+func (r *run) spend(now, elapsed int64) {
+	start := r.timeStart.Load()
+	if now-start >= int64(time.Second) && r.timeStart.CompareAndSwap(start, now) {
+		r.timeSpent.Store(elapsed)
+		return
+	}
+	r.timeSpent.Add(elapsed)
 }
 
 // session is one configuration of a run. An update swaps in a new session
@@ -142,12 +171,60 @@ type Manager struct {
 	// they left the queue (see drained).
 	delivery delivery
 	queues   *queueObservations
-	quit     chan struct{}
+	// sender is the run that last handed a copy to the exporter. A failed
+	// export counts against it: one session runs at a time, so a failure
+	// belongs to it unless it raced with the start of the next one.
+	sender atomic.Pointer[run]
+	// lastControl is when the control stream last delivered a desired state,
+	// in Unix nanoseconds.
+	lastControl atomic.Int64
+	quit        chan struct{}
 }
 
-// drainLimit bounds how long an ended session waits for its queued copies:
-// one flush, the export timeout and the retry budget (otlpDelivery.config).
-const drainLimit = 7 * time.Second
+// controlTimeout ends a remote session after this long without a desired
+// state from the control service, which resends it every few seconds.
+const controlTimeout = 10 * time.Second
+
+// watchControl ends a remote session whose control service went silent.
+func (m *Manager) watchControl(ctx context.Context) {
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-tick.C:
+			m.checkControl(now)
+		}
+	}
+}
+
+func (m *Manager) checkControl(now time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s := m.current; s != nil && s.remote && now.UnixNano()-m.lastControl.Load() >= int64(controlTimeout) {
+		s.requestStop("failed", "control_lost")
+	}
+}
+
+// exportFailed counts records of a failed export under the delivery drop
+// reason of the run that sent last.
+func (m *Manager) exportFailed(signal Signal, n int64) {
+	r := m.sender.Load()
+	if r == nil {
+		return
+	}
+	r.drops[dropDelivery].Add(n)
+	if labels := m.telemetry.dropLabels[signal]; labels != nil {
+		m.telemetry.dropped.Add(context.Background(), n, labels[dropDelivery])
+	}
+}
+
+// drainLimit bounds how long an ended session waits for its queued copies,
+// and how long shutdown waits for the exporters: one flush and one export
+// attempt, which never retries (otlpDelivery.config). Copies still queued
+// after it are dropped.
+const drainLimit = 2 * time.Second
 
 func NewFactory() extension.Factory {
 	return extension.NewFactory(component.MustNewType("livecapture"), defaultConfig, func(_ context.Context, settings extension.Settings, config component.Config) (extension.Extension, error) {
@@ -175,6 +252,7 @@ func newManager(settings extension.Settings, config Config) (*Manager, error) {
 		return nil, err
 	}
 	m := &Manager{config: config, settings: settings, telemetry: telemetry, redactor: redactor, points: make(map[captureKey]CapturePoint), queues: queues, quit: make(chan struct{})}
+	queues.failed = m.exportFailed
 	m.settings.MeterProvider = queueMeterProvider{MeterProvider: settings.MeterProvider, queues: queues}
 	m.enabled.Store(config.Enabled)
 	m.delivery = newOTLPDelivery(m)
@@ -194,8 +272,9 @@ func (m *Manager) Start(ctx context.Context, host component.Host) error {
 		m.local = server
 	}
 	if m.config.Control.Endpoint != "" {
-		m.wg.Add(1)
+		m.wg.Add(2)
 		go func() { defer m.wg.Done(); m.watch(workerCtx) }()
+		go func() { defer m.wg.Done(); m.watchControl(workerCtx) }()
 	}
 	return nil
 }
@@ -354,6 +433,12 @@ func (m *Manager) prepare(request Request, access Access) (Request, [32]byte, *c
 // StartSession starts a session, or atomically replaces the configuration of
 // the running session with the same ID. Capture never pauses for an update.
 func (m *Manager) StartSession(ctx context.Context, request Request, access Access) (Status, error) {
+	return m.startSession(request, access, false)
+}
+
+// startSession starts or updates a session. A remote one ends when the
+// control service goes silent (see controlTimeout).
+func (m *Manager) startSession(request Request, access Access, remote bool) (Status, error) {
 	prepared, fingerprint, filter, points, err := m.prepare(request, access)
 	if err != nil {
 		return Status{}, err
@@ -401,7 +486,7 @@ func (m *Manager) StartSession(ctx context.Context, request Request, access Acce
 	if !prepared.ExpiresAt.After(time.Now()) {
 		return Status{}, errors.New("session expired while starting")
 	}
-	r := &run{manager: m, id: prepared.SessionID, stop: make(chan struct{}), ended: make(chan struct{}), done: make(chan struct{})}
+	r := &run{manager: m, id: prepared.SessionID, remote: remote, stop: make(chan struct{}), ended: make(chan struct{}), done: make(chan struct{})}
 	r.deadline.Store(prepared.ExpiresAt.UnixNano())
 	s := &session{run: r, request: prepared, fingerprint: fingerprint, filter: filter, points: points}
 	m.current = s

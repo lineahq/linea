@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Optional livecapture plugin API",
-    "version": "2.3.0",
-    "description": "Plugin-owned capture APIs. Single active authority per private database. Fixed 1-16 target roster chosen by peer generation, fleet agent, fleet group or selector, absolute expiry <=5 minutes, no automatic replay. Raw selection requires explicit operator principal grant. Captured payloads stay in bounded memory. Poll/ACK delivery preserves partial and uncertain OTLP outcomes; retries may duplicate records. No debugger dependency. Collectors authenticate with fleet agent credentials, introspected through the fleet host; the capture label lists the collector groups a credential may serve."
+    "version": "3.0.0",
+    "description": "Plugin-owned capture APIs. Single active authority per private database. Fixed 1-16 target roster chosen by peer generation, fleet agent, fleet group or selector, absolute expiry <=5 minutes, no automatic replay. Raw selection requires explicit operator principal grant. Captured payloads stay in bounded memory. Send-and-forget delivery: the plugin answers every bound OTLP export at once, buffers what fits and counts what it drops per target; nothing retries, so a batch arrives at most once. No debugger dependency. Collectors authenticate with fleet agent credentials, introspected through the fleet host; the capture label lists the collector groups a credential may serve."
   },
   "servers": [
     {
@@ -36,7 +36,7 @@
             "description": "Resource absent/expired"
           },
           "409": {
-            "description": "Changed retry, stale generation/epoch, missing consumer or overlapping target"
+            "description": "Changed retry, stale generation, missing consumer or overlapping target"
           },
           "412": {
             "description": "Revision mismatch"
@@ -98,7 +98,7 @@
             "description": "Resource absent/expired"
           },
           "409": {
-            "description": "Changed retry, stale generation/epoch, missing consumer or overlapping target"
+            "description": "Changed retry, stale generation, missing consumer or overlapping target"
           },
           "412": {
             "description": "Revision mismatch"
@@ -167,7 +167,7 @@
             "description": "Resource absent/expired"
           },
           "409": {
-            "description": "Changed retry, stale generation/epoch, missing consumer or overlapping target"
+            "description": "Changed retry, stale generation, missing consumer or overlapping target"
           },
           "412": {
             "description": "Revision mismatch"
@@ -221,7 +221,7 @@
             "description": "Resource absent/expired"
           },
           "409": {
-            "description": "Changed retry, stale generation/epoch, missing consumer or overlapping target"
+            "description": "Changed retry, stale generation, missing consumer or overlapping target"
           },
           "412": {
             "description": "Revision mismatch"
@@ -254,10 +254,10 @@
     },
     "/v1/channels/{id}/acks": {
       "post": {
-        "summary": "Owner explicitly accepts a count from the offered batch",
+        "summary": "Owner frees a stored batch; a batch that is not pending is a no-op",
         "responses": {
           "204": {
-            "description": "Owner explicitly accepts a count from the offered batch"
+            "description": "Owner frees a stored batch; a batch that is not pending is a no-op"
           },
           "400": {
             "description": "Malformed request"
@@ -272,7 +272,7 @@
             "description": "Resource absent/expired"
           },
           "409": {
-            "description": "Changed retry, stale generation/epoch, missing consumer or overlapping target"
+            "description": "Changed retry, stale generation, missing consumer or overlapping target"
           },
           "412": {
             "description": "Revision mismatch"
@@ -330,7 +330,7 @@
             "description": "Resource absent/expired"
           },
           "409": {
-            "description": "Changed retry, stale generation/epoch, missing consumer or overlapping target"
+            "description": "Changed retry, stale generation, missing consumer or overlapping target"
           },
           "412": {
             "description": "Revision mismatch"
@@ -385,7 +385,7 @@
             "description": "Resource absent/expired"
           },
           "409": {
-            "description": "Changed retry, stale generation/epoch, missing consumer or overlapping target"
+            "description": "Changed retry, stale generation, missing consumer or overlapping target"
           },
           "412": {
             "description": "Revision mismatch"
@@ -439,7 +439,7 @@
             "description": "Resource absent/expired"
           },
           "409": {
-            "description": "Changed retry, stale generation/epoch, missing consumer or overlapping target"
+            "description": "Changed retry, stale generation, missing consumer or overlapping target"
           },
           "412": {
             "description": "Revision mismatch"
@@ -494,7 +494,7 @@
             "description": "Resource absent/expired"
           },
           "409": {
-            "description": "Changed retry, stale generation/epoch, missing consumer or overlapping target"
+            "description": "Changed retry, stale generation, missing consumer or overlapping target"
           },
           "412": {
             "description": "Revision mismatch"
@@ -746,6 +746,7 @@
           "id",
           "generation",
           "credential_id",
+          "link",
           "identity",
           "authority_id",
           "plugin_instance"
@@ -770,6 +771,9 @@
             "pattern": "^[0-9a-f]{32}$",
             "description": "Connected fleet agent uniquely linked by credential and pod identity; absent while unlinked or ambiguous."
           },
+          "link": {
+            "$ref": "#/components/schemas/PeerLink"
+          },
           "identity": {
             "$ref": "#/components/schemas/Identity"
           },
@@ -780,6 +784,25 @@
           "plugin_instance": {
             "type": "string",
             "pattern": "^[0-9a-f]{32}$"
+          }
+        }
+      },
+      "PeerLink": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "linked",
+              "no_match",
+              "ambiguous"
+            ],
+            "description": "How linking the peer to a fleet agent stands. pending: no attempt has finished yet. linked: one connected agent matches (see agent_id). no_match: none matches. ambiguous: more than one does. The plugin retries an unlinked peer with a backoff from 2 s to 60 s and re-resolves a linked one every minute; a failed host call leaves the state as it was."
           }
         }
       },
@@ -807,7 +830,8 @@
         "required": [
           "peer_id",
           "generation",
-          "state"
+          "state",
+          "delivery"
         ],
         "properties": {
           "peer_id": {
@@ -837,6 +861,9 @@
           },
           "stats": {
             "$ref": "#/components/schemas/TargetStats"
+          },
+          "delivery": {
+            "$ref": "#/components/schemas/TargetDelivery"
           }
         }
       },
@@ -875,6 +902,30 @@
               "type": "integer",
               "minimum": 1
             }
+          }
+        }
+      },
+      "TargetDelivery": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "What reached the plugin from this target. Dropped records are part of the received ones: a full buffer, a batch older than 10 s, or a consumer that is gone. Any drop makes the capture incomplete. Live while the operation runs and saved with each state change.",
+        "required": [
+          "received_records",
+          "dropped_records",
+          "dropped_batches"
+        ],
+        "properties": {
+          "received_records": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "dropped_records": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "dropped_batches": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },
@@ -1296,17 +1347,12 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "batch_id",
-          "accepted_records"
+          "batch_id"
         ],
         "properties": {
           "batch_id": {
             "type": "string",
             "pattern": "^[0-9a-f]{32}$"
-          },
-          "accepted_records": {
-            "type": "integer",
-            "minimum": 0
           }
         }
       },

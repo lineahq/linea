@@ -44,7 +44,7 @@ func TestFleetToolsManageFleet(t *testing.T) {
 	}
 	call("linea_list_fleet_configs", map[string]any{})
 	call("linea_list_fleet_config_versions", map[string]any{"id": c["id"]})
-	a := call("linea_create_fleet_assignment", map[string]any{"name": "edge", "config_id": c["id"], "version": 1, "layer": 10, "selector": "service.name=gateway"})
+	a := call("linea_create_fleet_assignment", map[string]any{"name": "edge", "config_id": c["id"], "version": 1, "layer": 10, "selector": "service.name=gateway", "credential_labels": map[string]any{"env": "prod"}})
 	call("linea_get_fleet_assignment", map[string]any{"id": a["id"]})
 	call("linea_list_fleet_assignments", map[string]any{})
 	call("linea_preview_fleet_assignment", map[string]any{"id": a["id"]})

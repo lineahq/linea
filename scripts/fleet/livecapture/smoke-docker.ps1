@@ -10,7 +10,7 @@ $captureID=[Guid]::NewGuid().ToString('N')
 $captureProject="capture-s4-$captureID"
 $captureRunDir=Join-Path $captureFleetRoot ".local/$captureProject"
 $captureEnv=Join-Path $captureRunDir 'compose.env'
-$captureOldToken=$env:LINEA_FLEET_AGENT_TOKEN
+$captureOldToken=$env:LINEA_FLEET_PLUGIN_TOKEN
 $captureCreated=$false
 $captureChildren=[System.Collections.Generic.List[string]]::new()
 $captureSequence=0
@@ -37,10 +37,10 @@ function Capture-API([string]$Method,[string]$Path,[string]$Body='',[int]$Expect
     Capture-Request $Method "/api/v1/plugins/livecapture/api/$Path" $Token $Body $Expected $Match
 }
 function Capture-NewChannel([string]$Token=$captureAdmin){Capture-API POST v1/channels (@{expires_at=[DateTime]::UtcNow.AddSeconds(110).ToString('o')}|ConvertTo-Json) 201 $Token}
-function Capture-StartConsumer([string]$Channel,[string]$TokenFile,[double]$Ratio=1){
+function Capture-StartConsumer([string]$Channel,[string]$TokenFile){
     $script:captureConsumerSequence++
     $captureName="$captureProject-consumer-$captureConsumerSequence"
-    $null=& docker run --detach --name $captureName --network "${captureProject}_ingress" --cpus 1 --memory 128m --pids-limit 64 --read-only --cap-drop ALL --security-opt no-new-privileges --mount "type=bind,source=$TokenFile,target=/consumer_token,readonly" "linea-fleet-livecapture-consumer:${ImageTag}" --endpoint http://fleet:8080/api/v1/plugins/livecapture/api --allow-insecure-http --token-file /consumer_token --channel $Channel --duration 100s --accept-ratio $Ratio --verify-redaction
+    $null=& docker run --detach --name $captureName --network "${captureProject}_ingress" --cpus 1 --memory 128m --pids-limit 64 --read-only --cap-drop ALL --security-opt no-new-privileges --mount "type=bind,source=$TokenFile,target=/consumer_token,readonly" "linea-fleet-livecapture-consumer:${ImageTag}" --endpoint http://fleet:8080/api/v1/plugins/livecapture/api --allow-insecure-http --token-file /consumer_token --channel $Channel --duration 100s --verify-redaction
     if($LASTEXITCODE -ne 0){throw 'Independent generic consumer startup failed'}
     $captureChildren.Add($captureName)
     Capture-Wait {return ((& docker logs $captureName 2>&1)-join "`n") -match 'consumer_ready'} 'Generic consumer did not start'
@@ -85,7 +85,7 @@ try{
     }
     [System.IO.File]::WriteAllText($captureObserve,($captureObserveConfig|ConvertTo-Json -Depth 12))
     $captureCompose+=@('--file',$captureObserve)
-    [System.IO.File]::WriteAllText($captureEnv,"FLEET_SECRET_DIR='$capturePath/fleet'`nFLEET_LIVECAPTURE_SECRET_DIR='$capturePath/plugin'`nFLEET_SERVER_ID=s4-$captureID`nFLEET_API_PORT=0`nFLEET_AGENT_PORT=0`nCAPTURE_CONTROL_PORT=0`nCAPTURE_DELIVERY_PORT=0`nFLEET_VERSION=${ImageTag}`nCAPTURE_VERSION=${ImageTag}`n")
+    [System.IO.File]::WriteAllText($captureEnv,"FLEET_SECRET_DIR='$capturePath/fleet'`nFLEET_LIVECAPTURE_SECRET_DIR='$capturePath/plugin'`nFLEET_SERVER_ID=s4-$captureID`nFLEET_API_PORT=0`nFLEET_AGENT_PORT=0`nCAPTURE_CONTROL_PORT=0`nCAPTURE_DELIVERY_PORT=0`nFLEET_VERSION=${ImageTag}`nCAPTURE_VERSION=${ImageTag}`nFLEET_BOOTSTRAP_PLUGIN_ACCESS=livecapture=admin`n")
     if(-not $SkipBuild){
         foreach($captureTarget in @(@('runtime','linea-fleet-livecapture-compat:collector'),@('capture-smoke','linea-fleet-livecapture-compat:capture-smoke'))){
             & docker build --file (Join-Path $captureFleetRoot 'deploy/docker/linea-collector.Dockerfile') --target $captureTarget[0] --tag $captureTarget[1] $captureFleetRoot
@@ -125,15 +125,16 @@ try{
     # The unchanged extension presents a fleet agent credential whose capture
     # label allows the s4 collector group; the plugin introspects it via core.
     $captureUnlabeled=Capture-Request POST /api/v1/credentials $captureAdmin (@{id=[Guid]::NewGuid().ToString('N');name='s4 unlabeled';role='agent';expires_at=[DateTime]::UtcNow.AddDays(1).ToString('o')}|ConvertTo-Json) 201
-    $captureUnlabeledFile=Join-Path $captureRunDir 'unlabeled_token';[System.IO.File]::WriteAllText($captureUnlabeledFile,$captureUnlabeled.token)
+    $captureUnlabeledFile=Join-Path $captureRunDir 'unlabeled_token';[System.IO.File]::WriteAllText($captureUnlabeledFile,$captureUnlabeled.plugin_token)
     $captureCredential=[Guid]::NewGuid().ToString('N')
     $captureIssued=Capture-Request POST /api/v1/credentials $captureAdmin (@{id=$captureCredential;name='s4 collectors';role='agent';expires_at=[DateTime]::UtcNow.AddDays(1).ToString('o');labels=@{capture='s4'}}|ConvertTo-Json) 201
-    $captureAgentFile=Join-Path $captureRunDir 'agent_token';[System.IO.File]::WriteAllText($captureAgentFile,$captureIssued.token)
-    if(-not $IsWindows){& chmod 444 $captureAgentFile $captureUnlabeledFile}
-    $env:LINEA_FLEET_AGENT_TOKEN=$captureIssued.token
+    $captureOpampFile=Join-Path $captureRunDir 'opamp_token';[System.IO.File]::WriteAllText($captureOpampFile,$captureIssued.token)
+    $captureAgentFile=Join-Path $captureRunDir 'plugin_token';[System.IO.File]::WriteAllText($captureAgentFile,$captureIssued.plugin_token)
+    if(-not $IsWindows){& chmod 444 $captureAgentFile $captureOpampFile $captureUnlabeledFile}
+    $env:LINEA_FLEET_PLUGIN_TOKEN=$captureIssued.plugin_token
     foreach($capturePod in @('collector-a','collector-b')){
         $captureName="$captureProject-$capturePod"
-        $null=& docker run --detach --init --name $captureName --network "${captureProject}_capture-ingress" --network-alias $capturePod --cpus 2 --memory 512m --pids-limit 128 --read-only --cap-drop ALL --security-opt no-new-privileges --mount "type=bind,source=$captureFleetRoot/plugins/livecapture/examples/collector.yaml,target=/fixture.yaml,readonly" --mount "type=bind,source=$captureRunDir/plugin/tls_cert.pem,target=/certs/ca.pem,readonly" --env LINEA_FLEET_AGENT_TOKEN --env "POD_NAME=$capturePod" -e GOMAXPROCS=2 linea-fleet-livecapture-compat:collector --config /fixture.yaml
+        $null=& docker run --detach --init --name $captureName --network "${captureProject}_capture-ingress" --network-alias $capturePod --cpus 2 --memory 512m --pids-limit 128 --read-only --cap-drop ALL --security-opt no-new-privileges --mount "type=bind,source=$captureFleetRoot/plugins/livecapture/examples/collector.yaml,target=/fixture.yaml,readonly" --mount "type=bind,source=$captureRunDir/plugin/tls_cert.pem,target=/certs/ca.pem,readonly" --env LINEA_FLEET_PLUGIN_TOKEN --env "POD_NAME=$capturePod" -e GOMAXPROCS=2 linea-fleet-livecapture-compat:collector --config /fixture.yaml
         if($LASTEXITCODE -ne 0){throw 'Real Collector startup failed'}
         $captureChildren.Add($captureName)
     }
@@ -152,7 +153,7 @@ try{
     $captureDenied=Invoke-WebRequest "http://127.0.0.1:$captureMetricsPort/metrics" -Headers @{Authorization="Bearer $captureAdmin"} -SkipHttpErrorCheck
     if($captureDenied.StatusCode -ne 401){throw 'General API token crossed private metrics credential scope'}
     $captureCoreMetrics=Invoke-WebRequest "$captureBase/metrics" -Headers @{Authorization="Bearer $captureAdmin"}
-    if($captureCoreMetrics.Content -notmatch 'linea_fleet_database_owner_wait_seconds_count' -or $captureCoreMetrics.Content -notmatch 'linea_fleet_plugins\{state="ready"\} 1' -or $captureCoreMetrics.Content -match 'linea_fleet_livecapture_'){throw 'Core operational metrics missing or capture boundary crossed'}
+    if($captureCoreMetrics.Content -notmatch 'linea_fleet_http_requests_total ' -or $captureCoreMetrics.Content -notmatch 'linea_fleet_plugins\{state="ready"\} 1' -or $captureCoreMetrics.Content -match 'linea_fleet_livecapture_'){throw 'Core operational metrics missing or capture boundary crossed'}
     Write-Output 'PASS S6.1 public cursor pages, private/read-only scrape credentials, plugin effective limits and domain-free core metrics.'
     if(@((Capture-Request GET /api/v1/agents $captureAdmin).items).Count -ne 0){throw 'Capture peer identities were invented as OpAMP UIDs'}
     $captureChannel=Capture-NewChannel
@@ -162,6 +163,7 @@ try{
     Capture-Active $captureOperation.id
     Capture-IngressRefusal (Join-Path $captureRunDir 'plugin/host_token') Unauthenticated
     Capture-IngressRefusal $captureUnlabeledFile Unauthenticated
+    Capture-IngressRefusal $captureOpampFile Unauthenticated
     Capture-IngressRefusal $captureAgentFile PermissionDenied
     Capture-IngressRefusal $captureAgentFile ResourceExhausted '' $true
     Capture-IngressRefusal $captureAgentFile Unavailable wrong-host
@@ -182,7 +184,7 @@ try{
     Capture-Stop $captureOperation.id
     $null=& docker stop --time 5 $captureConsumer
     $null=Capture-API POST v1/captures ($captureRaw|ConvertTo-Json -Depth 12) 403
-    Write-Output 'PASS public API: real TLS/bearer peers, generic consumer receipts for all signals, OTTL filtering/redaction, fixed roster, overlap denial, raw denial, idempotency and acknowledged stop.'
+    Write-Output 'PASS public API: real TLS/bearer peers, a generic consumer receiving all signals, OTTL filtering/redaction, fixed roster, overlap denial, raw denial, idempotency and acknowledged stop.'
 
     # Restart the same real Collector: its capture identity remains, generation advances.
     $captureOldPeer=@($capturePeers|Where-Object{$_.identity.pod -eq 'collector-a'})[0]
@@ -193,25 +195,22 @@ try{
     $captureFreshChannel=Capture-NewChannel
     $null=Capture-API POST v1/captures (Capture-Body $captureFreshChannel.id @($captureOldPeer)) 409
 
-    # Partial receipts are returned as OTLP partial success, rather than full ACK.
-    $capturePartialConsumer=Capture-StartConsumer $captureFreshChannel.id $captureAdminFile 0.5
+    # A filter the Collector rejects fails the capture; it is never reported active.
+    $captureFilterConsumer=Capture-StartConsumer $captureFreshChannel.id $captureAdminFile
     $captureInvalid=Capture-Body $captureFreshChannel.id @($capturePeers[0]) | ConvertFrom-Json
     $captureInvalid.filter.traces.span=@('invalid OTTL expression (')
     $captureInvalidOperation=Capture-API POST v1/captures ($captureInvalid|ConvertTo-Json -Depth 12) 202
     Capture-Wait {return (Capture-API GET "v1/captures/$($captureInvalidOperation.id)").state -eq 'failed'} 'Collector filter rejection was falsely reported active or lost'
-    $capturePartial=Capture-API POST v1/captures (Capture-Body $captureFreshChannel.id @($capturePeers[0]) 25 $false) 202
-    Capture-Active $capturePartial.id
-    Capture-Generate $capturePeers[0].identity.pod
-    Capture-Wait {$captureCounts=Capture-Counts $capturePartialConsumer;return $captureCounts -and $captureCounts.accepted_records -eq 3 -and $captureCounts.rejected_records -eq 3} 'Consumer partial acceptance was not preserved'
-    Capture-Stop $capturePartial.id
-    $null=& docker stop --time 5 $capturePartialConsumer
+    $null=& docker stop --time 5 $captureFilterConsumer
 
-    # A channel without a polling/acknowledging consumer must never ACK OTLP.
+    # A channel without a polling consumer drops what the Collector sends and counts
+    # it, then withdraws the capture; the Collector never waits.
     $captureLostChannel=Capture-NewChannel
     $captureLost=Capture-API POST v1/captures (Capture-Body $captureLostChannel.id @($capturePeers[0]) 12) 202
     Capture-Active $captureLost.id
     Capture-Generate $capturePeers[0].identity.pod
-    Capture-Wait {$captureOutcome=Capture-API GET "v1/captures/$($captureLost.id)";return $captureOutcome.state -in @('stopped','expired') -and $captureOutcome.reason -in @('receipt_uncertain','consumer_unavailable')} 'Lost consumer did not withdraw capture with visible uncertainty'
+    Capture-Wait {$captureOutcome=Capture-API GET "v1/captures/$($captureLost.id)";return $captureOutcome.state -in @('stopped','expired') -and $captureOutcome.reason -eq 'consumer_unavailable'} 'Lost consumer did not withdraw capture'
+    if((Capture-API GET v1/metrics).counters.dropped_batches_total -lt 1){throw 'Lost consumer batches were not dropped and counted'}
 
     $captureExpiryChannel=Capture-NewChannel
     $captureExpiryConsumer=Capture-StartConsumer $captureExpiryChannel.id $captureAdminFile
@@ -221,9 +220,9 @@ try{
     $null=& docker stop --time 5 $captureExpiryConsumer
     # The service's expiry guard may conservatively retain a lease for five seconds.
     Capture-Wait {return (& docker exec $capturePluginPG psql -U postgres -d livecapture -At -c "SELECT count(*) FROM capture.leases WHERE expires_at>now()") -eq '0'} 'Expiry guard did not elapse'
-    Write-Output 'PASS reconnect generation, partial receipts, lost-consumer backpressure and absolute expiry.'
+    Write-Output 'PASS reconnect generation, rejected filter, lost-consumer drops and absolute expiry.'
     $captureObserved=Capture-API GET v1/metrics
-    if($captureObserved.counters.receipt_uncertain_total -lt 1 -or $captureObserved.counters.consumer_rejected_traces_records_total -lt 1){throw 'Real delivery partial/uncertain outcomes not observable'}
+    if($captureObserved.counters.dropped_batches_total -lt 1 -or $captureObserved.counters.delivered_traces_records_total -lt 1){throw 'Real delivery and drops not observable'}
 
     $captureDrainChannel=Capture-NewChannel
     $captureDrainConsumer=Capture-StartConsumer $captureDrainChannel.id $captureAdminFile
@@ -254,14 +253,16 @@ try{
 
     # A lost management credential cannot keep a consumer channel alive.
     $captureOtherID=[Guid]::NewGuid().ToString('N')
-    $captureOtherKey=Capture-Request POST /api/v1/credentials $captureAdmin (@{id=$captureOtherID;name='s4-other-client';role='admin';expires_at=[DateTime]::UtcNow.AddHours(1).ToString('o')}|ConvertTo-Json) 201
+    $captureOtherKey=Capture-Request POST /api/v1/credentials $captureAdmin (@{id=$captureOtherID;name='s4-other-client';role='admin';plugin_access=@{livecapture='write'};expires_at=[DateTime]::UtcNow.AddHours(1).ToString('o')}|ConvertTo-Json) 201
     $captureOtherFile=Join-Path $captureRunDir 'other_admin_token';[System.IO.File]::WriteAllText($captureOtherFile,$captureOtherKey.token)
     if(-not $IsWindows){& chmod 444 $captureOtherFile}
     $captureOtherChannel=Capture-NewChannel $captureOtherKey.token
     $captureOtherConsumer=Capture-StartConsumer $captureOtherChannel.id $captureOtherFile
     $captureOwned=Capture-API POST v1/captures (Capture-Body $captureOtherChannel.id @($capturePeers[0]) 14) 202 $captureOtherKey.token
     Capture-Active $captureOwned.id $captureOtherKey.token
-    $null=Capture-API GET "v1/captures/$($captureOwned.id)" '' 403
+    # An admin reads and may stop another owner's capture, never its records.
+    $null=Capture-API GET "v1/captures/$($captureOwned.id)"
+    $null=Capture-API GET "v1/channels/$($captureOtherChannel.id)/next" '' 403
     $null=Capture-Request DELETE "/api/v1/credentials/$captureOtherID" $captureAdmin '' 204
     $null=Capture-API GET "v1/channels/$($captureOtherChannel.id)/next" '' 401 $captureOtherKey.token
     Capture-Wait {$captureOwnerOutcome=& docker exec $capturePluginPG psql -U postgres -d livecapture -At -c "SELECT state FROM capture.operations WHERE id='$($captureOwned.id)'";return $captureOwnerOutcome -in @('stopped','expired')} 'Revoked client retained capture execution'
@@ -348,7 +349,7 @@ try{
     $null=& docker exec $captureRestore pg_restore -U postgres --exit-on-error --dbname livecapture /tmp/plugin.dump
     if($LASTEXITCODE -ne 0){throw 'Fresh plugin restore failed'}
     $captureRestoreMetadata=& docker exec $captureRestore psql -U postgres -d livecapture -At -c "SELECT authority_id FROM capture.metadata; SELECT count(*) FROM capture.schema_version; SELECT state FROM capture.operations WHERE id='$($captureCrashOperation.id)'"
-    if($LASTEXITCODE -ne 0 -or $captureRestoreMetadata[0] -ne $capturePersistedAuthority -or $captureRestoreMetadata[1] -ne '2' -or $captureRestoreMetadata[2] -ne 'interrupted'){throw 'Restored plugin lost authority, schema or interrupted metadata'}
+    if($LASTEXITCODE -ne 0 -or $captureRestoreMetadata[0] -ne $capturePersistedAuthority -or $captureRestoreMetadata[1] -ne [string]@(Get-ChildItem (Join-Path $captureFleetRoot 'internal/fleetplugins/livecapture/migrations') -Filter *.sql).Count -or $captureRestoreMetadata[2] -ne 'interrupted'){throw 'Restored plugin lost authority, schema or interrupted metadata'}
     $captureRuntimeFile=Join-Path $captureRunDir 'plugin/runtime_url'
     $captureRuntimeValue=[System.IO.File]::ReadAllText($captureRuntimeFile)
     [System.IO.File]::WriteAllText($captureRuntimeFile,$captureRuntimeValue.Replace('@capture-postgres:5432/',"@${captureRestore}:5432/"))
@@ -357,12 +358,15 @@ try{
     if((Capture-API GET "v1/captures/$($captureCrashOperation.id)").state -ne 'interrupted'){throw 'Runtime did not reopen restored operation metadata'}
     $null=& docker stop --time 5 $captureRestore
     if($LASTEXITCODE -ne 0){throw 'Plugin database outage injection failed'}
-    Capture-Wait {return (& docker inspect $capturePlugin --format '{{.State.Running}}') -eq 'false'} 'Plugin stayed active after losing its database authority'
+    # The plugin exits on the loss; Compose restarts it (unless-stopped), and
+    # each restart refuses to run without its database.
+    Capture-Wait {return ((& docker logs $capturePlugin 2>&1|Out-String) -match '"msg":"plugin_fatal".*"cause":"storage_lost"')} 'Plugin stayed active after losing its database authority'
+    Capture-Wait {return (Capture-Request GET /api/v1/plugins/livecapture $captureAdmin).state -ne 'ready'} 'Core still shows the plugin ready without its database'
     if((Capture-Request GET /readyz '').status -ne 'ready'){throw 'Plugin database outage affected core reporting'}
     Write-Output 'PASS core credential revocation, fresh-database metadata restore, and plugin database-outage failure isolation.'
     Write-Output "Real Collector source revision: $captureRevision"
 }finally{
     foreach($captureName in $captureChildren){& docker logs $captureName *> (Join-Path $captureRunDir "$captureName.log");$null=& docker rm --force $captureName 2>&1}
     if($captureCreated){Capture-Compose down --volumes --remove-orphans --timeout 5}
-    $env:LINEA_FLEET_AGENT_TOKEN=$captureOldToken
+    $env:LINEA_FLEET_PLUGIN_TOKEN=$captureOldToken
 }

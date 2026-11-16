@@ -2282,6 +2282,11 @@ export interface components {
             point?: string;
             signal?: string;
         };
+        CaptureTargetDelivery: {
+            dropped_batches: number;
+            dropped_records: number;
+            received_records: number;
+        };
         CaptureTargetStats: {
             dropped?: {
                 [key: string]: number;
@@ -2294,6 +2299,7 @@ export interface components {
         CaptureTargetStatus: {
             agent_id?: string;
             collector_id: string;
+            delivery?: components["schemas"]["CaptureTargetDelivery"];
             generation: number;
             /** Format: date-time */
             observed_at?: string;
@@ -2411,6 +2417,7 @@ export interface components {
         CollectorGroupSave: {
             agent_ids?: string[];
             id?: string;
+            max_affected?: number;
             name: string;
             revision: number;
             selector?: string;
@@ -3323,6 +3330,7 @@ export interface components {
             scenario_yaml?: string;
         };
         OperationError: {
+            affected?: number;
             code: string;
             current_statement?: string;
             diagnostics?: components["schemas"]["Diagnostic"][];

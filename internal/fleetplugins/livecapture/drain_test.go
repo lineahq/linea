@@ -15,6 +15,7 @@ func TestDrainWithdrawsExecutionAndManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	send(t, s, p)
 	s.Drain()
 	s.mu.Lock()
 	state := s.operations[op.ID].op.State

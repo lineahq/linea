@@ -117,9 +117,17 @@ return an error object with `code` and `message`.
 
 | Role | May |
 | --- | --- |
-| `reader` | Read inventory, groups, events, metrics, plugin discovery and status, and the plugin API reads a plugin allows |
-| `operator` | Everything a reader may, plus write groups, configs, config versions, assignments and rollouts, retry an agent's config, read config version bodies and use plugin API writes. Config management still needs `--config-management`. No credentials API, no plugin lifecycle |
-| `admin` | Everything an operator may, plus the credentials API and plugin lifecycle |
+| `reader` | Read inventory, groups, events, metrics and plugin discovery |
+| `operator` | Everything a reader may, plus write groups, configs, config versions, assignments and rollouts, retry an agent's config, read config version bodies. Config management still needs `--config-management`. No credentials API, no plugin lifecycle. With config management on, an operator controls what managed Collectors run, so it can make them read host files and environment variables through `${file:...}` and `${env:...}` and send them anywhere ([config management](config-management.md#store-config-versions)) |
+| `admin` | Everything an operator may, plus the credentials API, plugin lifecycle and the audit record |
+
+No role reaches a plugin's status or API. An admin grants that per credential
+and plugin with `plugin_access` (`{"livecapture": "write"}`; `read`,
+`write` or `admin`, at most 16 plugins); fleet answers 403 without a grant
+and passes the level to the plugin, which maps it to its routes. `delegate`
+lets a service credential, such as the debugger's, send the acting-for
+headers that name the user it acts for. Both are for management credentials
+only.
 
 | Endpoint | Access / behavior |
 | --- | --- |
@@ -129,16 +137,17 @@ return an error object with `code` and `message`.
 | GET /api/v1/agents/{id} | Current agent detail: attributes, health, components, config hash |
 | GET /api/v1/summary | Inventory aggregates, optionally `group_by` a promoted attribute |
 | GET /api/v1/plugins, GET /api/v1/plugins/{id} | Configured plugin identity, permissions and readiness |
-| GET /api/v1/plugins/{id}/status | Reader, operator or admin; bounded plugin-owned status |
+| GET /api/v1/plugins/{id}/status | A `plugin_access` grant on the plugin; bounded plugin-owned status |
 | POST /api/v1/plugins/{id}/lifecycle | Admin; durable drain, disable or enable with `If-Match` revision |
-| /api/v1/plugins/{id}/api/{path} | Authenticated opaque JSON ingress; the plugin owns schemas and domain authorization |
+| /api/v1/plugins/{id}/api/{path} | A `plugin_access` grant; opaque JSON ingress, the plugin owns schemas and domain authorization |
 | GET /api/v1/events | Bounded meaningful changes: `cursor`, `limit`, `wait` (long-poll up to 30 s) |
+| GET /api/v1/audit | Admin; the administrative record, newest first: `limit`, `before` (from `next_before`), `kind`, `actor`, `since`, `until` |
 | GET /api/v1/groups, GET /api/v1/groups/{id} | Group metadata; static members or canonical selector |
 | GET /api/v1/groups/{id}/agents | Current members as agent pages |
-| PUT /api/v1/groups/{id}, DELETE /api/v1/groups/{id} | Admin or operator; static `agent_ids` or selector; quoted `If-Match` revision required |
+| PUT /api/v1/groups/{id}, DELETE /api/v1/groups/{id} | Admin or operator; static `agent_ids` or selector; quoted `If-Match` revision required; with config management, an edit that reconfigures more connected agents than `--config-unstaged-limit` needs `?max_affected=N` |
 | GET /api/v1/credentials, GET /api/v1/credentials/{id} | Admin; metadata only, never tokens or hashes |
 | POST /api/v1/credentials, DELETE /api/v1/credentials/{id} | Admin; one-time issuance, persistent revocation |
-| PATCH /api/v1/credentials/{id} | Admin; sets the `remote_config` opt-in ([config management](config-management.md)) |
+| PATCH /api/v1/credentials/{id} | Admin; sets the `remote_config` opt-in ([config management](config-management.md)); with config management, an opt-in that reconfigures more connected agents than `--config-unstaged-limit` needs `?max_affected=N` |
 | GET /api/v1/openapi.json | [OpenAPI 3.1 contract](../../internal/fleet/api/openapi.json) |
 | GET /metrics | Authenticated, fixed-cardinality Prometheus metrics |
 
@@ -150,6 +159,12 @@ Reading data:
   Cursors survive restarts and work on any replica.
 - A cursor answers 410 after a retention gap or a restore into another
   cluster. Refresh state and start again without a cursor.
+- Events are trimmed by count, so a reconnect storm can push a revocation
+  out of them. The audit record keeps every change to credentials, groups,
+  configs, assignments, rollouts and plugin lifecycle, with actor and
+  acting-for, for 400 days (at most one million records), written in the same
+  transaction as the change. Agent activity and the holds the gateway sets
+  never write to it.
 - Connectivity, health and telemetry delivery are separate facts. A crashed
   replica's agents read as disconnected within 10 s, with health preserved.
 - A second connection with an active UID and the same credential takes
@@ -171,7 +186,9 @@ curl -s -H "$ADMIN" -H 'Content-Type: application/json' -X POST $API/credentials
 ```
 
 `date -d` is GNU date; on macOS use `date -u -v+30d +%FT%TZ`. The response
-holds the token once. In PowerShell:
+holds the token once, and a second one, `plugin_token`, that Collector
+components present to plugins such as live capture. Fleet refuses the plugin
+token, and plugins refuse the agent token. In PowerShell:
 
 ~~~powershell
 $fleetKeyID = [Guid]::NewGuid().ToString('N')
@@ -211,9 +228,13 @@ Identity:
     the agent, actor: the refused credential; at most one per agent and
     credential per minute on each replica) and counts the refusal in
     `linea_fleet_agent_credential_refused_total`.
-  - Another credential can take a disconnected UID. The inventory then shows
-    the new credential, and `agent.credential_changed` records the previous
-    credential ID in its detail.
+  - Another credential can take a disconnected UID only when the credential
+    that holds it is revoked or expired, or when both have the same labels
+    and the same `remote_config` opt-in (a rotation). The inventory then
+    shows the new credential, and `agent.credential_changed` records the
+    previous credential ID in its detail. Any other credential is refused as
+    for a connected UID. The in-memory store, which knows no credentials,
+    does not apply this rule.
   - On Kubernetes, pod churn creates new UIDs, so replicas of one deployment
     do not collide. A restarted pod that keeps its UID reconnects with the
     same credential and takes over. Only a pod holding a different
@@ -235,8 +256,10 @@ Credential rules:
 | `agent_id` | Not accepted by the credential API |
 | `labels` | Up to 16, used by plugins and config management ([labels](plugins.md#serving-an-unchanged-collector-component)) |
 | Revocation | Closes every session using the credential and blocks new registrations and state publication |
-| Rotation | Issue another agent token, update the deployment's secret, then revoke the old token |
+| Rotation | Issue another agent credential, update the deployment's secrets (agent and plugin token), then revoke the old one |
+| Plugin token | Agent credentials only. Issued with the agent token and never returned again. Credentials issued before plugin tokens existed have none: reissue them for plugins |
 | Capacity | At most 1,000 credentials, revoked metadata included |
+| Revoked metadata | The leader deletes agent and reader credentials 30 days after revocation and records `credential.deleted`. Admin and operator credentials stay, so offline bootstrap keeps refusing a revoked deployment token |
 
 ## Groups
 
@@ -288,7 +311,7 @@ guide](config-management.md) covers setup and operation.
 Plugins are separate processes with authenticated manifests, discovery, a
 durable admin lifecycle and an opaque public API. They use generic host
 services: an agent directory, attribute and group resolution, and
-introspection of agent credentials (whose labels carry plugin allowances). A
+introspection of agent credentials' plugin tokens (whose labels carry plugin allowances). A
 Collector component plus a registered plugin service works without changes to
 core or the component. Fleet starts with zero plugins.
 
@@ -297,7 +320,7 @@ core or the component. Fleet starts with zero plugins.
 | [Plugin guide](plugins.md) | The full contract |
 | [Plugin SDK](../../pluginsdk/README.md) | The contract in Go |
 | [`examples/fleet-agent-summary-plugin`](../../examples/fleet-agent-summary-plugin) | A complete template with a Dockerfile and a Compose overlay |
-| [Livecapture plugin](livecapture.md) | Capture execution and consumer delivery over the unchanged Collector extension's gRPC control and OTLP wire. Collectors authenticate with their fleet agent credential; captures can target agents, groups or selectors. Its module, image, authorization and database are independent of core |
+| [Livecapture plugin](livecapture.md) | Capture execution and consumer delivery over the unchanged Collector extension's gRPC control and OTLP wire. Collectors authenticate with their fleet agent credential's plugin token; captures can target agents, groups or selectors. Its module, image, authorization and database are independent of core |
 
 ## Run without Docker (development)
 

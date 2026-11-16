@@ -21,22 +21,59 @@ import (
 	"github.com/lineahq/linea/internal/fleet/inventory"
 	"github.com/lineahq/linea/internal/fleet/plugins"
 	"github.com/lineahq/linea/internal/fleet/postgres"
+	"github.com/lineahq/linea/internal/fleet/translog"
 	"github.com/lineahq/linea/pluginsdk"
 )
 
 // Run returns only after cancellation or a listener failure and bounded shutdown.
 // notify runs after both listeners are bound and contains no credentials.
+//
+// Run writes the process transitions to cfg.Log: process_started, process_ready
+// and process_stopped with an enumerated reason, which is the only account of
+// why the process stopped. The returned error is for the caller's exit code and
+// tests; it may carry detail that never reaches the log.
 func Run(ctx context.Context, cfg Config, version string, notify func(management, agent net.Addr)) error {
+	log, started := cfg.Log, time.Now()
 	if err := cfg.Validate(); err != nil {
+		log.Error(translog.ProcessStopped, translog.Version(version), translog.Why(translog.ReasonConfigInvalid))
 		return err
 	}
-	return runWithStore(ctx, cfg, version, notify)
+	log.Info(translog.ProcessStarted, translog.Version(version))
+	// The summaries run for the life of the process and flush once more at
+	// the end, so the last window of failed authentications is not lost.
+	summaries, stopSummaries := context.WithCancel(context.Background())
+	ticker := time.NewTicker(translog.SummaryInterval)
+	summarized := make(chan struct{})
+	go func() { defer close(summarized); log.Summarize(summaries, ticker.C) }()
+	reason, err := runWithStore(ctx, cfg, version, notify)
+	stopSummaries()
+	<-summarized
+	ticker.Stop()
+	stopped := []translog.Attr{translog.Version(version), translog.Why(reason), translog.Duration(translog.DurationUptime, time.Since(started))}
+	if err != nil {
+		log.Error(translog.ProcessStopped, stopped...)
+	} else {
+		log.Info(translog.ProcessStopped, stopped...)
+	}
+	return err
 }
 
-func runWithStore(ctx context.Context, cfg Config, version string, notify func(management, agent net.Addr)) error {
+// openReason names why the database could not be opened.
+func openReason(err error) translog.Reason {
+	switch {
+	case errors.Is(err, auth.ErrUnauthorized):
+		return translog.ReasonNoAdminCredential
+	case errors.Is(err, fleet.ErrConflict):
+		return translog.ReasonSchemaConflict
+	}
+	return translog.ReasonDatabaseUnavailable
+}
+
+func runWithStore(ctx context.Context, cfg Config, version string, notify func(management, agent net.Addr)) (translog.Reason, error) {
+	log := cfg.Log
 	registrations, err := plugins.Load(cfg.PluginsConfig, cfg.APIToken, cfg.AgentToken)
 	if err != nil {
-		return err
+		return translog.ReasonPluginsInvalid, err
 	}
 	var store fleet.Repository
 	var control fleet.ControlRepository
@@ -48,10 +85,10 @@ func runWithStore(ctx context.Context, cfg Config, version string, notify func(m
 	var lost <-chan struct{}
 	if cfg.Storage == "postgres" {
 		startupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		durable, err = postgres.Open(startupCtx, cfg.DatabaseURL, postgres.Options{ServerID: cfg.ServerID, MaxAgents: cfg.Limits.MaxAgents, MaxEvents: cfg.Limits.MaxEvents, Retention: cfg.AgentRetention})
+		durable, err = postgres.Open(startupCtx, cfg.DatabaseURL, postgres.Options{ServerID: cfg.ServerID, MaxAgents: cfg.Limits.MaxAgents, MaxEvents: cfg.Limits.MaxEvents, Retention: cfg.AgentRetention, Log: log})
 		cancel()
 		if err != nil {
-			return fmt.Errorf("open fleet database (migrate/bootstrap first): %w", err)
+			return openReason(err), fmt.Errorf("open fleet database (migrate/bootstrap first): %w", err)
 		}
 		defer durable.Close()
 		store, control, lost = durable, durable, durable.Lost()
@@ -61,27 +98,40 @@ func runWithStore(ctx context.Context, cfg Config, version string, notify func(m
 		store = fleet.NewStore(cfg.Limits.MaxAgents)
 		apiAuth, _ := auth.New(cfg.APIToken)
 		agentAuth, _ := auth.New(cfg.AgentToken)
-		apiAccess = auth.Static{Bearer: apiAuth, Role: "reader"}
+		// Memory mode's one management token reads every registered plugin.
+		access := make(map[string]string, len(registrations))
+		for _, registration := range registrations {
+			access[registration.ID] = pluginsdk.AccessRead
+		}
+		apiAccess = auth.Static{Bearer: apiAuth, Role: "reader", PluginAccess: access}
 		agentAccess = auth.Static{Bearer: agentAuth, Role: "agent"}
-		introspector = auth.Static{Bearer: agentAuth, Role: "agent"}
+		introspector = auth.Static{}
 		cfg.Limits.MaxEvents = 0
 	}
 	var tlsConfig *tls.Config
 	if cfg.TLSCert != "" {
 		cert, err := tls.LoadX509KeyPair(cfg.TLSCert, cfg.TLSKey)
 		if err != nil {
-			return fmt.Errorf("load TLS identity: %w", err)
+			return translog.ReasonTLSIdentity, fmt.Errorf("load TLS identity: %w", err)
 		}
 		tlsConfig = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}
 	}
+	hostTLS := tlsConfig
+	if cfg.PluginTLSCert != "" {
+		cert, err := tls.LoadX509KeyPair(cfg.PluginTLSCert, cfg.PluginTLSKey)
+		if err != nil {
+			return translog.ReasonTLSIdentity, fmt.Errorf("load plugin host TLS identity: %w", err)
+		}
+		hostTLS = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}
+	}
 	management, err := net.Listen("tcp", cfg.ManagementAddr)
 	if err != nil {
-		return fmt.Errorf("management listen: %w", err)
+		return translog.ReasonListenFailed, fmt.Errorf("management listen: %w", err)
 	}
 	defer management.Close()
 	agent, err := net.Listen("tcp", cfg.AgentAddr)
 	if err != nil {
-		return fmt.Errorf("agent listen: %w", err)
+		return translog.ReasonListenFailed, fmt.Errorf("agent listen: %w", err)
 	}
 	defer agent.Close()
 	info := api.ServerInfo{ServerID: cfg.ServerID, Version: version, Storage: cfg.Storage, Limits: cfg.Limits}
@@ -89,35 +139,40 @@ func runWithStore(ctx context.Context, cfg Config, version string, notify func(m
 		info.ReplicaID = durable.ReplicaID()
 	}
 	apiHandler := api.NewAuthorized(store, apiAccess, info, control, credentials)
+	apiHandler.SetLogger(log)
 	registry := plugins.New(ctx, registrations, store)
 	defer registry.Close()
+	registry.SetLogger(log)
 	registry.SetHost(control, introspector)
-	if lifecycle, ok := store.(fleet.PluginLifecycleRepository); ok {
-		if err := registry.RestoreLifecycle(ctx, lifecycle); err != nil {
-			return err
-		}
+	if err := registry.Load(ctx); err != nil {
+		return translog.ReasonDatabaseUnavailable, err
+	}
+	if durable != nil {
+		durable.SetPluginSignal(registry.Notify)
 	}
 	apiHandler.SetPlugins(registry)
 	if cfg.ConfigManagement {
 		apiHandler.SetConfigManagement(durable, cfg.ConfigAllowedComponents)
+		apiHandler.SetUnstagedLimit(cfg.ConfigUnstagedLimit)
 	}
 	var host net.Listener
 	if len(registrations) > 0 {
 		host, err = net.Listen("tcp", cfg.PluginAddr)
 		if err != nil {
-			return errors.New("plugin host listen failed")
+			return translog.ReasonListenFailed, errors.New("plugin host listen failed")
 		}
 		defer host.Close()
 	}
 	ingest, err := inventory.New(cfg.AgentAttributes, cfg.StoreHealthErrors)
 	if err != nil {
-		return err
+		return translog.ReasonConfigInvalid, err
 	}
 	gw, err := gateway.NewAuthorized(store, agentAccess, ingest, cfg.Limits.MaxConnections, cfg.Limits.MaxMessageBytes)
 	if err != nil {
-		return err
+		return translog.ReasonInternal, err
 	}
 	defer gw.Close()
+	gw.SetLogger(log)
 	gw.SetPendingSessions(cfg.Limits.MaxPendingSessions)
 	if durable != nil {
 		durable.SetSignals(gw.CloseAgent, gw.CloseCredential)
@@ -138,18 +193,24 @@ func runWithStore(ctx context.Context, cfg Config, version string, notify func(m
 			MaxHeaderBytes: 16 * 1024, TLSConfig: serverTLS}
 	}
 	managementServer, agentServer := makeServer(apiHandler), makeServer(gw)
+	// OpAMP over WebSocket cannot use HTTP/2, and one HTTP/2 connection
+	// would carry many unauthenticated requests past the TCP bound.
+	agentServer.TLSNextProto = map[string]func(*http.Server, *tls.Conn, http.Handler){}
+	agentServer.ConnContext = agentConnContext
 	// Bound all TCP peers, including incomplete TLS/HTTP handshakes, not only
-	// agents that have completed their first OpAMP message.
+	// agents that have completed their first OpAMP message. On the agent
+	// listener the bound covers peers until they authenticate, so peers
+	// without a credential cannot take the sessions of real agents.
 	managementLimit := &limitedListener{Listener: management, slots: make(chan struct{}, 128)}
 	agentLimit := &limitedListener{Listener: agent, slots: make(chan struct{}, cfg.Limits.MaxConnections)}
 	management, agent = managementLimit, agentLimit
 	writers := []func(io.Writer){gw.WriteMetrics, registry.WriteMetrics, func(w io.Writer) {
-		fmt.Fprint(w, "# TYPE linea_fleet_tcp_connections gauge\n# TYPE linea_fleet_tcp_refused_total counter\n# TYPE linea_fleet_tcp_connection_limit gauge\n")
+		fmt.Fprint(w, "# TYPE linea_fleet_tcp_connections gauge\n# TYPE linea_fleet_tcp_unauthenticated_connections gauge\n# TYPE linea_fleet_tcp_refused_total counter\n# TYPE linea_fleet_tcp_connection_limit gauge\n")
 		for _, entry := range []struct {
 			name string
 			l    *limitedListener
 		}{{"management", managementLimit}, {"agent", agentLimit}} {
-			fmt.Fprintf(w, "linea_fleet_tcp_connections{listener=\"%s\"} %d\nlinea_fleet_tcp_refused_total{listener=\"%s\"} %d\nlinea_fleet_tcp_connection_limit{listener=\"%s\"} %d\n", entry.name, len(entry.l.slots), entry.name, entry.l.refused.Load(), entry.name, cap(entry.l.slots))
+			fmt.Fprintf(w, "linea_fleet_tcp_connections{listener=\"%s\"} %d\nlinea_fleet_tcp_unauthenticated_connections{listener=\"%s\"} %d\nlinea_fleet_tcp_refused_total{listener=\"%s\"} %d\nlinea_fleet_tcp_connection_limit{listener=\"%s\"} %d\n", entry.name, entry.l.open.Load(), entry.name, len(entry.l.slots), entry.name, entry.l.refused.Load(), entry.name, cap(entry.l.slots))
 		}
 	}}
 	if database, ok := store.(interface{ WriteMetrics(io.Writer) }); ok {
@@ -159,7 +220,7 @@ func runWithStore(ctx context.Context, cfg Config, version string, notify func(m
 	errorsCh := make(chan error, 3)
 	serve := func(s *http.Server, l net.Listener) {
 		var err error
-		if tlsConfig != nil {
+		if s.TLSConfig != nil {
 			err = s.ServeTLS(l, "", "")
 		} else {
 			err = s.Serve(l)
@@ -172,6 +233,10 @@ func runWithStore(ctx context.Context, cfg Config, version string, notify func(m
 	if host != nil {
 		host = &limitedListener{Listener: host, slots: make(chan struct{}, 32)}
 		hostServer = makeServer(registry)
+		hostServer.TLSConfig = nil
+		if hostTLS != nil {
+			hostServer.TLSConfig = hostTLS.Clone()
+		}
 		hostServer.ReadHeaderTimeout = pluginsdk.RequestTimeout
 		hostServer.ReadTimeout = pluginsdk.RequestTimeout
 		hostServer.WriteTimeout = 2 * time.Second
@@ -191,16 +256,20 @@ func runWithStore(ctx context.Context, cfg Config, version string, notify func(m
 		case <-stopHealth:
 		}
 	}()
+	log.Info(translog.ProcessReady)
 	if notify != nil {
 		notify(management.Addr(), agent.Addr())
 	}
 	var runErr error
+	reason := translog.ReasonSignal
 	select {
 	case <-ctx.Done():
 	case runErr = <-healthError:
+		reason = translog.ReasonReplicaFenced
 	case runErr = <-errorsCh:
+		reason = translog.ReasonListenerFailed
 		if errors.Is(runErr, http.ErrServerClosed) {
-			runErr = nil
+			runErr, reason = nil, translog.ReasonShutdown
 		}
 	}
 	apiHandler.SetReady(false)
@@ -216,6 +285,7 @@ func runWithStore(ctx context.Context, cfg Config, version string, notify func(m
 		select {
 		case <-spread:
 		case runErr = <-healthError:
+			reason = translog.ReasonReplicaFenced
 		}
 		stopSpread()
 		<-spread
@@ -236,18 +306,28 @@ func runWithStore(ctx context.Context, cfg Config, version string, notify func(m
 	agentErr := agentServer.Shutdown(shutdownCtx)
 	_ = managementServer.Close()
 	_ = agentServer.Close()
-	return errors.Join(runErr, gatewayErr, managementErr, agentErr, hostErr)
+	err = errors.Join(runErr, gatewayErr, managementErr, agentErr, hostErr)
+	if runErr == nil && err != nil {
+		reason = translog.ReasonShutdownIncomplete
+	}
+	return reason, err
 }
 
+// limitedListener bounds the connections that hold a slot. A connection
+// holds its slot until it closes, or until the handler calls authenticated:
+// on the agent listener, slots bound only peers that have not yet presented
+// an agent credential, and the gateway's session limit bounds the rest.
 type limitedListener struct {
 	net.Listener
 	slots   chan struct{}
 	refused atomic.Uint64
+	open    atomic.Int64
 }
 type limitedConn struct {
 	net.Conn
-	once    sync.Once
-	release func()
+	l      *limitedListener
+	held   atomic.Bool
+	closed sync.Once
 }
 
 func (l *limitedListener) Accept() (net.Conn, error) {
@@ -258,7 +338,10 @@ func (l *limitedListener) Accept() (net.Conn, error) {
 		}
 		select {
 		case l.slots <- struct{}{}:
-			return &limitedConn{Conn: c, release: func() { <-l.slots }}, nil
+			l.open.Add(1)
+			lc := &limitedConn{Conn: c, l: l}
+			lc.held.Store(true)
+			return lc, nil
 		default:
 			l.refused.Add(1)
 			_ = c.Close()
@@ -266,8 +349,30 @@ func (l *limitedListener) Accept() (net.Conn, error) {
 	}
 }
 
+// authenticated frees the connection's slot while it stays open.
+func (c *limitedConn) authenticated() {
+	if c.held.CompareAndSwap(true, false) {
+		<-c.l.slots
+	}
+}
+
 func (c *limitedConn) Close() error {
 	err := c.Conn.Close()
-	c.once.Do(c.release)
+	c.closed.Do(func() {
+		c.authenticated()
+		c.l.open.Add(-1)
+	})
 	return err
+}
+
+// agentConnContext lets the gateway free a connection's slot once its peer
+// authenticated. TLS wraps the listener's connection.
+func agentConnContext(ctx context.Context, c net.Conn) context.Context {
+	if t, ok := c.(*tls.Conn); ok {
+		c = t.NetConn()
+	}
+	if lc, ok := c.(*limitedConn); ok {
+		return gateway.WithAuthenticated(ctx, lc.authenticated)
+	}
+	return ctx
 }

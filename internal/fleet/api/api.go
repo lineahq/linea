@@ -23,6 +23,7 @@ import (
 	"github.com/lineahq/linea/internal/fleet/configmgmt"
 	"github.com/lineahq/linea/internal/fleet/fleet"
 	"github.com/lineahq/linea/internal/fleet/plugins"
+	"github.com/lineahq/linea/internal/fleet/translog"
 	"github.com/lineahq/linea/pluginsdk"
 	"github.com/lineahq/linea/pluginsdk/metrics"
 )
@@ -59,14 +60,29 @@ type Handler struct {
 	// configs is nil unless config management is enabled.
 	configs           configmgmt.Repository
 	allowedComponents []string
-	ready             atomic.Bool
-	draining          atomic.Bool
-	drained           chan struct{}
-	drainOnce         sync.Once
-	waiters           atomic.Int64
-	requests, errors  atomic.Uint64
-	duration          metrics.Duration
-	metricWriters     []func(io.Writer)
+	// unstagedLimit bounds the connected agents a group change reconfigures
+	// without max_affected.
+	unstagedLimit    int
+	ready            atomic.Bool
+	draining         atomic.Bool
+	drained          chan struct{}
+	drainOnce        sync.Once
+	waiters          atomic.Int64
+	requests, errors atomic.Uint64
+	duration         metrics.Duration
+	metricWriters    []func(io.Writer)
+	// log is nil until SetLogger; a nil logger discards.
+	log *translog.Logger
+}
+
+// SetLogger binds the transition log before serving requests. The handler
+// only counts failed authentications; the logger writes the summary.
+func (h *Handler) SetLogger(log *translog.Logger) { h.log = log }
+
+// refuse answers an unauthenticated request and counts it for the summary.
+func (h *Handler) refuse(w http.ResponseWriter) {
+	h.log.AuthFailure(translog.ListenerManagement)
+	failure(w, auth.ErrUnauthorized)
 }
 
 func New(store fleet.Repository, credential auth.Bearer, info ServerInfo) *Handler {
@@ -77,7 +93,7 @@ func NewAuthorized(store fleet.Repository, access auth.Authorizer, info ServerIn
 	if info.Storage == "" {
 		info.Storage = "memory"
 	}
-	return &Handler{store: store, access: access, info: info, control: control, credentials: credentials, drained: make(chan struct{})}
+	return &Handler{store: store, access: access, info: info, control: control, credentials: credentials, drained: make(chan struct{}), unstagedLimit: DefaultUnstagedLimit}
 }
 func (h *Handler) SetReady(ready bool) { h.ready.Store(ready) }
 
@@ -153,6 +169,10 @@ func failure(w http.ResponseWriter, err error) {
 		fail(w, 412, "precondition_failed", "group revision changed; refresh before retrying")
 	case errors.Is(err, fleet.ErrCursorExpired):
 		fail(w, 410, "cursor_expired", "refresh inventory and groups, then poll without a cursor")
+	case errors.As(err, new(*errTooManyAffected)):
+		var e *errTooManyAffected
+		errors.As(err, &e)
+		writeJSON(w, 409, map[string]any{"error": map[string]any{"code": "too_many_affected", "message": err.Error(), "affected": e.affected}})
 	case errors.Is(err, fleet.ErrInvalid):
 		message := "invalid request"
 		var invalid *fleet.InvalidError
@@ -236,17 +256,25 @@ func (h *Handler) ServeHTTP(raw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, err := h.access.Authenticate(ctx, r)
+	if errors.Is(err, auth.ErrUnauthorized) {
+		h.refuse(w)
+		return
+	}
 	if err != nil {
 		failure(w, err)
 		return
 	}
 	if p.Role != "admin" && p.Role != "operator" && p.Role != "reader" {
-		failure(w, auth.ErrUnauthorized)
+		h.refuse(w)
 		return
 	}
 	acting, err := pluginsdk.ReadActing(r.Header)
 	if err != nil {
 		fail(w, 400, "invalid_acting_for", "acting-for headers are malformed or exceed their bounds")
+		return
+	}
+	if acting != nil && !p.Delegate {
+		fail(w, 400, "acting_for_not_delegated", "this credential may not send acting-for headers")
 		return
 	}
 	ctx, base = fleet.WithActing(ctx, acting), fleet.WithActing(base, acting)
@@ -355,6 +383,29 @@ func (h *Handler) ServeHTTP(raw http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, 200, page)
+	case "/api/v1/audit":
+		audit, ok := h.control.(fleet.AuditRepository)
+		if !ok {
+			failure(w, fleet.ErrNotFound)
+			return
+		}
+		if !method(w, r, "GET") || !admin(w, p) {
+			return
+		}
+		q, limit, ok := query(w, r, "before", "kind", "actor", "since", "until")
+		if !ok {
+			return
+		}
+		aq, ok := auditQuery(w, q, limit)
+		if !ok {
+			return
+		}
+		page, err := audit.Audit(ctx, aq)
+		if err != nil {
+			failure(w, err)
+			return
+		}
+		writeJSON(w, 200, page)
 	case "/api/v1/groups":
 		if h.control == nil {
 			failure(w, fleet.ErrNotFound)
@@ -440,7 +491,7 @@ func (h *Handler) pluginResource(w http.ResponseWriter, r *http.Request, p auth.
 			return
 		}
 		if !active[p.ID] {
-			failure(w, auth.ErrUnauthorized)
+			h.refuse(w)
 			return
 		}
 		h.plugins.ServeAPI(w, r, parts[0], strings.Join(parts[2:], "/"), p)
@@ -602,6 +653,14 @@ func (h *Handler) resource(w http.ResponseWriter, r *http.Request, p auth.Princi
 			if body.Selector != nil {
 				group.Selector = *body.Selector
 			}
+			max, ok := maxAffected(w, r)
+			if !ok {
+				return
+			}
+			if err := h.checkGroupChange(ctx, group, max); err != nil {
+				failure(w, err)
+				return
+			}
 			g, err := h.control.PutGroup(ctx, p.ID, group, revision)
 			if err != nil {
 				failure(w, err)
@@ -639,6 +698,14 @@ func (h *Handler) resource(w http.ResponseWriter, r *http.Request, p auth.Princi
 				}
 				if body.RemoteConfig == nil {
 					failure(w, fleet.Invalid("remote_config is required"))
+					return
+				}
+				max, ok := maxAffected(w, r)
+				if !ok {
+					return
+				}
+				if err := h.checkOptIn(ctx, id, *body.RemoteConfig, max); err != nil {
+					failure(w, err)
 					return
 				}
 				c, err := h.credentials.Repository.SetCredentialRemoteConfig(ctx, p.ID, id, *body.RemoteConfig)
@@ -772,6 +839,35 @@ func (h *Handler) groupAgents(w http.ResponseWriter, r *http.Request, id string)
 		return
 	}
 	writeJSON(w, 200, page)
+}
+
+// auditQuery reads the audit route's filters.
+func auditQuery(w http.ResponseWriter, q url.Values, limit int) (fleet.AuditQuery, bool) {
+	aq := fleet.AuditQuery{Kind: q.Get("kind"), Actor: q.Get("actor"), Limit: limit}
+	if q.Has("before") {
+		before, err := strconv.ParseInt(q.Get("before"), 10, 64)
+		if err != nil || before < 1 {
+			failure(w, fleet.Invalid("before must be a record ID from next_before"))
+			return aq, false
+		}
+		aq.Before = before
+	}
+	if len(aq.Kind) > 128 || len(aq.Actor) > 256 || q.Has("kind") && aq.Kind == "" || q.Has("actor") && aq.Actor == "" {
+		failure(w, fleet.Invalid("kind and actor must be 1 to 128 and 1 to 256 characters"))
+		return aq, false
+	}
+	for key, at := range map[string]*time.Time{"since": &aq.Since, "until": &aq.Until} {
+		if !q.Has(key) {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339, q.Get(key))
+		if err != nil {
+			failure(w, fleet.Invalid(key+" must be an RFC 3339 time"))
+			return aq, false
+		}
+		*at = t
+	}
+	return aq, true
 }
 
 func afterID(w http.ResponseWriter, q url.Values) (string, bool) {

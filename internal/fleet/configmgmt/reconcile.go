@@ -35,9 +35,14 @@ type Session struct {
 	Capabilities uint64
 	Status       Status
 	Held         []byte
+	// Retry is Agent.Retry.
+	Retry bool
 	// Components is the agent's reported build; nil skips the
 	// compatibility check.
 	Components Components
+	// Unverified: the agent reported a build whose component list is not
+	// resolved, so nothing is sent until it is.
+	Unverified bool
 }
 
 // Reconciler applies the send rule from cached desired state. It is the
@@ -76,6 +81,14 @@ func (r *Reconciler) Refresh(ctx context.Context) error {
 	return nil
 }
 
+// Managed reports whether a credential opted in to remote config.
+func (r *Reconciler) Managed(credential string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.credentials[credential]
+	return ok
+}
+
 // Reconcile applies the send rule to one session. A decision to send carries
 // the entries with their bodies. Ownership of the session is checked by the
 // caller.
@@ -87,7 +100,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, s Session) (Decision, error)
 	if !loaded {
 		return Decision{}, ErrNotLoaded
 	}
-	agent := Agent{Enabled: true, CredentialAllowed: allowed, AcceptsRemoteConfig: s.Capabilities&AcceptsRemoteConfig != 0, Status: s.Status, Held: s.Held}
+	agent := Agent{Enabled: true, CredentialAllowed: allowed, AcceptsRemoteConfig: s.Capabilities&AcceptsRemoteConfig != 0, Status: s.Status, Held: s.Held, Retry: s.Retry}
 	if !agent.CredentialAllowed || !agent.AcceptsRemoteConfig {
 		return Decision{}, nil
 	}
@@ -102,6 +115,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, s Session) (Decision, error)
 	hash, _ := hex.DecodeString(desired.Hash)
 	d := Decide(agent, Plan{Hash: hash}, true)
 	if !d.Send {
+		return d, nil
+	}
+	if s.Unverified {
+		d.Send, d.Unverified = false, true
 		return d, nil
 	}
 	// Bodies are read only for a send; the hash came from stored digests.

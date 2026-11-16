@@ -13,10 +13,10 @@ const (
 )
 
 // SessionPath is the host session route.
-const SessionPath = "/fleet-host/v3/session"
+const SessionPath = "/fleet-host/v4/session"
 
 // APIPath prefixes the opaque public API routes the plugin serves.
-const APIPath = "/fleet-plugin/v3/api/"
+const APIPath = "/fleet-plugin/v4/api/"
 
 // RandomID returns 32 random lowercase hex characters, for instance IDs.
 func RandomID() string {

@@ -129,15 +129,17 @@ curl -s -H "$ADMIN" -H 'Content-Type: application/json' -X POST $API/credentials
 ```
 
 - The token is disclosed once: keep it in your secret manager.
-- Labels are optional, set by admins and verified by the server. Agent
-  attributes are self-reported, so assignments that matter should also
-  require `credential_labels`, not attributes alone.
+- Labels are set by admins and verified by the server. Agent attributes are
+  self-reported, so every assignment must name at least one
+  `credential_labels` entry: a managed credential needs a label for any
+  assignment to reach it.
 - A Collector's instance UID is also self-reported, but fleet binds it to the
   credential that holds it: another credential cannot take over a connected
   UID, so a credential outside the label match cannot displace a managed
-  Collector. A disconnected UID can change credentials, which
-  `agent.credential_changed` records. Labels still decide who receives a
-  configuration.
+  Collector. A disconnected UID changes credentials only when its credential
+  is no longer active, or to a credential with the same labels and opt-in
+  (a rotation); `agent.credential_changed` records it. Labels still decide
+  who receives a configuration.
 
 ## Connect supervised Collectors
 
@@ -180,9 +182,9 @@ OpAMP client it runs; there is no per-agent switch on the server.
 | OpAMP client | The contrib `opamp` extension in the Collector config ([example](../../examples/fleet-collector.yaml)) | The supervisor ([above](#connect-supervised-collectors)) with `accepts_remote_config: true` |
 | Config source | Your existing tooling (Helm, the OpenTelemetry Operator, GitOps) | Fleet layers merged over the supervisor's local `config_files` |
 
-- Add the managed credential's label to every assignment as
-  `credential_labels`, so previews and rollout targets count only managed
-  agents.
+- Name the managed credential's label in every assignment's
+  `credential_labels` (required), so previews and rollout targets count only
+  managed agents.
 - A reporting Collector cannot be managed by mistake. A plain Collector with
   the managed token still only reports, because the `opamp` extension never
   advertises `AcceptsRemoteConfig`. A supervisor with the reporting token
@@ -213,6 +215,7 @@ curl -s -H "$ADMIN" -H 'Content-Type: application/json' -X POST $API/configs/$CO
 | --- | --- |
 | Body | Collector YAML up to 128 KiB with only the top-level keys `receivers`, `processors`, `exporters`, `connectors`, `extensions`, `service`. The server does not merge or render YAML; the supervisor validates against the real Collector |
 | Secrets | Must be `${env:...}` or `${file:...}` references resolved on the host. Literal values under secret-looking keys, header values and URL passwords are rejected with 422 `inline_secret` |
+| Host access | The server does not restrict which variables or files a reference names, nor where a config sends them. Whoever may write versions and assignments (`operator`, `admin`) can therefore read any environment variable and any file the Collector process can, on every host whose credential the assignment's labels match. Give an agent credential `remote_config` only where that is acceptable, and use `--config-allowed-components` to keep exporters and extensions to the ones you trust |
 | Component allowlist | `--config-allowed-components receiver:otlp,processor:batch,...` restricts the component types versions may use (422 `invalid_config`). Unset allows any |
 | Visibility | Bodies are readable only with `admin` or `operator` and never appear in events, logs or metrics |
 | Retention | Each config keeps its newest 100 versions plus every version an assignment references |
@@ -222,8 +225,10 @@ curl -s -H "$ADMIN" -H 'Content-Type: application/json' -X POST $API/configs/$CO
 
 An assignment targets exactly one of a group (`group_id`) or a selector over
 stored attributes (`selector`, for example
-`k8s.namespace.name=shop,service.name in (cart,checkout)`), optionally
-narrowed by `credential_labels`.
+`k8s.namespace.name=shop,service.name in (cart,checkout)`), narrowed by
+`credential_labels`, which are required: the server refuses an assignment
+without one, since attributes alone let any opted-in credential claim a
+config by reporting the right attributes.
 
 - Its `layer` (0 to 99) orders it. Each matching assignment becomes one
   config entry named `NN-<name>`. The supervisor merges entries in name
@@ -242,9 +247,32 @@ curl -s -H "$ADMIN" -H 'Content-Type: application/json' -X POST $API/config-assi
   "rollout": {"waves": [{"percent": 5}, {"percent": 25}, {"percent": 100}]}}'
 ```
 
-`POST $API/config-assignments/{id}:preview` lists the agents an assignment
-targets now, with the desired config each would receive, before or after you
-create it.
+`POST $API/config-assignments/{id}:preview` lists the agents an existing
+assignment targets now, with the desired config each would receive. It
+needs the assignment to exist; for a new one, list the agents its group or
+selector matches and narrow them by its credential labels.
+
+### Changes a rollout cannot stage
+
+Some changes reach agents at once, without waves:
+
+- **Group edits.** Replacing a group's selector or members changes which
+  agents its assignments target. The server counts the connected agents
+  whose desired config the edit changes and refuses the edit with 409
+  `too_many_affected` when they exceed `--config-unstaged-limit` (default 10);
+  the error's `affected` field holds the count. Resend it with
+  `?max_affected=N`, N at least that count, to accept that many. The
+  debugger's group save takes the same `max_affected` in its body. The count is taken just before the write, so agents that
+  connect in between are not in it.
+- **Agent attributes.** An agent that reports new attributes may enter or
+  leave a selector at once. Nothing can stage that; required credential
+  labels limit it to agents whose credential an admin labelled.
+- **Credential opt-in.** Turning on `remote_config` for a credential gives
+  every matching agent that uses it its desired config at once. The same
+  count and limit apply: the server refuses the `PATCH` with 409
+  `too_many_affected` above `--config-unstaged-limit` unless it carries
+  `?max_affected=N`. Turning it off sends nothing and is never refused.
+  Credential labels cannot change; issue a new credential instead.
 
 ## Roll out changes
 
@@ -262,17 +290,24 @@ curl -s -H "$ADMIN" -H 'Content-Type: application/json' -X POST $API/rollouts -d
 | `waves` | 1 agent, 5 %, 25 %, 100 % | Cumulative boundaries by `count` or `percent`, up to 10 |
 | `canary_group_id` | none | This group's targets form wave 0, before the waves |
 | `bake_seconds` | 120 | How long a target must stay applied and healthy to succeed |
-| `wave_timeout_seconds` | 900 | Connected targets of the current wave that have not applied by then time out |
+| `wave_timeout_seconds` | 900 | Connected targets of the current wave that have not applied by then time out. A wave with no `succeeded` target by then pauses the rollout |
 | `max_failures`, `max_failure_percent` | 0, 5 | The rollout breaches when failures exceed the larger of the two, per wave or in total |
 | `on_failure` | `pause` | `pause` or `rollback` on a breach |
 
-The target set is fixed when the rollout starts. Target outcomes:
+The target set is fixed when the rollout starts. A wave passes only once at
+least one of its targets `succeeded`, or an operator accepted its failures
+with `:resume`. A wave whose agents are all offline, incompatible or
+unmatched proves nothing about the version: it waits for the wave timeout,
+in case an agent comes back, and then pauses with reason `threshold`. A
+delete rollout is the exception for `unmatched`: an agent left with no
+matching assignment is what it aims for, so such a target passes its wave.
+Target outcomes:
 
 | Outcome | Meaning | Counts against thresholds |
 | --- | --- | --- |
 | `succeeded` | Applied and stayed healthy | no |
 | `failed`, `unhealthy`, `timed_out` | Failure | yes |
-| `offline` | Disconnected | no, and does not block waves |
+| `offline` | Disconnected | no, and does not block waves that have a success |
 | `unmatched` | No longer targeted | no |
 | `incompatible` | Build lacks a component type ([below](#component-compatibility)) | no |
 
@@ -283,7 +318,7 @@ Watch with `GET $API/rollouts/{id}` and
 | Action | Effect |
 | --- | --- |
 | `:pause` | Stops releasing waves |
-| `:resume` | Continues; accepts the failures seen so far |
+| `:resume` | Continues; accepts the failures seen so far and restarts the current wave's timeout |
 | `:rollback` | Returns every released target to the assignment's previous version at once; ends `rolled_back` when they report it |
 | `:cancel` | Ends the rollout at once with the same desired state |
 
@@ -307,7 +342,11 @@ Limits and rules:
 - In both cases the server holds the failed hash (`reported.held_hash`) and
   does not send it again, so a supervisor and the server never loop.
 - The hold ends when the desired config changes, or with
-  `POST $API/agents/{id}/config:retry`, which sends it exactly once more.
+  `POST $API/agents/{id}/config:retry`, which sends it exactly once more,
+  whatever hash the agent reports, including the failed one. If the agent
+  reports that retry as failed again, the hash is held again. The owed retry
+  is kept in the owning replica's session only: an agent that reconnects
+  first reports its status afresh, and a failure then holds as usual.
 - The supervisor's error text can quote config, so it is stored only with
   `--store-health-errors`, redacted and truncated to 256 bytes.
 
@@ -315,11 +354,24 @@ Limits and rules:
 
 Supervisors with `reports_available_components: true` report which component
 types their Collector build contains. The server asks for the full list once
-per build.
+per build, and only of agents whose credential has `remote_config`.
+
+- The server stores a list for its build only when the list hashes to the
+  reported build hash, computed as the Collector's OpAMP extension does
+  (verified against opampextension v0.162.0). A list that does not match is
+  refused and counted.
+- While an agent's reported build is unresolved (the list does not match,
+  never arrives within 10 s, or the store holds its 1,000 builds), nothing
+  is sent to it: the config is withheld with reason `unverified_components`.
+  Its rollout targets stay released until the wave times out.
+- Writes that agents cause (a failure hold, a new component set) yield to
+  agent reports: at most two run at once per replica, none while the report
+  writer is backlogged, and a refused write is retried with a later message.
 
 - A version using a type the build lacks is not released to that build's
   agents. Their rollout targets end `incompatible`, which neither blocks
-  waves nor counts as a failure. Nothing is sent to fail on the host.
+  waves nor counts as a failure, though a wave needs one other target to
+  succeed. Nothing is sent to fail on the host.
 - `GET $API/agents/{id}/config` lists `missing_components`, for example
   `receiver:kafka`.
 - Agents that do not report components are not checked. The supervisor's own
@@ -346,6 +398,7 @@ On `/metrics` (fleet read access):
 | `linea_fleet_config_sends_total{path}` | Configs sent, in replies to reports or pushed asynchronously (at most 200/s per replica) |
 | `linea_fleet_config_holds_total` | Failure holds set |
 | `linea_fleet_config_incompatible_total` | Sends withheld for a build that lacks a component type |
+| `linea_fleet_config_unverified_total`, `linea_fleet_config_component_sets_unmatched_total` | Sends withheld for an unresolved build, and component lists refused because they do not match their build hash |
 | `linea_fleet_config_component_sets_requested_total`, `..._stored_total` | Builds asked for and stored |
 | `linea_fleet_config_reconcile_errors_total`, `linea_fleet_config_storage_errors_total` | Decisions or hold writes that failed; nothing is sent then |
 | `linea_fleet_config_body_cache_bytes` | Version bodies cached per replica (64 MiB bound) |
@@ -369,5 +422,5 @@ inventory.
 | Rollout target `incompatible` | `missing_components` in the agent view: deploy a build with those types, or change the version |
 | Target `failed` | `reported.status` and, with `--store-health-errors`, `reported.error`. Fix the version and roll out again, or `:retry` |
 | Target `timed_out` | The Collector did not stay healthy for the supervisor's `config_apply_timeout` within `wave_timeout_seconds` |
-| Rollout `paused` with reason `threshold` | `targets?outcome=failed`, then `:resume` to accept or `:rollback` |
+| Rollout `paused` with reason `threshold` | `targets?outcome=failed`, then `:resume` to accept or `:rollback`. With no failures, no target of the wave succeeded: check `targets?outcome=offline` and `incompatible`, bring an agent back and `:resume`, or `:cancel` |
 | Config routes return 404 `config_management_disabled` | Fleet runs without `--config-management` |

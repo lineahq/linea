@@ -11,6 +11,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/lineahq/linea/internal/fleet/fleet"
+	"github.com/lineahq/linea/internal/fleet/translog"
+	"github.com/lineahq/linea/pluginsdk"
 )
 
 const leaderLease = "leader"
@@ -18,14 +20,23 @@ const leaderLease = "leader"
 // reapBatch and trimBatch bound each leader transaction.
 const reapBatch, trimBatch = 1000, 5000
 
-// heartbeatLoop proves liveness, holds or seeks the leader lease, and runs
-// singleton jobs while leader. A replica that cannot renew its heartbeat for
-// most of the liveness window fences itself before others reap its agents.
+// heartbeatLoop proves liveness. A replica that cannot renew its heartbeat
+// for most of the liveness window fences itself before others reap its
+// agents. It owns one session outside the pool, so a pool exhausted by
+// reports, reads or leader jobs never delays the renewal.
 func (s *Store) heartbeatLoop() {
 	defer s.loops.Done()
 	ticker := time.NewTicker(s.options.Heartbeat)
 	defer ticker.Stop()
+	var conn *pgx.Conn
+	defer func() {
+		if conn != nil {
+			closeAdmin(conn)
+		}
+	}()
 	failure := "none"
+	// down is when heartbeat writes began to fail; zero while they succeed.
+	var down time.Time
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -36,52 +47,111 @@ func (s *Store) heartbeatLoop() {
 			continue
 		}
 		ctx, cancel := context.WithTimeout(s.ctx, s.options.Heartbeat)
-		tag, err := s.pool.Exec(ctx, "UPDATE fleet.replicas SET heartbeat_at=now() WHERE id=$1", s.replica)
+		var tag pgconn.CommandTag
+		var err error
+		if conn == nil {
+			conn, err = pgx.ConnectConfig(ctx, s.beatConfig.Copy())
+			if err != nil {
+				conn = nil
+			}
+		}
+		if conn != nil {
+			tag, err = conn.Exec(ctx, "UPDATE fleet.replicas SET heartbeat_at=now() WHERE id=$1", s.replica)
+			if err != nil {
+				// The session's state is unknown after a failure; reconnect.
+				closeAdmin(conn)
+				conn = nil
+			}
+		}
 		cancel()
+		if s.ctx.Err() != nil {
+			return
+		}
 		switch {
 		case err == nil && tag.RowsAffected() == 1:
 			s.heartbeat.Store(time.Now().UnixNano())
 		case err == nil:
 			// The leader reaped this replica; its ownership is already gone.
-			s.markLost("registration reaped")
+			s.markLost(translog.ReasonRegistrationReaped, "registration reaped")
 		default:
-			failure = errorClass(err)
+			var class translog.Reason
+			failure, class = errorClass(err)
+			if down.IsZero() {
+				down = time.Now()
+				s.log.Warn(translog.DatabaseLost, translog.ID(translog.KeyReplica, s.replica), translog.Why(class))
+			}
+		}
+		if err == nil && !down.IsZero() {
+			s.log.Info(translog.DatabaseRecovered, translog.ID(translog.KeyReplica, s.replica), translog.Duration(translog.DurationOutage, time.Since(down)))
+			down = time.Time{}
 		}
 		if age := time.Since(time.Unix(0, s.heartbeat.Load())); age >= s.options.Alive*8/10 {
-			s.markLost("heartbeat not renewed for " + age.Round(time.Second).String() + " (last error: " + failure + ")")
+			s.markLost(translog.ReasonHeartbeatLapsed, "heartbeat not renewed for "+age.Round(time.Second).String()+" (last error: "+failure+")")
+		}
+	}
+}
+
+// leaderLoop holds or seeks the leader lease and runs singleton jobs while
+// leader, apart from the heartbeat so slow jobs never delay a renewal.
+func (s *Store) leaderLoop() {
+	defer s.loops.Done()
+	ticker := time.NewTicker(s.options.Heartbeat)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		if s.stopped.Load() {
+			continue
 		}
 		select {
 		case <-s.lost:
-			s.leader.Store(false)
+			s.setLeader(false, translog.ReasonReplicaFenced)
 			continue
 		default:
 		}
-		ctx, cancel = context.WithTimeout(s.ctx, 2*s.options.Heartbeat)
+		ctx, cancel := context.WithTimeout(s.ctx, 2*s.options.Heartbeat)
 		s.lead(ctx)
 		cancel()
 	}
 }
 
 // errorClass names a failure without connection details for the fencing
-// reason: a timeout, a SQLSTATE, or a connection error.
-func errorClass(err error) string {
+// reason: a timeout, a SQLSTATE, or a connection error. The text goes into
+// the fencing error; the enumerated class goes into the transition log.
+func errorClass(err error) (string, translog.Reason) {
 	var pgErr *pgconn.PgError
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
-		return "timeout"
+		return "timeout", translog.ReasonTimeout
 	case errors.As(err, &pgErr):
-		return "SQLSTATE " + pgErr.Code
+		return "SQLSTATE " + pgErr.Code, translog.ReasonSQLState
 	default:
-		return "connection"
+		return "connection", translog.ReasonConnection
 	}
+}
+
+// setLeader records the lease state and logs each change once.
+func (s *Store) setLeader(leader bool, why translog.Reason) {
+	if s.leader.Swap(leader) == leader {
+		return
+	}
+	if leader {
+		s.log.Info(translog.LeaderGained, translog.ID(translog.KeyReplica, s.replica))
+		return
+	}
+	s.log.Info(translog.LeaderLost, translog.ID(translog.KeyReplica, s.replica), translog.Why(why))
 }
 
 func (s *Store) lead(ctx context.Context) {
 	tag, err := s.pool.Exec(ctx, `INSERT INTO fleet.leases(name,holder,expires_at) VALUES($1,$2,now() + $3 * interval '1 millisecond')
 		ON CONFLICT(name) DO UPDATE SET holder=EXCLUDED.holder,expires_at=EXCLUDED.expires_at
 		WHERE fleet.leases.holder=EXCLUDED.holder OR fleet.leases.expires_at < now()`, leaderLease, s.replica, s.aliveMillis())
-	s.leader.Store(err == nil && tag.RowsAffected() == 1)
-	if !s.leader.Load() {
+	held := err == nil && tag.RowsAffected() == 1
+	s.setLeader(held, translog.ReasonLeaseUnavailable)
+	if !held {
 		return
 	}
 	// Jobs are idempotent, so a brief overlap during lease handover is safe.
@@ -89,6 +159,8 @@ func (s *Store) lead(ctx context.Context) {
 	_, _ = s.reapAll(ctx, s.options.Heartbeat/2)
 	_ = s.trimEvents(ctx, s.options.MaxEvents)
 	_ = s.retain(ctx)
+	_ = s.pruneCredentials(ctx)
+	_ = s.retainAudit(ctx)
 	_ = s.pruneComponentSets(ctx)
 }
 
@@ -111,6 +183,7 @@ func (s *Store) reapAll(ctx context.Context, budget time.Duration) (int64, error
 // UID-ordered batches and records one disconnect event per agent.
 func (s *Store) reap(ctx context.Context) (int64, error) {
 	var cleared int64
+	var removed []string
 	err := s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `WITH victims AS (
 				SELECT a.id, o.heartbeat_at FROM fleet.agents a LEFT JOIN fleet.replicas o ON o.id=a.owner_replica
@@ -130,11 +203,23 @@ func (s *Store) reap(ctx context.Context) (int64, error) {
 				return err
 			}
 		}
-		_, err = tx.Exec(ctx, `DELETE FROM fleet.replicas r WHERE r.heartbeat_at < now() - $1 * interval '1 millisecond'
-			AND NOT EXISTS (SELECT 1 FROM fleet.agents a WHERE a.owner_replica=r.id)`, s.aliveMillis())
+		rows, err := tx.Query(ctx, `DELETE FROM fleet.replicas r WHERE r.heartbeat_at < now() - $1 * interval '1 millisecond'
+			AND NOT EXISTS (SELECT 1 FROM fleet.agents a WHERE a.owner_replica=r.id) RETURNING r.id`, s.aliveMillis())
+		if err != nil {
+			return err
+		}
+		removed, err = pgx.CollectRows(rows, pgx.RowTo[string])
 		return err
 	})
 	s.reaped.Add(uint64(cleared))
+	if err == nil {
+		if cleared > 0 {
+			s.log.Warn(translog.AgentsReleased, translog.Count(translog.CountAgents, cleared))
+		}
+		for _, id := range removed {
+			s.log.Warn(translog.ReplicaReaped, translog.ID(translog.KeyReplica, id))
+		}
+	}
 	return cleared, err
 }
 
@@ -221,9 +306,17 @@ func (s *Store) flushSeen(ctx context.Context) error {
 	for i, id := range ids {
 		generations[i], times[i] = int64(pending[id].generation), pending[id].at
 	}
-	_, err := s.pool.Exec(ctx, `UPDATE fleet.agents a SET last_seen_at=v.seen
+	tag, err := s.pool.Exec(ctx, `UPDATE fleet.agents a SET last_seen_at=v.seen
 		FROM unnest($1::text[], $2::bigint[], $3::timestamptz[]) AS v(id, gen, seen)
 		WHERE a.id=v.id AND a.generation=v.gen AND a.owner_replica=$4 AND (a.last_seen_at IS NULL OR a.last_seen_at < v.seen)`, ids, generations, times, s.replica)
+	if err == nil && tag.RowsAffected() < int64(len(ids)) {
+		// A row is also skipped when a newer time is stored, so only the
+		// ownership check tells a lost session from a stale observation.
+		var owned map[string]bool
+		if owned, err = s.ownedAgents(ctx, ids, generations); err == nil {
+			s.closeLost(lostSessions(ids, generations, owned))
+		}
+	}
 	if err != nil {
 		s.flushErrors.Add(1)
 		// Keep the newest unsaved observations for the next attempt.
@@ -237,6 +330,60 @@ func (s *Store) flushSeen(ctx context.Context) error {
 		return fleet.ErrUnavailable
 	}
 	return nil
+}
+
+// ownedAgents reports which of the agents at those generations this replica
+// still owns.
+func (s *Store) ownedAgents(ctx context.Context, ids []string, generations []int64) (map[string]bool, error) {
+	rows, err := s.pool.Query(ctx, `SELECT a.id FROM fleet.agents a
+		JOIN unnest($1::text[], $2::bigint[]) AS v(id, gen) ON a.id=v.id AND a.generation=v.gen
+		WHERE a.owner_replica=$3`, ids, generations, s.replica)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	owned := make(map[string]bool, len(ids))
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		owned[id] = true
+	}
+	return owned, rows.Err()
+}
+
+// lostSession is a local session whose agent another replica now owns, or
+// whose row is gone.
+type lostSession struct {
+	id         string
+	generation uint64
+}
+
+// lostSessions lists the sessions in ids that owned does not contain, in ids order.
+func lostSessions(ids []string, generations []int64, owned map[string]bool) []lostSession {
+	var lost []lostSession
+	for i, id := range ids {
+		if !owned[id] {
+			lost = append(lost, lostSession{id: id, generation: uint64(generations[i])})
+		}
+	}
+	return lost
+}
+
+// closeLost closes the local sockets of sessions this replica no longer owns,
+// the same way a takeover hint does: a session at the lost generation or older
+// is superseded, and a newer local session is kept.
+func (s *Store) closeLost(lost []lostSession) {
+	s.signalMu.Lock()
+	takeover := s.onTakeover
+	s.signalMu.Unlock()
+	if takeover == nil {
+		return
+	}
+	for _, l := range lost {
+		takeover(l.id, l.generation+1)
+	}
 }
 
 // listen holds one dedicated session for cross-replica hints and reconnects
@@ -271,7 +418,7 @@ func (s *Store) listen() {
 
 // receive listens on conn until it fails and reports whether it listened.
 func (s *Store) receive(conn *pgx.Conn) bool {
-	for _, channel := range []string{"fleet_events", "fleet_agent_takeover", "fleet_credential_revoked", "fleet_config"} {
+	for _, channel := range []string{"fleet_events", "fleet_agent_takeover", "fleet_credential_revoked", "fleet_config", pluginChannel} {
 		if _, err := conn.Exec(s.ctx, "LISTEN "+channel); err != nil {
 			return false
 		}
@@ -279,10 +426,13 @@ func (s *Store) receive(conn *pgx.Conn) bool {
 	// Anything may have been missed while disconnected.
 	s.wakeEvents()
 	s.signalMu.Lock()
-	config := s.onConfig
+	config, plugin := s.onConfig, s.onPlugin
 	s.signalMu.Unlock()
 	if config != nil {
 		config("")
+	}
+	if plugin != nil {
+		plugin("")
 	}
 	for {
 		n, err := conn.WaitForNotification(s.ctx)
@@ -290,7 +440,7 @@ func (s *Store) receive(conn *pgx.Conn) bool {
 			return true
 		}
 		s.signalMu.Lock()
-		takeover, revoked, config := s.onTakeover, s.onRevoked, s.onConfig
+		takeover, revoked, config, plugin := s.onTakeover, s.onRevoked, s.onConfig, s.onPlugin
 		s.signalMu.Unlock()
 		switch n.Channel {
 		case "fleet_events":
@@ -308,6 +458,10 @@ func (s *Store) receive(conn *pgx.Conn) bool {
 		case "fleet_config":
 			if (n.Payload == "" || fleet.ValidID(n.Payload)) && config != nil {
 				config(n.Payload)
+			}
+		case pluginChannel:
+			if pluginsdk.ValidID(n.Payload) && plugin != nil {
+				plugin(n.Payload)
 			}
 		}
 	}
@@ -338,6 +492,10 @@ func (s *Store) StopAgents(ctx context.Context) error {
 			}
 			return s.event(ctx, tx, "replica.stopped", s.replica, "server", nil)
 		})
+		if result == nil {
+			s.setLeader(false, translog.ReasonShutdown)
+			s.log.Info(translog.ReplicaDeregistered, translog.ID(translog.KeyReplica, s.replica))
+		}
 	})
 	return result
 }

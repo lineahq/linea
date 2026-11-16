@@ -167,13 +167,13 @@ extensions:
     control:
       endpoint: ${env:OTEL_CAPTURE_CONTROL_ENDPOINT}
       headers:
-        Authorization: "Bearer ${env:LINEA_FLEET_AGENT_TOKEN}"
+        Authorization: "Bearer ${env:LINEA_FLEET_PLUGIN_TOKEN}"
       tls:
         ca_file: /certs/capture-ca.pem
     delivery:
       endpoint: ${env:OTEL_CAPTURE_DELIVERY_ENDPOINT}
       headers:
-        Authorization: "Bearer ${env:LINEA_FLEET_AGENT_TOKEN}"
+        Authorization: "Bearer ${env:LINEA_FLEET_PLUGIN_TOKEN}"
       tls:
         ca_file: /certs/capture-ca.pem
 
@@ -209,7 +209,9 @@ Notes:
 - `environment: production` requires TLS on `control` and `delivery`, and
   certificate verification cannot be skipped.
 - `pod` is required whenever `control.endpoint` is set.
-- The agent credential needs a `capture` label that lists `collector_group`;
+- `LINEA_FLEET_AGENT_TOKEN` is the agent credential's `token` and
+  `LINEA_FLEET_PLUGIN_TOKEN` its `plugin_token`; the plugin refuses the
+  agent token. The credential needs a `capture` label that lists `collector_group`;
   see [connect existing
   Collectors](../fleet/livecapture.md#connect-existing-collectors). The
   `agent_description` attributes let fleet link the capture connection to the

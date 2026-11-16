@@ -191,6 +191,9 @@ func TestGatewayAuthAndTransport(t *testing.T) {
 		if resp.StatusCode != tc.want {
 			t.Fatalf("got %d want %d", resp.StatusCode, tc.want)
 		}
+		if !resp.Close {
+			t.Fatalf("refusal %d left the connection open", tc.want)
+		}
 	}
 	// A Content-Type must not redirect an otherwise valid upgrade into polling.
 	c, resp, err := websocket.DefaultDialer.Dial(url, http.Header{
@@ -572,5 +575,79 @@ func TestReconnectWithUnchangedStateWritesOnce(t *testing.T) {
 	exchange(t, c, full)
 	if n := store.observed.Load(); n != 1 {
 		t.Fatalf("changed health wrote %d times", n)
+	}
+}
+
+func TestIdleSessionClosesAndEveryMessageRenewsTheDeadline(t *testing.T) {
+	g, _, url, token := setup(t, 2, 2)
+	g.idleTimeout.Store(int64(400 * time.Millisecond))
+	c := dial(t, url, token)
+	m := &protobufs.AgentToServer{InstanceUid: bytes.Repeat([]byte{6}, 16), SequenceNum: 1}
+	exchange(t, c, m)
+
+	// Messages spaced below the timeout keep the session open for longer
+	// than one timeout in total.
+	for range 8 {
+		time.Sleep(100 * time.Millisecond)
+		m.SequenceNum++
+		exchange(t, c, m)
+	}
+
+	// A silent session is closed after the timeout.
+	expectClosedWithin(t, c, 3*time.Second)
+}
+
+func TestIdleTimeoutSpansSeveralHeartbeats(t *testing.T) {
+	if idleTimeout < 2*agentHeartbeat {
+		t.Fatalf("idle timeout %v closes an agent that misses one heartbeat", idleTimeout)
+	}
+}
+
+func TestSweepRefreshesVerificationWhileIdle(t *testing.T) {
+	token := strings.Repeat("a", 32)
+	a, _ := auth.New(token)
+	access := &flaky{Authorizer: auth.Static{Bearer: a, Role: "agent"}}
+	g, err := NewAuthorized(fleet.NewStore(2), access, nil, 2, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := httptest.NewServer(g)
+	t.Cleanup(func() { g.Close(); h.Close() })
+
+	// With no sessions the verification time moves on.
+	stale := time.Now().Add(-time.Hour)
+	verified := g.sweepCredentials(stale)
+	if time.Since(verified) > time.Minute {
+		t.Fatalf("idle sweep kept verification at %v", verified)
+	}
+
+	// A session that connects after the idle spell survives a database blip.
+	c := dial(t, "ws"+strings.TrimPrefix(h.URL, "http")+"/v1/opamp", token)
+	m := &protobufs.AgentToServer{InstanceUid: bytes.Repeat([]byte{7}, 16), SequenceNum: 1}
+	exchange(t, c, m)
+	access.down.Store(true)
+	g.sweepCredentials(verified)
+	m.SequenceNum++
+	exchange(t, c, m)
+
+	// Without the refresh, the stale time closes it at once.
+	g.sweepCredentials(stale)
+	expectClosedWithin(t, c, 3*time.Second)
+}
+
+func TestGatewayReportsAuthenticatedConnections(t *testing.T) {
+	g, _, _, token := setup(t, 1, 1)
+	for _, tc := range []struct {
+		credential string
+		want       bool
+	}{{"", false}, {strings.Repeat("m", 32), false}, {token, true}} {
+		called := false
+		r := httptest.NewRequest(http.MethodGet, "/v1/opamp", nil)
+		r = r.WithContext(WithAuthenticated(r.Context(), func() { called = true }))
+		r.Header.Set("Authorization", "Bearer "+tc.credential)
+		g.ServeHTTP(httptest.NewRecorder(), r)
+		if called != tc.want {
+			t.Fatalf("credential %q: authenticated hook called = %v", tc.credential, called)
+		}
 	}
 }

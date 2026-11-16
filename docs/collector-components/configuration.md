@@ -68,23 +68,24 @@ service:
 ### Internal exporter
 
 The internal exporter always overrides the queue, batching, timeout and retry
-settings:
+settings. It logs nothing: a lost copy is counted, never logged.
 
 | Setting | Value |
 | --- | --- |
 | Queue | Nonblocking in-memory byte queue, one consumer per signal |
 | Batching | 100 ms / 256 KiB |
 | Attempt timeout | 1 s |
-| Retries | Start at 100 ms, 5 s retry budget |
+| Retries | None: a failed export is dropped and counted under the session's `delivery` drop reason |
 
 - A signal's exporter starts when the first session capturing that signal
   starts, and runs until the Collector shuts down.
 - Stopping a session ends admission immediately. The session keeps
   reporting `STOPPING` until the copies already queued were exported or
-  failed, at most 7 s (one flush, the attempt timeout and the retry budget),
-  so the service still accepts them.
-- Collector shutdown does not wait for this; it drains the queues within its
-  own deadline.
+  failed, at most 2 s (one flush and one export attempt), so the service
+  still accepts them. Copies still queued after that are dropped.
+- Collector shutdown does not wait for this. It drains the queues for at
+  most 2 s, or less when its own context ends first, then drops what is
+  left.
 - `max_queue_bytes` is split equally between the three signals, so each can
   queue a third of it. Unused capacity in one signal is not borrowed by
   another.
@@ -150,7 +151,9 @@ Sensitivity describes the point's position in your pipeline.
 - Original pdata is forwarded synchronously and unchanged. Only downstream
   errors are returned to the pipeline.
 - Capture failures are counted or terminate the session. A capture panic is
-  recovered without exposing its value.
+  recovered and ends the session as `capture_panic`. The first one per
+  session logs one warning with the session ID, signal, pipeline and point,
+  never the panic value or payload.
 
 ### Capture data path
 
@@ -161,17 +164,19 @@ processor either way.
 
 ```mermaid
 flowchart TD
-    P[capture processor hands the batch to the extension] --> F[Session OTTL filters: resource, then record]
+    P[capture processor hands the batch to the extension] --> W[Rate and time window check]
+    W --> F[Session OTTL filters: resource, then record]
     F --> S[Sampling]
-    S --> L[Rate and total pre-check]
+    S --> L[Rate and total pre-check, time budget every 32 records]
     L --> C[Copy, redact, tag]
     C --> Z[Record size check]
     Z --> G[Admission under one gate: TTL and limits]
     G --> Q[Bounded byte queue per signal]
     Q --> X[Internal OTLP exporter]
     X --> D[delivery.endpoint]
-    S -- sampling --> DROP[Dropped and counted]
-    L -- budget, rate_records, rate_bytes --> DROP
+    W -- rate_records, rate_bytes, time --> DROP[Dropped and counted]
+    S -- sampling --> DROP
+    L -- budget, rate_records, rate_bytes, time --> DROP
     Z -- record_size --> DROP
     G -- budget, rate_records, rate_bytes, stopping --> DROP
     Q -- queue_full, delivery --> DROP
@@ -179,10 +184,23 @@ flowchart TD
 
 - Records that fail a filter are not selected and are not drops. An
   evaluation error counts as no match and is reported under `filter_errors`.
-- Redaction applies to redacted points only.
+- Redaction applies to redacted points only. A raw point's copy is the
+  original, so it checks the record size before copying and never copies
+  an oversized record.
 - A drop is counted under its reason in the session's `dropped` stats.
+- The first refusal by the pre-check or admission ends the walk over the
+  batch: the records after it are not examined, selected or counted.
+- While the current one-second window has used up its record or byte rate,
+  calls are not examined at all. Each such call counts one drop under
+  `rate_records` or `rate_bytes`, so the session shows it is incomplete;
+  the drop counts are a lower bound.
+- Capture calls of one session may spend at most 20 ms per second, across
+  all pipelines. A call that reaches it stops with one `time` drop, and
+  later calls in that second are skipped with one `time` drop each. The
+  budget is fixed and bounds what capture takes from the Collector,
+  whatever the filters cost.
 - The queue step drops as `queue_full` when the byte queue is full, or
-  `delivery` when the exporter refuses a copy for another reason.
+  `delivery` when the exporter refuses a copy or an export fails.
 
 ## Sessions
 
@@ -198,6 +216,14 @@ A session selects what to copy. Each pod runs at most one.
 | Functions | `IsMatch` with a literal, precompiled regex; `IsString`, `IsInt`, `IsDouble`, `IsBool`, `IsMap`, `IsList`; `TraceID` and `SpanID` literals |
 | Not available | Mutation and external lookups |
 | Errors | A runtime evaluation error counts as no match |
+| Input | Filters run on the original records, before redaction, also at a `redacted` point. Copying first would cost the pipeline a copy of every record, including those a filter discards |
+
+Because filters see unredacted values, whoever may set a filter on a
+redacted point can learn whether a denied attribute, a masked string or a
+cut-off body matches a condition: a session filtering on
+`attributes["http.request.header.authorization"] == "..."` copies records
+only when the value matches. The copies stay redacted; the answer is yes or
+no. Grant filter access to a redacted point with that in mind.
 
 ### Sampling and limits
 

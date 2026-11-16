@@ -6,8 +6,8 @@
 # bounded containers, fixed fixture subnets) and checks: TLS/bearer peers and
 # catalogs, the public API and its pagination, private metrics scopes, a
 # generic consumer receiving filtered and redacted telemetry, ingress identity
-# and bounds, idempotency, overlap and raw-capture denial, partial receipts,
-# lost-consumer backpressure, absolute expiry, generic lifecycle drain/disable,
+# and bounds, idempotency, overlap and raw-capture denial, a rejected filter,
+# lost-consumer drops, absolute expiry, generic lifecycle drain/disable,
 # competing-authority denial, narrow storage grants, API-key revocation, core
 # and plugin crash recovery without replay, shared-credential revocation, a
 # metadata restore into a fresh database and database-outage isolation.
@@ -70,7 +70,8 @@ consumer_sequence=0
 consumer_name=
 admin=
 base=
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/linea-capture-smoke-XXXXXX")
+# A native path: MSYS_NO_PATHCONV keeps /tmp from reaching a Windows curl.
+tmp=$(winpath "$(mktemp -d "${TMPDIR:-/tmp}/linea-capture-smoke-XXXXXX")")
 main=$$
 trap 'exit 1' USR1 INT TERM
 
@@ -90,6 +91,7 @@ cleanup() {
         done
     fi
     if [ "$created" = 1 ]; then
+        docker compose "${compose_args[@]}" logs --no-color --timestamps fleet livecapture-plugin > "$run/compose.log" 2>&1
         docker compose "${compose_args[@]}" down --volumes --remove-orphans --timeout 5
     fi
     rm -rf "$tmp"
@@ -131,7 +133,10 @@ http_try() {
         echo "S4 $method $path returned $code, expected $expected (body omitted)" >&2
         return 1
     fi
-    if [ "$expected" != 204 ]; then cat "$tmp/resp"; fi
+    if [ "$expected" != 204 ]; then
+        cat "$tmp/resp" 2>/dev/null || { echo "S4 $method $path returned $code without a body" >&2; return 1; }
+    fi
+    rm -f "$tmp/resp"
 }
 http() { http_try "$@" || fail 'request assertion failed'; }
 # capi_try / capi METHOD PATH [BODY] [EXPECTED] [TOKEN] [IF-MATCH]: the plugin's public API.
@@ -178,7 +183,7 @@ peers_array() { capi GET v1/peers | json 'json.dumps(d["items"])'; }
 
 new_channel() { capi POST v1/channels "{\"expires_at\":\"$(iso_in 110)\"}" 201 "${1-$admin}"; }
 channel_id_of() { printf '%s' "$1" | json 'd["id"]'; }
-# start_consumer CHANNEL TOKEN-FILE [RATIO=1]: leaves the container name in $consumer_name.
+# start_consumer CHANNEL TOKEN-FILE: leaves the container name in $consumer_name.
 start_consumer() {
     consumer_sequence=$((consumer_sequence + 1))
     consumer_name="$project-consumer-$consumer_sequence"
@@ -186,7 +191,7 @@ start_consumer() {
         --read-only --cap-drop ALL --security-opt no-new-privileges \
         --mount "type=bind,source=$2,target=/consumer_token,readonly" "$consumer_image" \
         --endpoint http://fleet:8080/api/v1/plugins/livecapture/api --allow-insecure-http --token-file /consumer_token \
-        --channel "$1" --duration 100s --accept-ratio "${3:-1}" --verify-redaction >/dev/null \
+        --channel "$1" --duration 100s --verify-redaction >/dev/null \
         || fail 'Independent generic consumer startup failed'
     children+=("$consumer_name")
     consumer_ready() { docker logs "$consumer_name" 2>&1 | grep -q consumer_ready; }
@@ -244,7 +249,7 @@ start_collector() { # start_collector POD
         --pids-limit 128 --read-only --cap-drop ALL --security-opt no-new-privileges \
         --mount "type=bind,source=$root/examples/fleet-livecapture/collector.yaml,target=/fixture.yaml,readonly" \
         --mount "type=bind,source=$run/plugin/tls_cert.pem,target=/certs/ca.pem,readonly" \
-        --env LINEA_FLEET_AGENT_TOKEN --env "POD_NAME=$1" -e GOMAXPROCS=2 "$collector_image" --config /fixture.yaml >/dev/null \
+        --env LINEA_FLEET_PLUGIN_TOKEN --env "POD_NAME=$1" -e GOMAXPROCS=2 "$collector_image" --config /fixture.yaml >/dev/null \
         || fail 'Real Collector startup failed'
     children+=("$name")
 }
@@ -263,7 +268,7 @@ for name in ["database", "ingress", "plugins", "capture-database", "capture-ingr
 with open(path, "w") as f:
     f.write(json.dumps({"services": {"livecapture-plugin": {"ports": ["127.0.0.1::8090"]}}, "networks": networks}, indent=2))
 PYEOF
-printf "FLEET_SECRET_DIR='%s/fleet'\nFLEET_LIVECAPTURE_SECRET_DIR='%s/plugin'\nFLEET_SERVER_ID=s4-%s\nFLEET_API_PORT=0\nFLEET_AGENT_PORT=0\nCAPTURE_CONTROL_PORT=0\nCAPTURE_DELIVERY_PORT=0\nFLEET_VERSION=%s\nCAPTURE_VERSION=%s\n" \
+printf "FLEET_SECRET_DIR='%s/fleet'\nFLEET_LIVECAPTURE_SECRET_DIR='%s/plugin'\nFLEET_SERVER_ID=s4-%s\nFLEET_API_PORT=0\nFLEET_AGENT_PORT=0\nCAPTURE_CONTROL_PORT=0\nCAPTURE_DELIVERY_PORT=0\nFLEET_VERSION=%s\nCAPTURE_VERSION=%s\nFLEET_BOOTSTRAP_PLUGIN_ACCESS=livecapture=admin\n" \
     "$run" "$run" "$id" "$image_tag" "$image_tag" > "$env_file"
 
 if [ "$skip_build" = 0 ]; then
@@ -304,18 +309,23 @@ fleet_pg=$(compose ps --quiet postgres)
 capi GET v1/openapi.json '' 401 '' >/dev/null
 [ "$(capi GET v1/openapi.json | json 'd["info"]["title"]')" = 'Optional livecapture plugin API' ] \
     || fail 'Plugin-owned schema was not routed opaquely'
-# The unchanged extension presents a fleet agent credential whose capture
-# label allows the s4 collector group; the plugin introspects it via core.
+# The unchanged extension presents the plugin token of a fleet agent
+# credential whose capture label allows the s4 collector group; the plugin
+# introspects it via core and refuses the credential's OpAMP token.
 unlabeled=$(http POST /api/v1/credentials "$admin" \
-    "{\"id\":\"$(random_hex 16)\",\"name\":\"s4 unlabeled\",\"role\":\"agent\",\"expires_at\":\"$(iso_in 86400)\"}" 201 | json 'd["token"]')
+    "{\"id\":\"$(random_hex 16)\",\"name\":\"s4 unlabeled\",\"role\":\"agent\",\"expires_at\":\"$(iso_in 86400)\"}" 201 | json 'd["plugin_token"]')
 unlabeled_file=$run/unlabeled_token
 write_token_file "$unlabeled_file" "$unlabeled"
 credential=$(random_hex 16)
-agent_token=$(http POST /api/v1/credentials "$admin" \
-    "{\"id\":\"$credential\",\"name\":\"s4 collectors\",\"role\":\"agent\",\"expires_at\":\"$(iso_in 86400)\",\"labels\":{\"capture\":\"s4\"}}" 201 | json 'd["token"]')
-agent_file=$run/agent_token
-write_token_file "$agent_file" "$agent_token"
-export LINEA_FLEET_AGENT_TOKEN=$agent_token
+issued=$(http POST /api/v1/credentials "$admin" \
+    "{\"id\":\"$credential\",\"name\":\"s4 collectors\",\"role\":\"agent\",\"expires_at\":\"$(iso_in 86400)\",\"labels\":{\"capture\":\"s4\"}}" 201)
+opamp_file=$run/opamp_token
+write_token_file "$opamp_file" "$(printf '%s' "$issued" | json 'd["token"]')"
+plugin_token=$(printf '%s' "$issued" | json 'd["plugin_token"]')
+unset issued
+agent_file=$run/plugin_token
+write_token_file "$agent_file" "$plugin_token"
+export LINEA_FLEET_PLUGIN_TOKEN=$plugin_token
 for pod in collector-a collector-b; do start_collector "$pod"; done
 wait_for 40 'TLS/bearer capture peers or catalogs did not register' two_ready_peers
 peers=$(peers_array)
@@ -341,7 +351,7 @@ if ! { [ "$(scrape "http://127.0.0.1:$metrics_port/metrics" "$metrics_bearer")" 
 fi
 [ "$(scrape "http://127.0.0.1:$metrics_port/metrics" "$admin")" = 401 ] || fail 'General API token crossed private metrics credential scope'
 if ! { [ "$(scrape "$base/metrics" "$admin")" = 200 ] \
-    && grep -q 'linea_fleet_database_owner_wait_seconds_count' "$tmp/scrape" \
+    && grep -q 'linea_fleet_http_requests_total ' "$tmp/scrape" \
     && grep -q 'linea_fleet_plugins{state="ready"} 1' "$tmp/scrape" \
     && ! grep -q 'linea_fleet_livecapture_' "$tmp/scrape"; }; then
     fail 'Core operational metrics missing or capture boundary crossed'
@@ -357,6 +367,7 @@ operation_id=$(printf '%s' "$operation" | json 'd["id"]')
 capture_active "$operation_id"
 ingress_refusal "$run/plugin/host_token" Unauthenticated
 ingress_refusal "$unlabeled_file" Unauthenticated
+ingress_refusal "$opamp_file" Unauthenticated
 ingress_refusal "$agent_file" PermissionDenied
 ingress_refusal "$agent_file" ResourceExhausted '' 1
 ingress_refusal "$agent_file" Unavailable wrong-host
@@ -375,7 +386,7 @@ capi POST "v1/captures/$operation_id/stop" '' 412 "$admin" '"999999"' >/dev/null
 capture_stop "$operation_id"
 docker stop --time 5 "$consumer" >/dev/null
 capi POST v1/captures "$raw_request" 403 >/dev/null
-echo 'PASS public API: real TLS/bearer peers, generic consumer receipts for all signals, OTTL filtering/redaction, fixed roster, overlap denial, raw denial, idempotency and acknowledged stop.'
+echo 'PASS public API: real TLS/bearer peers, a generic consumer receiving all signals, OTTL filtering/redaction, fixed roster, overlap denial, raw denial, idempotency and acknowledged stop.'
 
 # Restart the same real Collector: its capture identity remains, generation advances.
 old_peer=$(printf '%s' "$peers" | json 'json.dumps([p for p in d if p["identity"]["pod"] == "collector-a"][:1])')
@@ -388,29 +399,26 @@ peers=$(peers_array)
 fresh_channel=$(channel_id_of "$(new_channel)")
 capi POST v1/captures "$(capture_body "$fresh_channel" "$old_peer")" 409 >/dev/null
 
-# Partial receipts are returned as OTLP partial success, rather than full ACK.
-start_consumer "$fresh_channel" "$admin_file" 0.5
-partial_consumer=$consumer_name
+# A filter the Collector rejects fails the capture; it is never reported active.
+start_consumer "$fresh_channel" "$admin_file"
+filter_consumer=$consumer_name
 first=$(first_peer "$peers")
 first_pod=$(printf '%s' "$first" | json 'd[0]["identity"]["pod"]')
 invalid_request=$(body_with "$(capture_body "$fresh_channel" "$first")" 'b["filter"]["traces"]["span"] = ["invalid OTTL expression ("]')
 invalid_id=$(capi POST v1/captures "$invalid_request" 202 | json 'd["id"]')
 wait_for 40 'Collector filter rejection was falsely reported active or lost' capi_is "v1/captures/$invalid_id" 'd["state"] == "failed"'
-partial_id=$(capi POST v1/captures "$(capture_body "$fresh_channel" "$first" 25 0)" 202 | json 'd["id"]')
-capture_active "$partial_id"
-generate "$first_pod"
-wait_for 40 'Consumer partial acceptance was not preserved' \
-    counts_match "$partial_consumer" "c.get('accepted_records') == 3 and c.get('rejected_records') == 3"
-capture_stop "$partial_id"
-docker stop --time 5 "$partial_consumer" >/dev/null
+docker stop --time 5 "$filter_consumer" >/dev/null
 
-# A channel without a polling/acknowledging consumer must never ACK OTLP.
+# A channel without a polling consumer drops what the Collector sends and counts
+# it, then withdraws the capture; the Collector never waits.
 lost_channel=$(channel_id_of "$(new_channel)")
 lost_id=$(capi POST v1/captures "$(capture_body "$lost_channel" "$first" 12)" 202 | json 'd["id"]')
 capture_active "$lost_id"
 generate "$first_pod"
-wait_for 40 'Lost consumer did not withdraw capture with visible uncertainty' capi_is "v1/captures/$lost_id" \
-    'd["state"] in ("stopped", "expired") and d.get("reason") in ("receipt_uncertain", "consumer_unavailable")'
+wait_for 40 'Lost consumer did not withdraw capture' capi_is "v1/captures/$lost_id" \
+    'd["state"] in ("stopped", "expired") and d.get("reason") == "consumer_unavailable"'
+[ "$(capi GET v1/metrics | json 'd["counters"]["dropped_batches_total"] >= 1')" = True ] \
+    || fail 'Lost consumer batches were not dropped and counted'
 
 expiry_channel=$(channel_id_of "$(new_channel)")
 start_consumer "$expiry_channel" "$admin_file"
@@ -421,9 +429,9 @@ wait_for 40 'Absolute capture expiry was not enforced' capi_is "v1/captures/$exp
 docker stop --time 5 "$expiry_consumer" >/dev/null
 # The service's expiry guard may conservatively retain a lease for five seconds.
 wait_for 40 'Expiry guard did not elapse' no_live_leases
-echo 'PASS reconnect generation, partial receipts, lost-consumer backpressure and absolute expiry.'
-[ "$(capi GET v1/metrics | json 'd["counters"]["receipt_uncertain_total"] >= 1 and d["counters"]["consumer_rejected_traces_records_total"] >= 1')" = True ] \
-    || fail 'Real delivery partial/uncertain outcomes not observable'
+echo 'PASS reconnect generation, rejected filter, lost-consumer drops and absolute expiry.'
+[ "$(capi GET v1/metrics | json 'd["counters"]["dropped_batches_total"] >= 1 and d["counters"]["delivered_traces_records_total"] >= 1')" = True ] \
+    || fail 'Real delivery and drops not observable'
 
 drain_channel=$(channel_id_of "$(new_channel)")
 start_consumer "$drain_channel" "$admin_file"
@@ -456,7 +464,7 @@ fi
 # A lost management credential cannot keep a consumer channel alive.
 other_id=$(random_hex 16)
 other_token=$(http POST /api/v1/credentials "$admin" \
-    "{\"id\":\"$other_id\",\"name\":\"s4-other-client\",\"role\":\"admin\",\"expires_at\":\"$(iso_in 3600)\"}" 201 | json 'd["token"]')
+    "{\"id\":\"$other_id\",\"name\":\"s4-other-client\",\"role\":\"admin\",\"plugin_access\":{\"livecapture\":\"write\"},\"expires_at\":\"$(iso_in 3600)\"}" 201 | json 'd["token"]')
 other_file=$run/other_admin_token
 write_token_file "$other_file" "$other_token"
 other_channel=$(channel_id_of "$(new_channel "$other_token")")
@@ -464,7 +472,9 @@ start_consumer "$other_channel" "$other_file"
 other_consumer=$consumer_name
 owned_id=$(capi POST v1/captures "$(capture_body "$other_channel" "$first" 14)" 202 "$other_token" | json 'd["id"]')
 capture_active "$owned_id" "$other_token"
-capi GET "v1/captures/$owned_id" '' 403 >/dev/null
+# An admin reads and may stop another owner's capture, never its records.
+capi GET "v1/captures/$owned_id" >/dev/null
+capi GET "v1/channels/$other_channel/next" '' 403 >/dev/null
 http DELETE "/api/v1/credentials/$other_id" "$admin" '' 204 >/dev/null
 capi GET "v1/channels/$other_channel/next" '' 401 "$other_token" >/dev/null
 wait_for 40 'Revoked client retained capture execution' op_state_is "$owned_id" stopped expired
@@ -556,11 +566,12 @@ dump_host=$run/plugin.dump
 docker cp "$plugin_pg:$dump" "$dump_host" >/dev/null || fail 'Fixture backup copy failed'
 docker cp "$dump_host" "$restore:/tmp/plugin.dump" >/dev/null || fail 'Restore archive copy failed'
 docker exec "$restore" pg_restore -U postgres --exit-on-error --dbname livecapture /tmp/plugin.dump >/dev/null || fail 'Fresh plugin restore failed'
+migrations=$(find "$root/internal/fleetplugins/livecapture/migrations" -name '*.sql' | wc -l | tr -d ' ')
 restored=$(docker exec "$restore" psql -U postgres -d livecapture -At \
     -c "SELECT authority_id FROM capture.metadata; SELECT count(*) FROM capture.schema_version; SELECT state FROM capture.operations WHERE id='$crash_id'" | tr -d '\r') \
     || fail 'Restored plugin lost authority, schema or interrupted metadata'
 if ! { [ "$(printf '%s\n' "$restored" | sed -n 1p)" = "$persisted_authority" ] \
-    && [ "$(printf '%s\n' "$restored" | sed -n 2p)" = 2 ] \
+    && [ "$(printf '%s\n' "$restored" | sed -n 2p)" = "$migrations" ] \
     && [ "$(printf '%s\n' "$restored" | sed -n 3p)" = interrupted ]; }; then
     fail 'Restored plugin lost authority, schema or interrupted metadata'
 fi
@@ -572,7 +583,11 @@ compose up --detach --wait livecapture-plugin
 wait_for 40 'Revoked fleet credential reconnected after plugin restart' capi_is v1/peers 'len(d["items"]) == 0'
 [ "$(capi GET "v1/captures/$crash_id" | json 'd["state"]')" = interrupted ] || fail 'Runtime did not reopen restored operation metadata'
 docker stop --time 5 "$restore" >/dev/null || fail 'Plugin database outage injection failed'
-plugin_stopped() { [ "$(docker inspect "$plugin" --format '{{.State.Running}}')" = false ]; }
-wait_for 40 'Plugin stayed active after losing its database authority' plugin_stopped
+# The plugin exits on the loss; Compose restarts it (unless-stopped), and
+# each restart refuses to run without its database.
+plugin_lost() { docker logs "$plugin" 2>&1 | grep -q '"msg":"plugin_fatal".*"cause":"storage_lost"'; }
+wait_for 40 'Plugin stayed active after losing its database authority' plugin_lost
+plugin_withdrawn() { [ "$(http GET /api/v1/plugins/livecapture "$admin" | json 'd["state"]')" != ready ]; }
+wait_for 40 'Core still shows the plugin ready without its database' plugin_withdrawn
 [ "$(http GET /readyz '' | json 'd["status"]')" = ready ] || fail 'Plugin database outage affected core reporting'
 echo 'PASS core credential revocation, fresh-database metadata restore, and plugin database-outage failure isolation.'

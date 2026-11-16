@@ -37,8 +37,9 @@ its actual image identity is recorded.
 
 The capture fault opens a real public capture, polls its channel but deliberately
 withholds ACK, and samples bounded queue occupancy. Core inventory/readiness
-requests must succeed while a batch is pending, presence stays intact, and a
-missing receipt must become visible uncertainty followed by withdrawn execution.
+requests must succeed while a batch is pending, presence stays intact, and the
+unacknowledged batch must age out after 10 s and be counted in
+`dropped_batches_total`, followed by withdrawn execution.
 The driver discards the synthetic envelope and saves aggregate metrics only.
 This phase establishes failure isolation, not livecapture throughput capacity.
 
@@ -105,7 +106,7 @@ Each run writes to ignored private `.local/fleet-capacity-<id>/`:
 - Matching `.resources.jsonl`: Docker's point-in-time fleet and core DB CPU/RSS/
   network statistics. These snapshots are not peak-resource measurements; review
   daemon monitoring as well before choosing operating limits.
-- Optional `plugin-consumer-fault.json`: aggregate delivery/queue/receipt metrics,
+- Optional `plugin-consumer-fault.json`: aggregate delivery/queue/drop metrics,
   without raw envelopes or filters. Optional phase metadata records successful
   core reads following a fresh pending-batch observation and maximum observed
   pending bytes. Cached/stale metadata does not qualify that assertion.
@@ -123,8 +124,8 @@ conflicts with your Docker/VPN networks. A conflicting subnet fails visibly.
 Concurrent profiles must use different network octets and machine budgets.
 
 The separate full real-capture proof uses compact `10.244.240.*` fixture subnets,
-also configurable with `-NetworkOctet`. It covers all signals, partial receipts,
-overlap, stale generations, lifecycle, credential revocation, crash and restore.
+also configurable with `-NetworkOctet`. It covers all signals, a rejected filter,
+dropped batches, overlap, stale generations, lifecycle, credential revocation, crash and restore.
 Run tests sequentially. [Metric semantics and effective limits](../../docs/fleet/operations-metrics.md)
 explain what the snapshots mean.
 

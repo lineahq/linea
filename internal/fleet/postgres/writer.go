@@ -122,6 +122,27 @@ func (w *writer) submit(ctx context.Context, o *op) opResult {
 	}
 }
 
+// maxAgentWrites bounds the writes agents cause outside the writer queue
+// (failure holds and component sets), so a storm of them can take at most
+// this many of the pool's sessions.
+const maxAgentWrites = 2
+
+// agentWrite admits one write an agent caused. It refuses with ErrBusy while
+// the writer is backlogged or maxAgentWrites are running, so these writes
+// yield to the reports that keep agents connected; the gateway retries with
+// a later evaluation.
+func (s *Store) agentWrite() (release func(), err error) {
+	if s.writer.Busy() {
+		return nil, fleet.ErrBusy
+	}
+	select {
+	case s.agentWrites <- struct{}{}:
+		return func() { <-s.agentWrites }, nil
+	default:
+		return nil, fleet.ErrBusy
+	}
+}
+
 // Busy estimates whether new sessions would wait longer than the budget.
 // overflowRelease defers a release instead of dropping it: a lost release
 // would leave the agent owned by this live replica.
@@ -534,6 +555,22 @@ func (w *writer) connect(ctx context.Context, tx pgx.Tx, o *op, state *batchStat
 		if changed && owner != nil && !orphaned {
 			state.refused = append(state.refused, refusal{agent: o.id, credential: o.credential})
 			return 0, fleet.Report{}, fleet.ErrUIDHeld
+		}
+		if changed {
+			// A disconnected UID changes hands only when its credential is no
+			// longer active, or for a rotation: a credential with the same
+			// labels and remote config opt-in. Otherwise a credential could
+			// adopt another's agent and its config eligibility.
+			var adopt bool
+			if err := tx.QueryRow(ctx, `SELECT NOT EXISTS(SELECT 1 FROM fleet.credentials WHERE id=$1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now()))
+				OR EXISTS(SELECT 1 FROM fleet.credentials p, fleet.credentials n WHERE p.id=$1 AND n.id=$2 AND p.labels=n.labels AND p.remote_config=n.remote_config)`,
+				*holder, o.credential).Scan(&adopt); err != nil {
+				return 0, fleet.Report{}, err
+			}
+			if !adopt {
+				state.refused = append(state.refused, refusal{agent: o.id, credential: o.credential})
+				return 0, fleet.Report{}, fleet.ErrUIDHeld
+			}
 		}
 		stored := fleet.Report{Capabilities: o.report.Capabilities}
 		var status, healthError, hash *string

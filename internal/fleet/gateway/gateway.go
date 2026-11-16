@@ -21,10 +21,12 @@ import (
 	"github.com/lineahq/linea/internal/fleet/configmgmt"
 	"github.com/lineahq/linea/internal/fleet/fleet"
 	"github.com/lineahq/linea/internal/fleet/inventory"
+	"github.com/lineahq/linea/internal/fleet/translog"
 	"github.com/lineahq/linea/pluginsdk/metrics"
 	"github.com/open-telemetry/opamp-go/protobufs"
 	"github.com/open-telemetry/opamp-go/server"
 	"github.com/open-telemetry/opamp-go/server/types"
+	"google.golang.org/protobuf/proto"
 )
 
 type session struct {
@@ -45,8 +47,14 @@ type session struct {
 	// config management only: the instance UID, the stored failure hold
 	// (hex) and the last hash sent, to avoid repeating it before it is
 	// reported
-	uid       []byte
-	held      string
+	uid  []byte
+	held string
+	// retryOwed: the hold was cleared, so the next decision sends the desired
+	// config whatever hash the agent reports. retrySent: that retry was sent
+	// and the agent has not answered. Both live only in the session; a
+	// reconnect starts from the stored status, and a failure then holds again.
+	retryOwed bool
+	retrySent []byte
 	offered   []byte
 	offeredAt time.Time
 	// config management only: the component set of the reported build,
@@ -59,6 +67,9 @@ type session struct {
 	// config management only: since when delivery waits for the full state
 	// asked for after a reconnect's first message
 	stateAwaited time.Time
+	// config management only: the plan hash whose withholding was logged,
+	// so a session writes one line per withheld plan
+	withheld []byte
 }
 
 // agentEntry records which local socket holds an agent identity.
@@ -72,15 +83,43 @@ type agentEntry struct {
 // normally closes them first.
 const verifyGrace = 30 * time.Second
 
+// agentHeartbeat is the OpAMP heartbeat interval of the Collector (the
+// opamp-go default), and idleHeartbeats the number of silent intervals after
+// which a session is closed. Every received message renews the read deadline,
+// so a socket that goes silent cannot hold a connection slot for ever.
+const (
+	agentHeartbeat = 30 * time.Second
+	idleHeartbeats = 3
+	idleTimeout    = idleHeartbeats * agentHeartbeat
+)
+
 // busy is implemented by stores with writer backpressure.
 type busy interface{ Busy() bool }
 
 type principalKey struct{}
+type authenticatedKey struct{}
+
+// WithAuthenticated returns a connection context whose function the gateway
+// calls once the peer presented a valid agent credential.
+func WithAuthenticated(ctx context.Context, fn func()) context.Context {
+	return context.WithValue(ctx, authenticatedKey{}, fn)
+}
+
+// refuse answers an error and closes the connection, so a refused peer
+// cannot keep it open idle and send again without a new TCP connection.
+func refuse(w http.ResponseWriter, message string, code int) {
+	w.Header().Set("Connection", "close")
+	http.Error(w, message, code)
+}
+
 type handshakeKey struct{}
 type Gateway struct {
-	store            fleet.Repository
+	store fleet.Repository
+	// maxMessageBytes bounds what agents send; see NewAuthorized.
+	maxMessageBytes  int64
 	access           auth.Authorizer
 	verifyGrace      atomic.Int64 // nanoseconds
+	idleTimeout      atomic.Int64 // nanoseconds
 	ingest           *inventory.Ingest
 	maxConnections   int
 	mu               sync.Mutex
@@ -102,7 +141,12 @@ type Gateway struct {
 	credentialRefused atomic.Uint64
 	// config is nil unless config management is enabled.
 	config *configState
+	// log is nil until SetLogger; a nil logger discards.
+	log *translog.Logger
 }
+
+// SetLogger binds the transition log. It must be called before serving.
+func (g *Gateway) SetLogger(log *translog.Logger) { g.log = log }
 
 func New(store fleet.Repository, credential auth.Bearer, maxConnections int, maxMessageBytes int64) (*Gateway, error) {
 	return NewAuthorized(store, auth.Static{Bearer: credential, Role: "agent"}, nil, maxConnections, maxMessageBytes)
@@ -115,15 +159,18 @@ func NewAuthorized(store fleet.Repository, access auth.Authorizer, ingest *inven
 		ingest, _ = inventory.New(nil, false)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	g := &Gateway{store: store, access: access, ingest: ingest, maxConnections: maxConnections, connections: make(map[types.Connection]*session), agents: map[string]agentEntry{}, admission: newAdmission(DefaultPendingSessions), ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	g := &Gateway{store: store, access: access, ingest: ingest, maxConnections: maxConnections, maxMessageBytes: maxMessageBytes, connections: make(map[types.Connection]*session), agents: map[string]agentEntry{}, admission: newAdmission(DefaultPendingSessions), ctx: ctx, cancel: cancel, done: make(chan struct{})}
 	s := server.New(nil)
-	h, _, err := s.Attach(server.Settings{MaxMessageSize: maxMessageBytes, Callbacks: types.Callbacks{OnConnecting: g.connecting}})
+	// opamp-go applies one limit to both directions. Its limit admits the
+	// largest remote config; message() enforces the receive limit.
+	h, _, err := s.Attach(server.Settings{MaxMessageSize: max(maxMessageBytes, configmgmt.MaxRemoteConfigBytes), Callbacks: types.Callbacks{OnConnecting: g.connecting}})
 	if err != nil {
 		cancel()
 		return nil, err
 	}
 	g.handler = http.HandlerFunc(h)
 	g.verifyGrace.Store(int64(verifyGrace))
+	g.idleTimeout.Store(int64(idleTimeout))
 	go g.watch()
 	return g, nil
 }
@@ -134,7 +181,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	g.mu.Unlock()
 	if draining {
 		w.Header().Set("Retry-After", "1")
-		http.Error(w, "fleet is draining", http.StatusServiceUnavailable)
+		refuse(w, "fleet is draining", http.StatusServiceUnavailable)
 		return
 	}
 	// Admission runs before credential checks so storms stay cheap.
@@ -152,12 +199,12 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		g.mu.Unlock()
 		if draining {
 			w.Header().Set("Retry-After", "1")
-			http.Error(w, "fleet is draining", http.StatusServiceUnavailable)
+			refuse(w, "fleet is draining", http.StatusServiceUnavailable)
 			return
 		}
 		g.admissionRefused.Add(1)
 		w.Header().Set("Retry-After", retryAfter())
-		http.Error(w, "fleet admission limit reached", http.StatusServiceUnavailable)
+		refuse(w, "fleet admission limit reached", http.StatusServiceUnavailable)
 		return
 	}
 	// A hijacked connection takes the slot with it; otherwise the handshake
@@ -175,7 +222,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		g.mu.Unlock()
 		if draining {
 			w.Header().Set("Retry-After", "1")
-			http.Error(w, "fleet is draining", http.StatusServiceUnavailable)
+			refuse(w, "fleet is draining", http.StatusServiceUnavailable)
 			return
 		}
 	}
@@ -184,28 +231,32 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p, err := g.access.Authenticate(ctx, r)
 	if err != nil || p.Role != "agent" {
 		if err != nil && !errors.Is(err, auth.ErrUnauthorized) {
-			http.Error(w, "fleet storage unavailable", http.StatusServiceUnavailable)
+			refuse(w, "fleet storage unavailable", http.StatusServiceUnavailable)
 			return
 		}
+		g.log.AuthFailure(translog.ListenerAgent)
 		w.Header().Set("WWW-Authenticate", "Bearer")
-		http.Error(w, "valid agent credential required", http.StatusUnauthorized)
+		refuse(w, "valid agent credential required", http.StatusUnauthorized)
 		return
 	}
+	if fn, ok := r.Context().Value(authenticatedKey{}).(func()); ok {
+		fn()
+	}
 	if r.URL.Path != "/v1/opamp" {
-		http.NotFound(w, r)
+		refuse(w, "404 page not found", http.StatusNotFound)
 		return
 	}
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
-		http.Error(w, "WebSocket transport required", http.StatusMethodNotAllowed)
+		refuse(w, "WebSocket transport required", http.StatusMethodNotAllowed)
 		return
 	}
 	if len(r.Header.Values("Origin")) > 0 {
-		http.Error(w, "browser origins unsupported", http.StatusForbidden)
+		refuse(w, "browser origins unsupported", http.StatusForbidden)
 		return
 	}
 	if !websocket.IsWebSocketUpgrade(r) || r.Header.Get("Content-Type") == "application/x-protobuf" {
-		http.Error(w, "WebSocket transport required", http.StatusUpgradeRequired)
+		refuse(w, "WebSocket transport required", http.StatusUpgradeRequired)
 		return
 	}
 	ctx = context.WithValue(context.WithValue(r.Context(), principalKey{}, p), handshakeKey{}, h)
@@ -275,6 +326,12 @@ func (g *Gateway) message(_ context.Context, c types.Connection, m *protobufs.Ag
 		disconnect(c)
 		return nil
 	}
+	if int64(proto.Size(m)) > g.maxMessageBytes {
+		disconnect(c)
+		return nil
+	}
+	// Every message renews the idle deadline, from the first one on.
+	_ = c.Connection().SetReadDeadline(time.Now().Add(time.Duration(g.idleTimeout.Load())))
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if g.ctx.Err() != nil || len(m.InstanceUid) != 16 || m.Flags != 0 {
@@ -315,7 +372,6 @@ func (g *Gateway) message(_ context.Context, c types.Connection, m *protobufs.Ag
 		// first message, an unchanged full state then needs no write.
 		s.commit(stored, health, config)
 		g.claim(s)
-		_ = c.Connection().SetReadDeadline(time.Time{})
 		response.Flags = uint64(protobufs.ServerToAgentFlags_ServerToAgentFlags_ReportFullState)
 	} else if s.id != id {
 		disconnect(c)
@@ -354,6 +410,7 @@ func (g *Gateway) message(_ context.Context, c types.Connection, m *protobufs.Ag
 		disconnect(c)
 		return nil
 	}
+	answered := false
 	if g.config != nil {
 		if first && m.AgentDescription == nil && m.RemoteConfigStatus == nil {
 			// A reconnect's first message carries only pending changes, and
@@ -368,13 +425,14 @@ func (g *Gateway) message(_ context.Context, c types.Connection, m *protobufs.Ag
 			response.Flags |= uint64(protobufs.ServerToAgentFlags_ServerToAgentFlags_ReportAvailableComponents)
 		}
 		evaluate = evaluate || changed
+		// A status message answers a retry that is out, even one identical to
+		// the last: a repeated failure is then a new failure to hold.
+		answered = s.retrySent != nil && m.RemoteConfigStatus != nil
+		evaluate = evaluate || answered
 	}
 	if g.config != nil && evaluate {
 		current := statusOf(s.report.RemoteConfig)
-		if remote := g.deliver(ctx, s, previous, first || !sameStatus(previous, current)); remote != nil {
-			response.RemoteConfig = remote
-			g.config.responses.Add(1)
-		}
+		g.attachConfig(ctx, s, previous, first || answered || !sameStatus(previous, current), response)
 	}
 	return response
 }
@@ -477,37 +535,47 @@ func (g *Gateway) watch() {
 			return
 		case <-ticker.C:
 		}
-		g.mu.Lock()
-		principals := make([]auth.Principal, 0, len(g.connections))
-		peers := make(map[types.Connection]string, len(g.connections))
-		for c, s := range g.connections {
-			principals = append(principals, s.principal)
-			peers[c] = s.principal.ID
+		verified = g.sweepCredentials(verified)
+	}
+}
+
+// sweepCredentials checks the credentials of every session and closes the revoked or,
+// past the grace period, unverifiable ones. It returns when the credentials
+// were last verified; with no sessions nothing is unverified, so that moves
+// on, and a session that connects after a long idle spell gets the full grace
+// period.
+func (g *Gateway) sweepCredentials(verified time.Time) time.Time {
+	g.mu.Lock()
+	principals := make([]auth.Principal, 0, len(g.connections))
+	peers := make(map[types.Connection]string, len(g.connections))
+	for c, s := range g.connections {
+		principals = append(principals, s.principal)
+		peers[c] = s.principal.ID
+	}
+	g.mu.Unlock()
+	if len(principals) == 0 {
+		return time.Now()
+	}
+	ctx, cancel := context.WithTimeout(g.ctx, 3*time.Second)
+	active, err := g.access.Active(ctx, principals)
+	cancel()
+	if err != nil {
+		// A database blip must not drop every session (architecture
+		// §5.7); a longer outage fences the replica, which closes them.
+		// Unverified sessions are closed after the grace period anyway.
+		if time.Since(verified) < time.Duration(g.verifyGrace.Load()) {
+			return verified
 		}
-		g.mu.Unlock()
-		if len(principals) == 0 {
-			continue
-		}
-		ctx, cancel := context.WithTimeout(g.ctx, 3*time.Second)
-		active, err := g.access.Active(ctx, principals)
-		cancel()
-		if err != nil {
-			// A database blip must not drop every session (architecture
-			// §5.7); a longer outage fences the replica, which closes them.
-			// Unverified sessions are closed after the grace period anyway.
-			if time.Since(verified) < time.Duration(g.verifyGrace.Load()) {
-				continue
-			}
-			active = nil
-		} else {
-			verified = time.Now()
-		}
-		for c, id := range peers {
-			if !active[id] {
-				disconnect(c)
-			}
+		active = nil
+	} else {
+		verified = time.Now()
+	}
+	for c, id := range peers {
+		if !active[id] {
+			disconnect(c)
 		}
 	}
+	return verified
 }
 
 // Close fences admission, cancels publication, closes hijacked sockets and

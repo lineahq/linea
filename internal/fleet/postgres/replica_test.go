@@ -35,7 +35,7 @@ func TestPostgresReplicas(t *testing.T) {
 	if err := Migrate(ctx, url); err != nil {
 		t.Fatal("fresh migration:", err)
 	}
-	issued, err := Bootstrap(ctx, url, "replica-fleet", "bootstrap-admin")
+	issued, err := Bootstrap(ctx, url, "replica-fleet", "bootstrap-admin", nil)
 	if err != nil {
 		t.Fatal("bootstrap:", err)
 	}
@@ -125,7 +125,8 @@ func TestPostgresReplicas(t *testing.T) {
 
 	// The UID is bound to its credential while connected: another credential
 	// is refused without touching the row, the holder's own credential still
-	// takes over, and a disconnected UID changes hands with an event.
+	// takes over, and a disconnected UID changes hands with an event to a
+	// credential with the same labels and opt-in (a rotation).
 	intruder := credential("00000000000000000000000000000034")
 	bindingStart, err := a.Events(ctx, "", 500)
 	if err != nil {
@@ -189,18 +190,46 @@ func TestPostgresReplicas(t *testing.T) {
 		t.Fatalf("change events = %+v", changed)
 	}
 
+	// A disconnected UID does not change hands to a credential with other
+	// labels while its own credential is active; once that is revoked, it does.
+	labelled, err := auth.Generate(auth.CredentialRequest{ID: "00000000000000000000000000000035", Name: "other-team", Role: "agent", Labels: map[string]string{"team": "b"}, ExpiresAt: new(time.Now().Add(time.Hour))}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.InsertCredential(ctx, issued.Credential.ID, labelled.Credential); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.DisconnectAgent(ctx, twin, held, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := a.ConnectAgent(ctx, twin, labelled.Credential.ID, fleet.Report{}, time.Now()); !errors.Is(err, fleet.ErrUIDHeld) {
+		t.Fatalf("a credential with other labels adopted the UID: %v", err)
+	}
+	if got, err := a.GetAgent(ctx, twin); err != nil || got.CredentialID != intruder || got.Connected {
+		t.Fatalf("refused adoption changed the agent: %+v %v", got, err)
+	}
+	if err := a.RevokeCredential(ctx, issued.Credential.ID, intruder); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := a.ConnectAgent(ctx, twin, labelled.Credential.ID, fleet.Report{}, time.Now()); err != nil {
+		t.Fatalf("UID of a revoked credential was not adopted: %v", err)
+	}
+
 	// Revocation reaches every replica as a hint.
 	other := credential("00000000000000000000000000000032")
 	if err := a.RevokeCredential(ctx, issued.Credential.ID, other); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case got := <-revoked:
-		if got != other {
-			t.Fatal("revocation hint for wrong credential")
+	// The intruder's revocation above sent its own hint first.
+	for _, want := range []string{intruder, other} {
+		select {
+		case got := <-revoked:
+			if got != want {
+				t.Fatalf("revocation hint for %s, want %s", got, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("revocation hint for %s missing", want)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("revocation hint missing")
 	}
 
 	// Event readers wake on commits from another replica.
@@ -257,7 +286,7 @@ func TestPostgresReplicas(t *testing.T) {
 	for _, e := range all.Items {
 		kinds[e.Kind]++
 	}
-	if kinds["agent.registered"] != 3 || kinds["agent.identity_conflict"] != 1 || kinds["replica.started"] != 0 || kinds["credential.revoked"] != 1 {
+	if kinds["agent.registered"] != 3 || kinds["agent.identity_conflict"] != 1 || kinds["replica.started"] != 0 || kinds["credential.revoked"] != 2 {
 		t.Fatalf("unexpected event stream: %v", kinds)
 	}
 
@@ -345,7 +374,7 @@ func TestPostgresReplicas(t *testing.T) {
 		t.Fatal("restored history unreadable:", err)
 	}
 	// Live and starting replicas both refuse migration.
-	if _, err := maintenance.Exec(ctx, "DELETE FROM fleet.schema_version WHERE version=12"); err != nil {
+	if _, err := maintenance.Exec(ctx, "DELETE FROM fleet.schema_version WHERE version=$1", schemaVersion); err != nil {
 		t.Fatal(err)
 	}
 	if err := Migrate(ctx, url); !errors.Is(err, ErrReplicasActive) {
@@ -395,7 +424,7 @@ func TestPostgresReapBudget(t *testing.T) {
 	if err := Migrate(ctx, url); err != nil {
 		t.Fatal(err)
 	}
-	issued, err := Bootstrap(ctx, url, "reap-fleet", "bootstrap-admin")
+	issued, err := Bootstrap(ctx, url, "reap-fleet", "bootstrap-admin", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

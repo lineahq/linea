@@ -110,6 +110,19 @@ type CaptureTargetStatus struct {
 	Terminal    bool                `json:"terminal"`
 	ObservedAt  *time.Time          `json:"observed_at,omitempty"`
 	Stats       *CaptureTargetStats `json:"stats,omitempty"`
+	// Delivery is what fleet received from the Collector and dropped before
+	// the debugger stored it. Absent until fleet reports the target.
+	Delivery *CaptureTargetDelivery `json:"delivery,omitempty"`
+}
+
+// CaptureTargetDelivery counts the copies fleet received from one Collector
+// and the ones it dropped: a full buffer, a batch the debugger did not read
+// within 10 s, or a debugger that stopped reading. Dropped records are part
+// of the received ones; any drop makes the capture incomplete.
+type CaptureTargetDelivery struct {
+	ReceivedRecords int64 `json:"received_records"`
+	DroppedRecords  int64 `json:"dropped_records"`
+	DroppedBatches  int64 `json:"dropped_batches"`
 }
 
 // CaptureSession is a capture across its target Collectors. State is
@@ -193,8 +206,6 @@ const (
 	captureStatusPeriod = time.Second
 	// captureIdle is how long a runner waits on an empty channel.
 	captureIdle = 100 * time.Millisecond
-	// batchHistory bounds the batch IDs a runner remembers for deduplication.
-	batchHistory = 4096
 )
 
 type captureRecord struct {
@@ -211,9 +222,10 @@ type captureRecord struct {
 	running          bool
 	stopReason       string // a stop the runner must still send
 	refused          map[string]bool
-	batches          map[string]int64
-	batchOrder       []string
-	wake             chan struct{}
+	// lastBatch is the batch last ingested. Fleet offers it again only when
+	// its ACK was lost, and then it is acknowledged without storing it twice.
+	lastBatch string
+	wake      chan struct{}
 }
 
 func cloneCapture[T any](v T) T {
@@ -686,7 +698,6 @@ func (s *Service) CreateCaptureSession(ctx context.Context, caller Caller, req C
 		revision: 0,
 		running:  true,
 		refused:  map[string]bool{},
-		batches:  map[string]int64{},
 		wake:     make(chan struct{}, 1),
 	}
 	caller.touch(c.view.ID)
@@ -781,6 +792,8 @@ func (r *collectorRegistry) applyOperationLocked(c *captureRecord, op *fleetcapt
 				v.Stats = &CaptureTargetStats{Selected: t.Stats.Selected, EnqueuedRecords: t.Stats.EnqueuedRecords,
 					EnqueuedBytes: t.Stats.EnqueuedBytes, FilterErrors: t.Stats.FilterErrors, Dropped: t.Stats.Dropped}
 			}
+			delivery := CaptureTargetDelivery(t.Delivery)
+			v.Delivery = &delivery
 		}
 	}
 	if c.view.Terminal {

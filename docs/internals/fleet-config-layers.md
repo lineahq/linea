@@ -8,7 +8,7 @@ debugger rebuilds when it probes one version of a layer.
 
 - A fleet config is a name with immutable, numbered versions. Fleet keeps
   the newest 100 versions of each config; older ones are pruned. Reading a
-  version's body needs an admin credential.
+  version's body needs an operator or admin credential.
 - `GET /api/v1/configs/{id}/versions` lists versions newest first; `after`
   pages to versions older than the given one.
 - `GET /api/v1/agents/{id}/config` returns the layers fleet sends a managed

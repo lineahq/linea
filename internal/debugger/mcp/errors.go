@@ -17,6 +17,9 @@ type errorResult struct {
 	Diagnostics      []platform.Diagnostic      `json:"diagnostics,omitempty"`
 	Current          *platform.ArtifactMetadata `json:"current,omitempty"`
 	CurrentStatement *string                    `json:"current_statement,omitempty"`
+	// Affected is how many connected agents a refused fleet group change
+	// would give a new config; resend with that max_affected to accept it.
+	Affected int `json:"affected,omitempty"`
 }
 
 func invalidRequest(message string) error {
@@ -51,6 +54,7 @@ func errorFor(err error) errorResult {
 				if e.CurrentStatement != "" {
 					out.CurrentStatement = &e.CurrentStatement
 				}
+				out.Affected = e.Affected
 			}
 		}
 	}
@@ -72,6 +76,9 @@ func (e errorResult) summary() string {
 	}
 	if e.CurrentStatement != nil {
 		text += "; the current statement is in the result"
+	}
+	if e.Affected > 0 {
+		text += "; the count of agents to confirm is in the result"
 	}
 	return text + "."
 }

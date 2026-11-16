@@ -12,6 +12,7 @@ import (
 
 	"github.com/lineahq/linea/internal/fleet/auth"
 	"github.com/lineahq/linea/internal/fleet/fleet"
+	"github.com/lineahq/linea/internal/fleet/translog"
 	"github.com/lineahq/linea/pluginsdk"
 	"github.com/lineahq/linea/pluginsdk/metrics"
 )
@@ -43,12 +44,23 @@ type entry struct {
 	reads       chan struct{}
 	mu          sync.RWMutex
 	info        Info
-	work        chan struct{}
 	lease       context.Context
 	endLease    context.CancelFunc
 	apiReads    chan struct{}
 	apiWrites   chan struct{}
 	apiClient   *http.Client
+	// sessions is the host slot of the session route alone, so the session
+	// poll never waits for the two general host slots (reads).
+	sessions chan struct{}
+	// row is the slot held across every read or write of the shared row and
+	// the adoption of its result.
+	row chan struct{}
+	// seenAt is the row's seen time on this replica's clock, zero when
+	// unseen. local and goodAt are this replica's own last probe result and
+	// last good probe under the current epoch.
+	seenAt time.Time
+	local  string
+	goodAt time.Time
 }
 
 type Registry struct {
@@ -65,11 +77,40 @@ type Registry struct {
 	apiDuration  metrics.Duration
 	apiRefused   atomic.Uint64
 	apiErrors    atomic.Uint64
+	// log is nil until SetLogger; a nil logger discards.
+	log *translog.Logger
+	// now is the clock of seen times; tests replace it.
+	now func() time.Time
+	// wake carries the fleet_plugin hint to the sweep.
+	wake chan struct{}
+}
+
+// SetLogger binds the transition log before the registry starts.
+func (r *Registry) SetLogger(log *translog.Logger) { r.log = log }
+
+// stateOf names a plugin state for the transition log.
+func stateOf(state string) translog.State {
+	switch state {
+	case "ready":
+		return translog.StateReady
+	case "unavailable":
+		return translog.StateUnavailable
+	case "incompatible":
+		return translog.StateIncompatible
+	case "enabled":
+		return translog.StateEnabled
+	case "draining":
+		return translog.StateDraining
+	case "disabled":
+		return translog.StateDisabled
+	}
+	return translog.StateUnavailable
 }
 
 func New(ctx context.Context, configs []Config, store fleet.Repository) *Registry {
 	ctx, cancel := context.WithCancel(ctx)
-	r := &Registry{store: store, ctx: ctx, cancel: cancel}
+	r := &Registry{store: store, ctx: ctx, cancel: cancel, now: time.Now, wake: make(chan struct{}, 1)}
+	r.lifecycle, _ = store.(fleet.PluginLifecycleRepository)
 	for _, config := range configs {
 		config.Permissions = slices.Clone(config.Permissions)
 		host, _ := auth.New(config.hostToken)
@@ -82,13 +123,16 @@ func New(ctx context.Context, configs []Config, store fleet.Repository) *Registr
 			desired = "disabled"
 		}
 		lease, endLease := context.WithCancel(ctx)
-		e := &entry{config: config, host: host, client: pluginsdk.NewHTTPClient(), probeClient: pluginsdk.NewHTTPClient(), probes: make(chan struct{}, 1), calls: make(chan struct{}, 2), reads: make(chan struct{}, 2), work: make(chan struct{}, 1), lease: lease, endLease: endLease, info: Info{
+		e := &entry{config: config, host: host, client: pluginsdk.NewHTTPClient(), probeClient: pluginsdk.NewHTTPClient(), probes: make(chan struct{}, 1), calls: make(chan struct{}, 2), reads: make(chan struct{}, 2), sessions: make(chan struct{}, 1), row: make(chan struct{}, 1), lease: lease, endLease: endLease, info: Info{
 			ID: config.ID, Version: config.Version, ProtocolVersion: pluginsdk.ProtocolVersion,
 			Enabled: config.Enabled, Permissions: slices.Clone(config.Permissions), State: state,
-			Desired: desired, Epoch: pluginsdk.RandomID(),
+			Desired: desired,
 		}}
 		e.apiReads, e.apiWrites = make(chan struct{}, 2), make(chan struct{}, 2)
 		e.apiClient = pluginsdk.NewHTTPClient()
+		for _, c := range []*http.Client{e.client, e.probeClient, e.apiClient} {
+			config.trustRoots(c)
+		}
 		e.apiClient.Timeout = 2 * time.Second
 		transport := e.apiClient.Transport.(*http.Transport)
 		transport.MaxConnsPerHost, transport.MaxIdleConnsPerHost = 4, 4
@@ -100,6 +144,10 @@ func New(ctx context.Context, configs []Config, store fleet.Repository) *Registr
 }
 
 func (r *Registry) Start() {
+	if r.lifecycle != nil && len(r.entries) > 0 {
+		r.wg.Add(1)
+		go r.sweep()
+	}
 	for _, e := range r.entries {
 		if !e.config.Enabled {
 			continue
@@ -141,53 +189,55 @@ func (e *entry) snapshot() Info {
 	return info
 }
 
-func (e *entry) ready() bool {
-	info := e.snapshot()
-	return info.Desired == "enabled" && info.State == "ready" && info.CheckedAt != nil && time.Since(*info.CheckedAt) < 3*time.Second
-}
-
-func (r *Registry) probe(e *entry) {
-	before := e.snapshot()
-	if before.Desired != "enabled" {
-		return
+// view is the entry as the API shows it, with its state evaluated now.
+func (r *Registry) view(e *entry) Info {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	info := e.info
+	info.Permissions = slices.Clone(info.Permissions)
+	info.State = e.stateLocked(r.now())
+	if info.State == "ready" && r.ctx.Err() != nil {
+		info.State = "unavailable"
 	}
-	var m pluginsdk.Manifest
-	err := r.call(r.ctx, e, pluginsdk.ManifestPath, nil, 4096, &m)
-	state := "ready"
-	if err != nil {
-		state = "unavailable"
-	} else if m.ID != e.config.ID || m.Version != e.config.Version || m.ProtocolVersion != pluginsdk.ProtocolVersion || !pluginsdk.ValidUID(m.InstanceID) || m.APIVersion != e.config.APIVersion {
-		state = "incompatible"
-	}
-	now := time.Now().UTC()
-	if state == "ready" && before.InstanceID != "" && before.InstanceID != m.InstanceID {
-		// Publish replacement authority only after an admitted lifecycle change exits.
-		select {
-		case e.work <- struct{}{}:
-			defer func() { <-e.work }()
-		default:
-			state = "unavailable"
-		}
-	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.info.Epoch != before.Epoch || e.info.Desired != "enabled" {
-		return
-	}
-	if (e.info.InstanceID != "" && e.info.InstanceID != m.InstanceID && err == nil) || (e.info.State == "ready" && state != "ready") {
-		r.fenceLocked(e)
-	}
-	if state == "ready" {
-		e.info.InstanceID = m.InstanceID
-	}
-	e.info.State, e.info.CheckedAt = state, &now
+	return info
 }
 
 func (r *Registry) call(ctx context.Context, e *entry, path string, headers http.Header, max int64, result any) error {
 	return r.rpc(ctx, e, "GET", path, headers, nil, max, result)
 }
 
+// errSlotsFull refuses a plugin call when its bounded pool is busy.
+var errSlotsFull = errors.New("plugin call slots full")
+
 func (r *Registry) rpc(ctx context.Context, e *entry, method, path string, headers http.Header, body []byte, max int64, result any) error {
+	err := r.send(ctx, e, method, path, headers, body, max, result)
+	if err == nil {
+		return nil
+	}
+	var failure *pluginsdk.HTTPError
+	if errors.As(err, &failure) {
+		switch failure.Status {
+		case 400:
+			return fleet.ErrInvalid
+		case 403:
+			return auth.ErrForbidden
+		case 404:
+			return fleet.ErrNotFound
+		case 409:
+			return fleet.ErrConflict
+		case pluginsdk.StatusMisdirected:
+			// Never an answer for the caller: the plugin sees another
+			// authority than this entry.
+			r.refresh(e)
+		case 429:
+			return fleet.ErrCapacity
+		}
+	}
+	return fleet.ErrUnavailable
+}
+
+// send makes one plugin call and returns its raw error.
+func (r *Registry) send(ctx context.Context, e *entry, method, path string, headers http.Header, body []byte, max int64, result any) error {
 	// The manifest probe has a dedicated slot and connection pool; every other
 	// call shares a bounded pool of its own and is refused when it is full.
 	slots, client := e.calls, e.client
@@ -198,7 +248,7 @@ func (r *Registry) rpc(ctx context.Context, e *entry, method, path string, heade
 	case slots <- struct{}{}:
 		defer func() { <-slots }()
 	default:
-		return fleet.ErrUnavailable
+		return errSlotsFull
 	}
 	ctx, cancel := context.WithTimeout(ctx, pluginsdk.RequestTimeout)
 	defer cancel()
@@ -211,25 +261,7 @@ func (r *Registry) rpc(ctx context.Context, e *entry, method, path string, heade
 		stopLease := context.AfterFunc(lease, cancel)
 		defer stopLease()
 	}
-	if err := pluginsdk.RequestJSON(ctx, client, method, e.config.Endpoint+path, e.config.serviceToken, headers, body, max, result); err != nil {
-		var failure *pluginsdk.HTTPError
-		if errors.As(err, &failure) {
-			switch failure.Status {
-			case 400:
-				return fleet.ErrInvalid
-			case 403:
-				return auth.ErrForbidden
-			case 404:
-				return fleet.ErrNotFound
-			case 409:
-				return fleet.ErrConflict
-			case 429:
-				return fleet.ErrCapacity
-			}
-		}
-		return fleet.ErrUnavailable
-	}
-	return nil
+	return pluginsdk.RequestJSON(ctx, client, method, e.config.Endpoint+path, e.config.serviceToken, headers, body, max, result)
 }
 
 func (r *Registry) find(id string) *entry {
@@ -244,11 +276,7 @@ func (r *Registry) find(id string) *entry {
 func (r *Registry) List() []Info {
 	items := make([]Info, 0, len(r.entries))
 	for _, e := range r.entries {
-		info := e.snapshot()
-		if info.State == "ready" && (!e.ready() || r.ctx.Err() != nil) {
-			info.State = "unavailable"
-		}
-		items = append(items, info)
+		items = append(items, r.view(e))
 	}
 	return items
 }
@@ -263,19 +291,20 @@ func (r *Registry) Get(id string) (Info, error) {
 }
 
 func (r *Registry) Status(ctx context.Context, id string, caller auth.Principal) (json.RawMessage, error) {
-	if caller.Role != "reader" && caller.Role != "operator" && caller.Role != "admin" {
+	access := caller.Access(id)
+	if caller.ID == "" || !pluginsdk.ValidAccess(access) {
 		return nil, auth.ErrForbidden
 	}
 	e := r.find(id)
 	if e == nil {
 		return nil, fleet.ErrNotFound
 	}
-	if r.ctx.Err() != nil || !e.ready() {
+	if r.ctx.Err() != nil || !r.ready(e) {
 		return nil, fleet.ErrUnavailable
 	}
 	var body json.RawMessage
 	before := e.snapshot()
-	headers := http.Header{pluginsdk.CallerIDHeader: {caller.ID}, pluginsdk.CallerRoleHeader: {caller.Role}}
+	headers := http.Header{pluginsdk.CallerIDHeader: {caller.ID}, pluginsdk.CallerAccessHeader: {access}}
 	if err := r.call(ctx, e, pluginsdk.StatusPath, headers, 32<<10, &body); err != nil {
 		return nil, err
 	}
@@ -309,36 +338,43 @@ func (r *Registry) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 	if owner == nil {
+		r.log.AuthFailure(translog.ListenerPluginHost)
 		hostError(w, 401)
 		return
 	}
+	// The session route has a slot of its own: the poll that keeps the
+	// plugin's authority alive never competes with its other host calls.
+	slot := owner.reads
+	if req.URL.Path == pluginsdk.SessionPath {
+		slot = owner.sessions
+	}
 	select {
-	case owner.reads <- struct{}{}:
-		defer func() { <-owner.reads }()
+	case slot <- struct{}{}:
+		defer func() { <-slot }()
 	default:
 		hostError(w, 503)
 		return
 	}
-	if !owner.config.Enabled || !owner.ready() || r.ctx.Err() != nil {
+	if req.URL.Path == pluginsdk.SessionPath {
+		r.serveSession(w, req, owner)
+		return
+	}
+	if !owner.config.Enabled || !r.ready(owner) || r.ctx.Err() != nil {
 		hostError(w, 403)
 		return
 	}
-	info := owner.snapshot()
-	if req.Header.Get(pluginsdk.InstanceHeader) != info.InstanceID {
-		hostError(w, 409)
-		return
+	// The plugin may know a newer row than this replica's cache: read the
+	// row once and compare again.
+	matches := func() bool {
+		info := owner.snapshot()
+		return req.Header.Get(pluginsdk.InstanceHeader) == info.InstanceID && req.Header.Get(pluginsdk.EpochHeader) == info.Epoch
 	}
-	if req.URL.Path == pluginsdk.SessionPath {
-		if req.Method != "GET" || req.URL.RawQuery != "" {
-			hostError(w, 400)
+	if !matches() {
+		r.refresh(owner)
+		if !matches() {
+			hostError(w, pluginsdk.StatusMisdirected)
 			return
 		}
-		hostJSON(w, 200, pluginsdk.Session{PluginID: info.ID, InstanceID: info.InstanceID, Epoch: info.Epoch, Revision: info.Revision, Permissions: info.Permissions})
-		return
-	}
-	if req.Header.Get(pluginsdk.EpochHeader) != info.Epoch {
-		hostError(w, 409)
-		return
 	}
 	route, ok := hostRoutes[req.URL.Path]
 	if !ok {
@@ -368,4 +404,40 @@ func (r *Registry) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	route.serve(r, w, req.WithContext(ctx))
+}
+
+// serveSession answers the session poll from the row, read from the database
+// on every request, so every replica gives the same answer at once.
+func (r *Registry) serveSession(w http.ResponseWriter, req *http.Request, owner *entry) {
+	if !owner.config.Enabled || r.ctx.Err() != nil || r.lifecycle == nil {
+		hostError(w, 403)
+		return
+	}
+	ctx, cancel := context.WithTimeout(req.Context(), pluginsdk.RequestTimeout)
+	defer cancel()
+	states, err := r.lifecycle.PluginStates(ctx)
+	if err != nil {
+		hostError(w, 503)
+		return
+	}
+	row := findRow(states, owner.config.ID)
+	owner.mu.RLock()
+	incompatible, cached := owner.local == localIncompatible, owner.info.Epoch
+	owner.mu.RUnlock()
+	if row.Epoch != cached {
+		r.Notify(owner.config.ID)
+	}
+	if !row.Ready() || incompatible {
+		hostError(w, 403)
+		return
+	}
+	if req.Header.Get(pluginsdk.InstanceHeader) != row.InstanceID {
+		hostError(w, pluginsdk.StatusMisdirected)
+		return
+	}
+	if req.Method != "GET" || req.URL.RawQuery != "" {
+		hostError(w, 400)
+		return
+	}
+	hostJSON(w, 200, pluginsdk.Session{PluginID: owner.config.ID, InstanceID: row.InstanceID, Epoch: row.Epoch, Revision: row.Revision, Permissions: slices.Clone(owner.config.Permissions)})
 }

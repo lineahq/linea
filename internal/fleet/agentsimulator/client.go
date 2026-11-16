@@ -1,16 +1,18 @@
 package agentsimulator
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"hash/fnv"
+	"maps"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -308,6 +310,9 @@ func builds(n int) []*protobufs.AvailableComponents {
 	}
 	out := make([]*protobufs.AvailableComponents, n+1)
 	for i := range out {
+		// Each build names its own module, so builds with the same types
+		// still hash differently, as distinct Collector builds do.
+		module := "linea.dev/simulated/build" + strconv.Itoa(i)
 		ac := &protobufs.AvailableComponents{Components: map[string]*protobufs.ComponentDetails{}}
 		for section, names := range full {
 			sub := map[string]*protobufs.ComponentDetails{}
@@ -315,15 +320,38 @@ func builds(n int) []*protobufs.AvailableComponents {
 				if i == n && t == "filelog" {
 					continue
 				}
-				sub[t] = &protobufs.ComponentDetails{}
+				sub[t] = &protobufs.ComponentDetails{Metadata: []*protobufs.KeyValue{{Key: "code.namespace",
+					Value: &protobufs.AnyValue{Value: &protobufs.AnyValue_StringValue{StringValue: module}}}}}
 			}
 			ac.Components[section] = &protobufs.ComponentDetails{SubComponentMap: sub}
 		}
-		digest := sha256.Sum256(binary.BigEndian.AppendUint32([]byte("linea-fleet-simulated-build"), uint32(i)))
-		ac.Hash = bytes.Clone(digest[:])
+		ac.Hash = componentsHash(ac)
 		out[i] = ac
 	}
 	return out
+}
+
+// componentsHash hashes a build the way the Collector's OpAMP extension does
+// (opampextension v0.162.0), so the fleet server can verify the list: SHA-256
+// of "kind:" and then "type=module;" per sorted type, for each kind in order.
+func componentsHash(ac *protobufs.AvailableComponents) []byte {
+	var b strings.Builder
+	for _, k := range [][2]string{{"receivers", "receiver"}, {"processors", "processor"}, {"exporters", "exporter"}, {"extensions", "extension"}, {"connectors", "connector"}} {
+		b.WriteString(k[1] + ":")
+		d := ac.Components[k[0]]
+		types := slices.Sorted(maps.Keys(d.GetSubComponentMap()))
+		for _, t := range types {
+			module := ""
+			for _, kv := range d.SubComponentMap[t].GetMetadata() {
+				if kv.GetKey() == "code.namespace" {
+					module = kv.GetValue().GetStringValue()
+				}
+			}
+			b.WriteString(t + "=" + module + ";")
+		}
+	}
+	sum := sha256.Sum256([]byte(b.String()))
+	return sum[:]
 }
 
 // build picks the peer's build from its identity.

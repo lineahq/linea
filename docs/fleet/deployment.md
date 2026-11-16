@@ -64,8 +64,9 @@ Secrets:
 | Protection | File-based Compose secrets are plaintext host files. Protect the directory and its backups; never commit or print them |
 | Admin token | Valid until revoked; it does not expire. `admin.json` is an operator copy of the one-time disclosure: store it in your secret manager |
 | Admin expiry | Startup requires an active admin. If all admins are revoked or expired, stop fleet and run offline bootstrap again. Bootstrap refuses while an active admin exists. Admins issued before schema version 11 keep their 90-day expiry |
-| Deployment token | With `LINEA_FLEET_BOOTSTRAP_TOKEN` (or `_FILE`), bootstrap installs a token the deployment generated (`of1_`, 32 and then 64 lowercase hexadecimal characters, joined by `_`) instead of generating one, and prints only `fleet admin created` or `fleet admin is current`. Repeating it changes nothing while that admin is active; it refuses when another admin is active or that token's credential was revoked |
-| Deployment operator token | With `LINEA_FLEET_OPERATOR_TOKEN` (or `_FILE`) as well, bootstrap installs that token as an operator credential, named by `--operator-name` (default `linea-server`), after the admin, and prints only `fleet operator created` or `fleet operator is current`. The operator credential does not expire. Repeating it changes nothing while that operator is active; it refuses when the token's credential has another role or token, was revoked or has expired. The debugger's Compose overlay and Helm chart keep the admin token for whoever administers fleet and give `linea-server` the operator token |
+| Deployment token | With `LINEA_FLEET_BOOTSTRAP_TOKEN` (or `_FILE`), bootstrap installs a token the deployment generated (`of1_`, 32 and then 64 lowercase hexadecimal characters, joined by `_`) instead of generating one, and prints only `fleet admin created` or `fleet admin is current`. Repeating it changes nothing but the plugin grants while that admin is active; it refuses when another admin is active or that token's credential was revoked |
+| Deployment operator token | With `LINEA_FLEET_OPERATOR_TOKEN` (or `_FILE`) as well, bootstrap installs that token as an operator credential, named by `--operator-name` (default `linea-server`), after the admin, and prints only `fleet operator created` or `fleet operator is current`. The operator credential does not expire. Repeating it changes nothing but the grants below while that operator is active; it refuses when the token's credential has another role or token, was revoked or has expired. The debugger's Compose overlay and Helm chart keep the admin token for whoever administers fleet and give `linea-server` the operator token |
+| Bootstrap grants | `--plugin-access plugin=level[,...]` grants the first admin plugin access (`read`, `write` or `admin`); no role reaches a plugin without one. In the fleet Compose file, set `FLEET_BOOTSTRAP_PLUGIN_ACCESS`, for example `livecapture=admin`. `--operator-plugin-access` and `--operator-delegate` grant the deployment operator plugin access and the acting-for headers. With deployment tokens, a repeat sets the grants to what the flags say and records `credential.updated`. The debugger's Compose overlay and Helm chart grant the admin `livecapture=admin` and `linea-server` `livecapture=write` with delegate |
 | Rotation | Changing secret files does not rotate passwords in an existing database. Coordinate database password changes with connection-file updates |
 
 Storage and roles:
@@ -141,9 +142,11 @@ Optional Compose variables (environment or a protected env file):
 | --- | --- | --- |
 | `--storage` | `postgres` | `postgres` (durable) or `memory` (development) |
 | `--server-id` | required | Stable operator-assigned identity |
-| `--tls-cert`, `--tls-key` | none | Serve both listeners over HTTPS/WSS |
+| `--tls-cert`, `--tls-key` | none | Serve every listener over HTTPS/WSS |
+| `--plugin-tls-cert`, `--plugin-tls-key` | none | Serve the plugin host listener alone over HTTPS with this identity, in place of `--tls-cert` there; the other listeners keep theirs |
 | `--max-agents` | | Inventory capacity (1 to 100,000). At the limit, registration evicts the longest-disconnected agent before refusing |
-| `--max-connections` | | Agent TCP connections per replica (1 to 10,000) |
+| `--max-connections` | | Agent sessions per replica (1 to 10,000), and separately agent TCP connections that have not yet presented an agent credential. A replica holds at most twice this many agent connections |
+| `--max-message-bytes` | 1 MiB | Largest OpAMP message an agent may send (1 KiB to 16 MiB); a larger one closes the session. Fleet sends up to the larger of this and 1,029 KiB, the largest remote config (8 layers of 128 KiB) |
 | `--max-pending-sessions` | 400 | Handshakes per replica between admission and first commit (1 to 10,000) |
 | `--max-events` | 100,000 | Retained events (1 to 1,000,000); keep at least two per agent |
 | `--drain-timeout` | 20 s | Window for closing agent sockets on stop (0 to 30 s) |
@@ -154,6 +157,7 @@ Optional Compose variables (environment or a protected env file):
 | `--plugin-listen` | `127.0.0.1:8081` | Private plugin host listener |
 | `--config-management` | off | [Remote config management](config-management.md) (PostgreSQL only) |
 | `--config-allowed-components` | any | `kind:type` list config versions may use |
+| `--config-unstaged-limit` | 10 | Connected agents a group edit or a credential opt-in may reconfigure without `max_affected` ([unstaged changes](config-management.md#changes-a-rollout-cannot-stage)) |
 
 ### Network exposure
 
@@ -166,6 +170,12 @@ Optional Compose variables (environment or a protected env file):
 - Core has no cookie auth or CORS, and rejects browser-origin WebSockets.
 - Agents send bearer auth to `/v1/opamp`; polling is unsupported. API clients
   use a reader, operator or admin token on the management listener.
+- The agent listener speaks HTTP/1.1 only. A connection counts against the
+  unauthenticated bound until it presents an agent credential, and every
+  refusal (401, 403, 404, 405, 426, 503) closes it. Fleet has no limit per
+  source address: the ingress or load balancer in front of the agent listener
+  must limit connections and connection rate per source, so one source cannot
+  fill the unauthenticated bound and keep new Collectors out.
 - Only process probes are anonymous. Metrics need fleet read access.
 
 ### Container hardening
@@ -203,6 +213,73 @@ networks:
     ipam: {config: [{subnet: 10.241.14.0/24}]}
 ```
 
+## Transition log
+
+`linea-fleet` writes one JSON line on stderr for each state transition and
+nothing else: no line per request, per agent report or per telemetry batch.
+Metrics (see [operational metrics](operations-metrics.md)) say how much;
+this log says what changed and why. Read it with `docker compose logs fleet`.
+
+```json
+{"time":"2026-11-15T10:02:11.482Z","level":"ERROR","msg":"replica_fenced","component":"fleet","replica":"5f0c...","reason":"heartbeat_lapsed"}
+```
+
+Every line has `time`, `level`, `msg` (the event name) and `component` (always
+`fleet`; the live capture plugin writes `livecapture` in the same shape). The other fields come from a
+closed set, so a line can never carry a credential, a configuration, an
+attribute value, telemetry or an error message:
+
+| Field | Value |
+| --- | --- |
+| `replica`, `plugin`, `credential`, `actor`, `rollout`, `assignment`, `agent` | An ID: at most 128 characters of letters, digits and `. _ : @ -`. Anything else is written as `invalid` |
+| `version` | The release |
+| `reason`, `state`, `listener`, `of` | A fixed name from the tables below |
+| `agents`, `replicas`, `targets`, `waves`, `wave`, `incompatible`, `suppressed`, `count` | A count |
+| `uptime_ms`, `outage_ms`, `duration_ms` | A duration in whole milliseconds |
+
+| Event | Level | Fields | When |
+| --- | --- | --- | --- |
+| `process_started` | info | `version` | Configuration accepted, before the database opens |
+| `process_ready` | info | | Both listeners are bound. This replaces the old `ready:` line, which also named the listener addresses; they are the flags you passed |
+| `process_stopped` | info or error | `version`, `reason`, `uptime_ms` | The process finished stopping. Error level when it stopped because of a failure. The only account of why a failed process exited |
+| `replica_registered` | info | `replica` | This process registered in `fleet.replicas` |
+| `replica_deregistered` | info | `replica` | A graceful stop removed the registration |
+| `replica_reaped` | warn | `replica` | This replica, as leader, removed another replica that stopped heartbeating |
+| `agents_released` | warn | `agents` | The leader released agents that dead replicas held |
+| `replica_fenced` | error | `replica`, `reason` | This replica can no longer prove liveness and stops. Reasons: `heartbeat_lapsed`, `registration_reaped` |
+| `leader_gained`, `leader_lost` | info | `replica`, `reason` (lost only) | The leader lease changed. Reasons: `lease_unavailable`, `replica_fenced`, `shutdown` |
+| `database_lost` | warn | `replica`, `reason` | Heartbeat writes began to fail. Reasons: `timeout`, `sqlstate`, `connection`. Written once per outage |
+| `database_recovered` | info | `replica`, `outage_ms` | Heartbeat writes succeeded again |
+| `plugin_state_changed` | info | `plugin`, `state`, `reason`, `actor` (lifecycle only) | A plugin's state changed. States: `ready`, `unavailable`, `incompatible`, `enabled`, `draining`, `disabled`. Reasons: `probe_ok`, `probe_failed`, `probe_lost` (the 3 s seen window closed), `probe_incompatible`, `instance_changed`, `lifecycle_enable`, `lifecycle_drain`, `lifecycle_disable`, `shared_state` (read from the shared row after another replica changed it), `restored` (at start, from the stored state) |
+| `plugin_epoch_changed` | info | `plugin`, `reason` | The plugin's host epoch rotated and its admitted calls were cancelled. Reasons: `instance_changed`, `probe_failed` (the plugin refused), `probe_lost` (no replica reached it for 3 s), `lifecycle_enable`, `lifecycle_drain`, `lifecycle_disable`, `shared_state` (another replica changed the shared row) |
+| `rollout_created` | info | `rollout`, `assignment`, `actor`, `targets`, `waves` | A rollout was admitted |
+| `rollout_state_changed` | info | `rollout`, `state`, `reason`, `actor` | A rollout moved to `running`, `paused`, `rolling_back`, `completed`, `rolled_back` or `cancelled`. Reasons: `operator`, `threshold`, `controller` |
+| `rollout_wave_released` | info | `rollout`, `wave`, `targets`, `incompatible` | The controller released a wave |
+| `config_withheld` | warn | `agent`, `reason` | A config the server would send was held back. Reasons: `incompatible_components` (the agent's build lacks a component the config uses), `unverified_components` (the agent's build is not resolved: its component list did not match its hash, never arrived, or the store is full), `agent_reported_failure` (the agent reported the config failed, so the server holds it). One line per session and plan; at most 20 per 10 s |
+| `credential_created`, `credential_revoked` | info | `credential`, `actor` | An admin created or revoked a credential, by ID |
+| `credential_updated` | info | `credential`, `actor`, `reason` | A credential's remote config permission changed (`remote_config_enabled`, `remote_config_disabled`) |
+| `auth_failures` | warn | `listener`, `count`, `duration_ms` | Failed authentications in the last 10 s on one listener (`management`, `agent`, `plugin_host`). One line per listener and only when the count is above zero, so a scan or a bad token is one line every 10 s, not one per request. Also written when the process stops |
+| `lines_suppressed` | warn | `of`, `suppressed` | Lines of a rate-limited event (`config_withheld`) dropped in the last 10 s |
+
+Reasons of `process_stopped`: `signal` (SIGINT or SIGTERM, graceful),
+`shutdown`, `config_invalid`, `database_unavailable`,
+`schema_or_identity_conflict` (the schema is not current or the database
+belongs to another server ID: run `migrate`), `no_admin_credential` (run
+`bootstrap`), `tls_identity_failed`, `listen_failed`, `plugins_invalid`,
+`listener_failed`, `replica_fenced`, `shutdown_incomplete`, `internal`.
+
+Lines for a rollout, a credential or a plugin lifecycle change are written
+after the database committed it. A replica logs only its own view: the leader
+writes `rollout_wave_released` and the reaper lines, and the replica that
+served an API request writes that request's `credential_*` line. Join the
+replicas' logs by `time` and ID.
+
+The log never contains the error behind a failure. Usage and configuration
+mistakes (an unknown flag, a missing secret, a value out of range) are
+refused before the service starts with one plain message on stderr and exit
+status 1. When the service itself fails, the last line of output is the
+`process_stopped` line, followed by one fixed sentence.
+
 ## Restart and database failure
 
 ```sh
@@ -218,6 +295,7 @@ docker compose ps
 | Crash | History stays durable. After the replica's heartbeat is 10 s old its agents read as disconnected (health and observation times preserved) and the leader replica releases them with `agent.disconnected` events |
 | Reconnect | Increments `generation`. Event cursors survive restarts; refresh snapshots only after an event 410 |
 | Reconnect storm | A full write queue answers new sessions 503 with `Retry-After`. A handshake waits up to 25 s for a slot before refusal, so opamp-go clients avoid long backoff. `--max-pending-sessions` bounds handshakes in progress |
+| Silent agent | An agent session that sends no message for 90 s (three of the Collector's 30 s heartbeats) is closed and the agent reconnects; every received message renews the deadline. An agent configured with a heartbeat interval of 90 s or more is closed repeatedly |
 | Database or own-registration loss | Readiness fails closed and the process stops within the heartbeat window. Compose does not restart it: restore the database, then start fleet explicitly |
 
 Connect to PostgreSQL directly or through a session pooler. Transaction
@@ -264,13 +342,32 @@ docker compose $ha exec postgres-standby psql -U postgres -d fleet -c "SELECT pg
 Never start the old primary beside the promoted one. Rebuild it as a new
 standby from an empty volume.
 
+The standby in `compose.ha.yaml` replicates asynchronously: a failover can
+lose the writes the old primary committed in its last moments, a credential
+revocation among them, and the revoked token then works again. After a
+failover, revoke again any credential revoked shortly before it; the lost
+`credential.revoked` event is gone too, so compare against your own record. To lose no committed write, set
+`synchronous_standby_names` on the primary; every write then waits for the
+standby, and writes stop while the standby is down.
+
+Plugins behind replicas: every replica probes each plugin directly and keeps
+its state in one shared row, so all replicas show one epoch. The plugin must
+reach the host listener through the load balancer, whose `plugin_host`
+frontend (`:8081`, HTTP, per-request balancing over ready replicas) a plugin
+overlay puts on the internal plugin network; point the plugin's host
+endpoint at `http://lb:8081`.
+`examples/fleet-agent-summary-plugin/compose.ha.yaml` does this for the
+example plugin, and `scripts/fleet/smoke-ha-plugin.sh` checks it: one epoch on
+every replica, no rotation when a replica dies, a drain seen by all. The Helm
+chart runs one fleet pod and needs none of this.
+
 Sizing:
 
 | Part | Guidance |
 | --- | --- |
 | Load balancer | Relays TCP only: one CPU and 512 MiB carried 20,000 sessions. Keep `nbthread` in `haproxy.cfg` equal to the container's `cpus`. `maxconn` (45,000 agents) must exceed the fleet with room for reconnect overlap. Idle timeouts are 90 s, above the heartbeat and event long-poll |
 | Replicas | About 33 KiB per session: the 1 GiB limit covers 10,000 sessions with margin. Size `--max-connections` for the survivors of a replica loss |
-| PostgreSQL | Each replica opens at most eight connections, so eight replicas need 64 plus replication and administration, within the default `max_connections` of 100. A faster disk or more primary CPU shortens reconnect storms directly. Heartbeats cause no writes |
+| PostgreSQL | Each replica opens at most nine connections (a pool of eight and one reserved for its heartbeat), so eight replicas need 72 plus replication and administration, within the default `max_connections` of 100. A faster disk or more primary CPU shortens reconnect storms directly. Heartbeats cause no writes |
 
 ## Inventory and retention
 
@@ -336,7 +433,13 @@ docker compose --project-name fleet-restore --env-file restore.env up -d --wait 
   ledger, owners and grants; the migration job verifies compatibility and
   runtime grants.
 - Startup detects the new cluster, expires event cursors once and requires
-  renewed reporting.
+  renewed reporting. The first replica to start moves every retained event
+  ahead of new ones in one transaction of its own, allowed up to four
+  minutes, before it registers; other replicas wait for it. Serving
+  statements stay bounded at 2 s.
+- Migrations and offline administration (`migrate`, `bootstrap`) run with a
+  5-minute statement timeout, a 10 s lock timeout and a 10-minute overall
+  bound.
 - Original API tokens work if they were active at backup and are still
   unexpired. Bootstrap is unnecessary while an admin remains.
 - Restore returns credential validity to the backup point. Reconcile or
@@ -350,9 +453,11 @@ docker compose --project-name fleet-restore --env-file restore.env up -d --wait 
 3. Run migrations, start fleet, and check readiness and authenticated
    inventory, groups and credential metadata with an independent HTTP client.
 
-- The current durable schema is version 12 (version 12 adds the `operator`
-  credential role; version 11 lets admin and reader credentials be valid
-  until revoked). Migrations only go forward, and
+- The current durable schema is version 15 (version 15 adds the audit
+  record `fleet.audit`; version 14 adds plugin access,
+  delegation and the plugin token to credentials; version 13 adds the shared
+  plugin state; version 12 adds the `operator` credential role; version 11
+  lets admin and reader credentials be valid until revoked). Migrations only go forward, and
   `docker compose run --rm -T migrate` also re-applies the runtime role's
   grants.
 - The config management tables exist in every installation and stay unused

@@ -13,7 +13,7 @@ Plugin 0.2.0 [metrics](../../../docs/fleet/operations-metrics.md#livecapture-met
 that contract without changing capture ownership or execution recovery.
 Plugin 0.3.0 active/standby supervision and drain
 preserve single-authority fencing and no replay, with API schema 1.2.0.
-Plugin 0.4.0 (API schema 2.1.0, plugin API version 2) uses only generic fleet
+Plugin 0.5.0 (API schema 3.0.0, plugin API version 3) uses only generic fleet
 host services: Collectors present their fleet agent credential, which the
 plugin introspects through the host (`credentials.introspect`); its `capture`
 label lists the collector groups it may serve. Peers that report the same pod

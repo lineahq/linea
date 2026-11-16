@@ -33,22 +33,22 @@ func TestPostgresBootstrapToken(t *testing.T) {
 	token := "of1_" + strings.Repeat("ab", 16) + "_" + strings.Repeat("cd", 32)
 	other := "of1_" + strings.Repeat("ef", 16) + "_" + strings.Repeat("cd", 32)
 
-	if _, err := BootstrapToken(ctx, url, "bootstrap-fleet", "linea-server", "of1_short"); !errors.Is(err, fleet.ErrInvalid) {
+	if _, err := BootstrapToken(ctx, url, "bootstrap-fleet", "linea-server", "of1_short", nil); !errors.Is(err, fleet.ErrInvalid) {
 		t.Fatalf("malformed token: %v", err)
 	}
-	if created, err := BootstrapToken(ctx, url, "bootstrap-fleet", "linea-server", token); err != nil || !created {
+	if created, err := BootstrapToken(ctx, url, "bootstrap-fleet", "linea-server", token, nil); err != nil || !created {
 		t.Fatalf("first bootstrap: created %v, %v", created, err)
 	}
-	if created, err := BootstrapToken(ctx, url, "bootstrap-fleet", "linea-server", token); err != nil || created {
+	if created, err := BootstrapToken(ctx, url, "bootstrap-fleet", "linea-server", token, nil); err != nil || created {
 		t.Fatalf("repeated bootstrap: created %v, %v", created, err)
 	}
-	if _, err := BootstrapToken(ctx, url, "bootstrap-fleet", "linea-server", other); !errors.Is(err, fleet.ErrConflict) {
+	if _, err := BootstrapToken(ctx, url, "bootstrap-fleet", "linea-server", other, nil); !errors.Is(err, fleet.ErrConflict) {
 		t.Fatalf("second admin: %v", err)
 	}
-	if _, err := Bootstrap(ctx, url, "bootstrap-fleet", "another-admin"); !errors.Is(err, fleet.ErrConflict) {
+	if _, err := Bootstrap(ctx, url, "bootstrap-fleet", "another-admin", nil); !errors.Is(err, fleet.ErrConflict) {
 		t.Fatalf("generated admin beside the installed one: %v", err)
 	}
-	if _, err := BootstrapToken(ctx, url, "other-fleet", "linea-server", token); err == nil {
+	if _, err := BootstrapToken(ctx, url, "other-fleet", "linea-server", token, nil); err == nil {
 		t.Fatal("bootstrap accepted another fleet identity")
 	}
 
@@ -64,10 +64,10 @@ func TestPostgresBootstrapToken(t *testing.T) {
 	if _, err := db.Exec(ctx, "UPDATE fleet.credentials SET revoked_at=now() WHERE id=$1", strings.Repeat("ab", 16)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := BootstrapToken(ctx, url, "bootstrap-fleet", "linea-server", token); !errors.Is(err, fleet.ErrConflict) {
+	if _, err := BootstrapToken(ctx, url, "bootstrap-fleet", "linea-server", token, nil); !errors.Is(err, fleet.ErrConflict) {
 		t.Fatalf("revoked token bootstrapped again: %v", err)
 	}
-	if created, err := BootstrapToken(ctx, url, "bootstrap-fleet", "linea-server", other); err != nil || !created {
+	if created, err := BootstrapToken(ctx, url, "bootstrap-fleet", "linea-server", other, nil); err != nil || !created {
 		t.Fatalf("new token after revocation: created %v, %v", created, err)
 	}
 }
@@ -95,29 +95,29 @@ func TestPostgresInstallOperatorToken(t *testing.T) {
 	token := "of1_" + strings.Repeat("ab", 16) + "_" + strings.Repeat("cd", 32)
 	wrongSecret := "of1_" + strings.Repeat("ab", 16) + "_" + strings.Repeat("ef", 32)
 	expiring := "of1_" + strings.Repeat("23", 16) + "_" + strings.Repeat("cd", 32)
-	if created, err := BootstrapToken(ctx, url, "operator-fleet", "deployment-admin", admin); err != nil || !created {
+	if created, err := BootstrapToken(ctx, url, "operator-fleet", "deployment-admin", admin, nil); err != nil || !created {
 		t.Fatalf("admin bootstrap: created %v, %v", created, err)
 	}
 
-	if _, err := InstallOperatorToken(ctx, url, "operator-fleet", "linea-server", "of1_short"); !errors.Is(err, fleet.ErrInvalid) {
+	if _, err := InstallOperatorToken(ctx, url, "operator-fleet", "linea-server", "of1_short", nil, false); !errors.Is(err, fleet.ErrInvalid) {
 		t.Fatalf("malformed token: %v", err)
 	}
-	if _, err := InstallOperatorToken(ctx, url, "other-fleet", "linea-server", token); err == nil {
+	if _, err := InstallOperatorToken(ctx, url, "other-fleet", "linea-server", token, nil, false); err == nil {
 		t.Fatal("operator install accepted another fleet identity")
 	}
-	if created, err := InstallOperatorToken(ctx, url, "operator-fleet", "linea-server", token); err != nil || !created {
+	if created, err := InstallOperatorToken(ctx, url, "operator-fleet", "linea-server", token, nil, false); err != nil || !created {
 		t.Fatalf("first install: created %v, %v", created, err)
 	}
-	if created, err := InstallOperatorToken(ctx, url, "operator-fleet", "linea-server", token); err != nil || created {
+	if created, err := InstallOperatorToken(ctx, url, "operator-fleet", "linea-server", token, nil, false); err != nil || created {
 		t.Fatalf("repeated install: created %v, %v", created, err)
 	}
-	if _, err := InstallOperatorToken(ctx, url, "operator-fleet", "linea-server", wrongSecret); !errors.Is(err, fleet.ErrConflict) {
+	if _, err := InstallOperatorToken(ctx, url, "operator-fleet", "linea-server", wrongSecret, nil, false); !errors.Is(err, fleet.ErrConflict) {
 		t.Fatalf("same credential with another secret: %v", err)
 	}
-	if _, err := InstallOperatorToken(ctx, url, "operator-fleet", "linea-server", admin); !errors.Is(err, fleet.ErrConflict) {
+	if _, err := InstallOperatorToken(ctx, url, "operator-fleet", "linea-server", admin, nil, false); !errors.Is(err, fleet.ErrConflict) {
 		t.Fatalf("admin token installed as operator: %v", err)
 	}
-	if created, err := BootstrapToken(ctx, url, "operator-fleet", "deployment-admin", admin); err != nil || created {
+	if created, err := BootstrapToken(ctx, url, "operator-fleet", "deployment-admin", admin, nil); err != nil || created {
 		t.Fatalf("admin changed by the operator install: created %v, %v", created, err)
 	}
 
@@ -135,26 +135,40 @@ func TestPostgresInstallOperatorToken(t *testing.T) {
 	if err := db.QueryRow(ctx, "SELECT count(*) FROM fleet.events WHERE kind='credential.created' AND subject_id=$1", strings.Repeat("ab", 16)).Scan(&events); err != nil || events != 1 {
 		t.Fatalf("operator creation events %d, %v", events, err)
 	}
+	grant := map[string]string{"livecapture": "write"}
+	for range 2 {
+		if created, err := InstallOperatorToken(ctx, url, "operator-fleet", "linea-server", token, grant, true); err != nil || created {
+			t.Fatalf("install with a grant: created %v, %v", created, err)
+		}
+	}
+	var access string
+	var delegate bool
+	if err := db.QueryRow(ctx, "SELECT plugin_access::text,delegate FROM fleet.credentials WHERE id=$1", strings.Repeat("ab", 16)).Scan(&access, &delegate); err != nil || access != `{"livecapture": "write"}` || !delegate {
+		t.Fatalf("operator scope %s delegate %v, %v", access, delegate, err)
+	}
+	if err := db.QueryRow(ctx, "SELECT count(*) FROM fleet.events WHERE kind='credential.updated' AND subject_id=$1", strings.Repeat("ab", 16)).Scan(&events); err != nil || events != 1 {
+		t.Fatalf("operator scope events %d, %v", events, err)
+	}
 
 	if _, err := db.Exec(ctx, "UPDATE fleet.credentials SET expires_at=clock_timestamp()+interval '1 hour' WHERE id=$1", strings.Repeat("ab", 16)); err != nil {
 		t.Fatal(err)
 	}
-	if created, err := InstallOperatorToken(ctx, url, "operator-fleet", "linea-server", token); err != nil || created {
+	if created, err := InstallOperatorToken(ctx, url, "operator-fleet", "linea-server", token, nil, false); err != nil || created {
 		t.Fatalf("unexpired operator: created %v, %v", created, err)
 	}
 	if _, err := db.Exec(ctx, "UPDATE fleet.credentials SET revoked_at=now() WHERE id=$1", strings.Repeat("ab", 16)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := InstallOperatorToken(ctx, url, "operator-fleet", "linea-server", token); !errors.Is(err, fleet.ErrConflict) {
+	if _, err := InstallOperatorToken(ctx, url, "operator-fleet", "linea-server", token, nil, false); !errors.Is(err, fleet.ErrConflict) {
 		t.Fatalf("revoked operator installed again: %v", err)
 	}
-	if created, err := InstallOperatorToken(ctx, url, "operator-fleet", "linea-server", expiring); err != nil || !created {
+	if created, err := InstallOperatorToken(ctx, url, "operator-fleet", "linea-server", expiring, nil, false); err != nil || !created {
 		t.Fatalf("second operator: created %v, %v", created, err)
 	}
 	if _, err := db.Exec(ctx, "UPDATE fleet.credentials SET created_at=created_at-interval '2 hours', expires_at=clock_timestamp()-interval '1 hour' WHERE id=$1", strings.Repeat("23", 16)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := InstallOperatorToken(ctx, url, "operator-fleet", "linea-server", expiring); !errors.Is(err, fleet.ErrConflict) {
+	if _, err := InstallOperatorToken(ctx, url, "operator-fleet", "linea-server", expiring, nil, false); !errors.Is(err, fleet.ErrConflict) {
 		t.Fatalf("expired operator installed again: %v", err)
 	}
 }

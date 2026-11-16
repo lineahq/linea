@@ -76,7 +76,7 @@ func TestFleetRoutesManageFleet(t *testing.T) {
 	if page := decodeBody[platform.FleetConfigVersionPage](t, get(t, server.URL+"/api/v1/fleet/configs/"+c.ID+"/versions"), http.StatusOK); len(page.Items) != 1 {
 		t.Fatalf("versions %+v", page)
 	}
-	a := decodeBody[platform.FleetAssignment](t, send("POST", "/api/v1/fleet/assignments", `{"name":"edge","config_id":"`+c.ID+`","version":1,"layer":10,"selector":"service.name=gateway"}`), http.StatusOK)
+	a := decodeBody[platform.FleetAssignment](t, send("POST", "/api/v1/fleet/assignments", `{"name":"edge","config_id":"`+c.ID+`","version":1,"layer":10,"selector":"service.name=gateway","credential_labels":{"env":"prod"}}`), http.StatusOK)
 	if p := decodeBody[platform.FleetAssignmentPreviewPage](t, get(t, server.URL+"/api/v1/fleet/assignments/"+a.ID+"/preview"), http.StatusOK); len(p.Items) != 1 {
 		t.Fatalf("preview %+v", p)
 	}

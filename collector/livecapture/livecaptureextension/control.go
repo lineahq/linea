@@ -28,8 +28,13 @@ type AuthorizedRequest struct {
 }
 
 // Reconcile applies a complete desired set. Disconnecting never calls this with
-// an empty set and never changes an active session's local deadline.
+// an empty set and never changes an active session's local deadline. A
+// session started here ends with control_lost when no desired set arrives
+// for controlTimeout, so the caller must repeat the desired set every few
+// seconds.
 func (m *Manager) Reconcile(ctx context.Context, desired []AuthorizedRequest, disabled bool) error {
+	// Every desired set is contact with the control service (see controlTimeout).
+	m.lastControl.Store(time.Now().UnixNano())
 	if disabled {
 		m.SetEnabled(false)
 		return nil
@@ -55,7 +60,7 @@ func (m *Manager) Reconcile(ctx context.Context, desired []AuthorizedRequest, di
 	} else if desired[0].Request.ExpiresAt.IsZero() {
 		err = errors.New("remote sessions require an absolute expires_at")
 	} else {
-		_, err = m.StartSession(ctx, desired[0].Request, Access{AllowRaw: desired[0].AuthorizedRaw})
+		_, err = m.startSession(desired[0].Request, Access{AllowRaw: desired[0].AuthorizedRaw}, true)
 	}
 	if err != nil {
 		m.reject(desired[0].Request.SessionID, err)
@@ -302,6 +307,7 @@ func (m *Manager) watchOnce(ctx context.Context) error {
 				return err
 			}
 		case message := <-messages:
+			m.lastControl.Store(time.Now().UnixNano())
 			applied, desiredErr = message.GetGeneration(), ""
 			if err := m.applyDesired(streamCtx, message); err != nil {
 				desiredErr = truncate(err.Error(), 1024)

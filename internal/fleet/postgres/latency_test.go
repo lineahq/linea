@@ -36,7 +36,7 @@ func TestPostgresInventoryLatency(t *testing.T) {
 	if err := Migrate(ctx, url); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Bootstrap(ctx, url, "latency-fleet", "bootstrap-admin"); err != nil {
+	if _, err := Bootstrap(ctx, url, "latency-fleet", "bootstrap-admin", nil); err != nil {
 		t.Fatal(err)
 	}
 	// Synthetic placement: 200 services, 50 namespaces, 1,000 hosts, 20 teams,

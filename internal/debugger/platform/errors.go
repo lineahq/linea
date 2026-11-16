@@ -51,7 +51,10 @@ type Error struct {
 	Current *ArtifactMetadata
 	// CurrentStatement is the statement's current text on a stale statement edit.
 	CurrentStatement string
-	cause            error
+	// Affected is how many connected agents a refused fleet group change
+	// would give a new config; resend with that MaxAffected to accept it.
+	Affected int
+	cause    error
 }
 
 func (e *Error) Error() string { return e.Message }

@@ -64,7 +64,7 @@ Collector note names the release it was verified against (currently `v0.162.0`
 
 | Document | Topic |
 | --- | --- |
-| [fleet-server.md](fleet-server.md) | Replicas and presence, write path and admission, database roles and migrations, restore, sizing, metrics |
+| [fleet-server.md](fleet-server.md) | Replicas and presence, write path and admission, database roles and migrations, restore, sizing, metrics, the transition log helper |
 | [fleet-plugin-host.md](fleet-plugin-host.md) | Plugin readiness and epoch, lifecycle store, ingress, compatibility |
 | [fleet-config-management.md](fleet-config-management.md) | Reconcile and send paths, send rule timing, measurements |
 | [fleet-livecapture.md](fleet-livecapture.md) | Livecapture plugin authority, credential checks, delivery and reservations, metrics snapshots |

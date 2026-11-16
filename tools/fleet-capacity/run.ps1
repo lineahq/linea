@@ -25,7 +25,7 @@ $capacityCompose=@('--parallel','4','--project-name',$capacityProject,'--env-fil
 if($WithCaptureFault){$capacityCompose+=@('--file',(Join-Path $capacityRoot 'compose.livecapture.yaml'))}
 $capacityCompose+=@('--file',$capacityOverride)
 $capacityCollectorImage='otel/opentelemetry-collector-contrib:0.162.0@sha256:39923a8e431bd1f57be82411999d389fcfe40857492e4365456d97a4c1f74be6'
-$capacityOldToken=$env:LINEA_FLEET_AGENT_TOKEN
+$capacityOldToken=$env:LINEA_FLEET_AGENT_TOKEN;$capacityOldPluginToken=$env:LINEA_FLEET_PLUGIN_TOKEN
 $capacityStarted=$false
 $capacityResult=[ordered]@{mode=$(if($FunctionalCheck){'functional_two_collectors'}else{'dedicated_capacity'});status='failed';collectors=$Collectors;steady_seconds=$DurationSeconds;scope='Official reporting-only Collectors; livecapture capacity is a separate profile';source=(& git -C $capacityRoot rev-parse HEAD);harness_sha256=(Get-FileHash $PSCommandPath -Algorithm SHA256).Hash;images=@{};phases=@{};resource_limits=@{fleet_cpus=2;fleet_memory_mib=512;postgres_cpus=1;postgres_memory_mib=512;collector_cpus=0.25;collector_memory_mib=128};http_samples=@()}
 $capacityResult.capture_fault=[bool]$WithCaptureFault
@@ -96,12 +96,12 @@ try{
     }
     $capacityPath=$capacityDir.Replace('\','/')
     [System.IO.File]::WriteAllText($capacityEnv,"FLEET_SECRET_DIR='$capacityPath'`nFLEET_SERVER_ID=$capacityProject`nFLEET_API_PORT=0`nFLEET_AGENT_PORT=0`nFLEET_VERSION=$ImageTag`n")
-    if($WithCaptureFault){[System.IO.File]::AppendAllText($capacityEnv,"FLEET_LIVECAPTURE_SECRET_DIR='$capacityPath/capture'`nCAPTURE_VERSION=$ImageTag`nCAPTURE_CONTROL_PORT=0`nCAPTURE_DELIVERY_PORT=0`n")}
-    $env:LINEA_FLEET_AGENT_TOKEN='not-issued-yet'
+    if($WithCaptureFault){[System.IO.File]::AppendAllText($capacityEnv,"FLEET_LIVECAPTURE_SECRET_DIR='$capacityPath/capture'`nCAPTURE_VERSION=$ImageTag`nCAPTURE_CONTROL_PORT=0`nCAPTURE_DELIVERY_PORT=0`nFLEET_BOOTSTRAP_PLUGIN_ACCESS=livecapture=admin`n")}
+    $env:LINEA_FLEET_AGENT_TOKEN='not-issued-yet';$env:LINEA_FLEET_PLUGIN_TOKEN='not-issued-yet'
     $capacityServices=[ordered]@{fleet=@{command=@('--server-id',$capacityProject,'--management-listen','0.0.0.0:8080','--agent-listen','0.0.0.0:4320','--allow-insecure-remote','--max-agents',[string]($Collectors*2),'--max-connections',[string]($Collectors+16))}}
     if($WithCaptureFault){
         $capacityServices.fleet.command+=@('--plugins-config','/etc/linea-fleet/plugins.json','--plugin-listen','0.0.0.0:8081')
-        $capacityServices['capture-probe']=@{image=$CaptureCollectorImage;command=@('--config=/fixture.yaml');environment=@{GOMAXPROCS='1';LINEA_FLEET_AGENT_TOKEN='${LINEA_FLEET_AGENT_TOKEN}';POD_NAME='capacity-probe'};volumes=@("$($capacityRoot.Replace('\','/'))/plugins/livecapture/examples/collector.yaml:/fixture.yaml:ro","$capacityPath/capture/tls_cert.pem:/certs/ca.pem:ro");networks=@('capture-ingress');cpus=1;mem_limit='256m';pids_limit=128;read_only=$true;cap_drop=@('ALL');security_opt=@('no-new-privileges:true');restart='no'}
+        $capacityServices['capture-probe']=@{image=$CaptureCollectorImage;command=@('--config=/fixture.yaml');environment=@{GOMAXPROCS='1';LINEA_FLEET_PLUGIN_TOKEN='${LINEA_FLEET_PLUGIN_TOKEN}';POD_NAME='capacity-probe'};volumes=@("$($capacityRoot.Replace('\','/'))/plugins/livecapture/examples/collector.yaml:/fixture.yaml:ro","$capacityPath/capture/tls_cert.pem:/certs/ca.pem:ro");networks=@('capture-ingress');cpus=1;mem_limit='256m';pids_limit=128;read_only=$true;cap_drop=@('ALL');security_opt=@('no-new-privileges:true');restart='no'}
     }
     $capacityNames=[System.Collections.Generic.List[string]]::new()
     $capacityTemplate=[System.IO.File]::ReadAllText((Join-Path $capacityRoot 'examples/fleet-collector.yaml'))
@@ -148,7 +148,7 @@ try{
     $capacityCredential=@{id=[Guid]::NewGuid().ToString('N');name='capacity-deployment';role='agent';expires_at=[DateTime]::UtcNow.AddHours(1).ToString('o')}
     if($WithCaptureFault){$capacityCredential.labels=@{capture='s4'}}
     $issued=Capacity-Request POST /api/v1/credentials $capacityAdmin ($capacityCredential|ConvertTo-Json) 201
-    $env:LINEA_FLEET_AGENT_TOKEN=$issued.token
+    $env:LINEA_FLEET_AGENT_TOKEN=$issued.token;$env:LINEA_FLEET_PLUGIN_TOKEN=$issued.plugin_token
     if($WithCaptureFault){Capacity-Compose up --detach --no-deps capture-probe}
     $capacityPhase=[System.Diagnostics.Stopwatch]::StartNew()
     Capacity-Compose up --detach --no-deps @capacityNames
@@ -189,12 +189,12 @@ try{
             if((Capacity-Request GET /readyz $capacityAdmin).status -ne 'ready'){throw 'Consumer fault disrupted core readiness'}
             if($observed.gauges.pending_bytes -gt 0 -and $observed.gauges.metadata_snapshot_available -eq 1 -and $observed.gauges.metadata_snapshot_stale -eq 0){$capacityPendingReads++}
             $capacityFaultReads++
-            if($observed.counters.receipt_uncertain_total -gt 0){break}
+            if($observed.counters.dropped_batches_total -gt 0){break}
             Start-Sleep -Milliseconds 100
-        }while($capacityPhase.Elapsed.TotalSeconds -lt 12)
-        if($observed.counters.receipt_uncertain_total -lt 1 -or $capacityPendingBytes -le 0 -or $capacityPendingReads -lt 1){throw 'Unacknowledged real delivery was not observed as bounded uncertainty'}
+        }while($capacityPhase.Elapsed.TotalSeconds -lt 15)
+        if($observed.counters.dropped_batches_total -lt 1 -or $capacityPendingBytes -le 0 -or $capacityPendingReads -lt 1){throw 'Unacknowledged real delivery was not observed as bounded drops'}
         Capacity-Wait {return (Capacity-Capture GET "v1/captures/$($captureOp.id)").state -in @('stopped','expired')} 'Consumer loss did not withdraw capture'
-        $capacityResult.phases.capture_fault=@{elapsed_seconds=$capacityPhase.Elapsed.TotalSeconds;core_read_pairs=$capacityFaultReads;core_read_pairs_while_pending=$capacityPendingReads;peak_observed_pending_bytes=$capacityPendingBytes;receipt_uncertain=$observed.counters.receipt_uncertain_total;payloads_recorded=$false}
+        $capacityResult.phases.capture_fault=@{elapsed_seconds=$capacityPhase.Elapsed.TotalSeconds;core_read_pairs=$capacityFaultReads;core_read_pairs_while_pending=$capacityPendingReads;peak_observed_pending_bytes=$capacityPendingBytes;dropped_batches=$observed.counters.dropped_batches_total;payloads_recorded=$false}
         [System.IO.File]::WriteAllText((Join-Path $capacityDir 'plugin-consumer-fault.json'),($observed|ConvertTo-Json -Depth 16))
         $null=Capacity-Snapshot 'consumer-fault'
     }
@@ -228,6 +228,6 @@ try{
         }
     }
     }finally{
-    $env:LINEA_FLEET_AGENT_TOKEN=$capacityOldToken
+    $env:LINEA_FLEET_AGENT_TOKEN=$capacityOldToken;$env:LINEA_FLEET_PLUGIN_TOKEN=$capacityOldPluginToken
     }
 }

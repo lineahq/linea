@@ -9,48 +9,22 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/lineahq/linea/collector/livecapture/controlpb"
+	"github.com/lineahq/linea/pluginsdk"
 )
 
 // The control stream speaks the extension's typed protocol: identity first,
 // numbered complete desired states back, enum session states in reports.
 func TestWatchSpeaksTypedProtocol(t *testing.T) {
+	setResendInterval(t, time.Hour)
 	s, request, _ := fixture(t)
-	s.mu.Lock()
-	s.dbOK = true
-	s.mu.Unlock()
-	server := grpc.NewServer()
-	controlpb.RegisterCaptureControlServer(server, captureControl{server: s})
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	go server.Serve(listener)
-	t.Cleanup(server.Stop)
-	conn, err := grpc.NewClient(listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { conn.Close() })
-	ctx, cancel := context.WithTimeout(metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+strings.Repeat("d", 64)), 10*time.Second)
-	defer cancel()
-	stream, err := controlpb.NewCaptureControlClient(conn).WatchCaptures(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	identity := &controlpb.Identity{Cluster: "cluster", Pod: "typed", CollectorGroup: "test", CollectorVersion: "0.162.0", Enabled: true, Capabilities: []string{},
-		CapturePoints: []*controlpb.CapturePoint{{Pipeline: "traces", Point: "egress", Signal: controlpb.Signal_SIGNAL_TRACES, Sensitivity: controlpb.Sensitivity_SENSITIVITY_REDACTED}}}
-	send := func(r *controlpb.CollectorReport) {
-		t.Helper()
-		r.Identity = identity
-		if err := stream.Send(r); err != nil {
-			t.Fatal(err)
-		}
-	}
+	stream, identity, send := watch(t, s)
 	send(&controlpb.CollectorReport{})
 	first, err := stream.Recv()
 	if err != nil || first.GetGeneration() != 1 || len(first.GetSessions()) != 0 {
@@ -141,6 +115,73 @@ func TestWatchSpeaksTypedProtocol(t *testing.T) {
 	}
 }
 
+func setResendInterval(t *testing.T, d time.Duration) {
+	t.Helper()
+	old := resendInterval
+	resendInterval = d
+	t.Cleanup(func() { resendInterval = old })
+}
+
+// watch opens a control stream to s as the pod "typed" and returns a send
+// helper that stamps the identity on each report.
+func watch(t *testing.T, s *Server) (controlpb.CaptureControl_WatchCapturesClient, *controlpb.Identity, func(*controlpb.CollectorReport)) {
+	t.Helper()
+	// A control stream always introspects, so a test without a host of its
+	// own gets one that admits the fixture's credential.
+	if s.host.Endpoint == "http://127.0.0.1:1" {
+		withHost(t, s, &fakeHost{introspect: func(pluginsdk.IntrospectRequest) pluginsdk.Introspection {
+			return pluginsdk.Introspection{Active: true, CredentialID: "credential", Role: "agent", Labels: map[string]string{"capture": "test"}}
+		}})
+	}
+	s.mu.Lock()
+	s.dbOK = true
+	s.mu.Unlock()
+	server := grpc.NewServer()
+	controlpb.RegisterCaptureControlServer(server, captureControl{server: s})
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go server.Serve(listener)
+	t.Cleanup(server.Stop)
+	conn, err := grpc.NewClient(listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	ctx, cancel := context.WithTimeout(metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+strings.Repeat("d", 64)), 10*time.Second)
+	t.Cleanup(cancel)
+	stream, err := controlpb.NewCaptureControlClient(conn).WatchCaptures(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := &controlpb.Identity{Cluster: "cluster", Pod: "typed", CollectorGroup: "test", CollectorVersion: "0.162.0", Enabled: true, Capabilities: []string{},
+		CapturePoints: []*controlpb.CapturePoint{{Pipeline: "traces", Point: "egress", Signal: controlpb.Signal_SIGNAL_TRACES, Sensitivity: controlpb.Sensitivity_SENSITIVITY_REDACTED}}}
+	send := func(r *controlpb.CollectorReport) {
+		t.Helper()
+		r.Identity = identity
+		if err := stream.Send(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return stream, identity, send
+}
+
+// The sender repeats the complete desired state while nothing changes, so
+// the Collector's control timeout never ends a healthy session.
+func TestWatchResendsDesiredState(t *testing.T) {
+	setResendInterval(t, 20*time.Millisecond)
+	s, _, _ := fixture(t)
+	stream, _, send := watch(t, s)
+	send(&controlpb.CollectorReport{})
+	for want := uint64(1); want <= 3; want++ {
+		desired, err := stream.Recv()
+		if err != nil || desired.GetGeneration() != want || len(desired.GetSessions()) != 0 {
+			t.Fatalf("desired state %d: %v, %v", want, desired, err)
+		}
+	}
+}
+
 func TestDecodeStatsIsBounded(t *testing.T) {
 	if v, err := decodeStats(nil); v != nil || err != nil {
 		t.Fatal("absent stats decoded")
@@ -171,5 +212,44 @@ func TestDecodeReportFilterLimits(t *testing.T) {
 		if err != nil || r.Identity.FilterLimits != c.want {
 			t.Fatalf("%v decoded as %+v, %v", c.wire, r.Identity.FilterLimits, err)
 		}
+	}
+}
+
+// A Collector that reconnects before its old stream was noticed dead replaces
+// the old peer once that peer missed a report; a duplicate that still reports
+// is refused.
+func TestReconnectReplacesASilentPeer(t *testing.T) {
+	setResendInterval(t, time.Hour)
+	s, _, _ := fixture(t)
+	first, _, send := watch(t, s)
+	send(&controlpb.CollectorReport{})
+	if _, err := first.Recv(); err != nil {
+		t.Fatal(err)
+	}
+	id := identityKey("credential", Identity{Cluster: "cluster", Pod: "typed", Group: "test"})
+	s.mu.Lock()
+	old := s.peers[id]
+	s.mu.Unlock()
+	duplicate, _, sendDuplicate := watch(t, s)
+	sendDuplicate(&controlpb.CollectorReport{})
+	if _, err := duplicate.Recv(); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("live duplicate: %v", err)
+	}
+	s.mu.Lock()
+	old.lastSeen = time.Now().Add(-replaceAfter - time.Second)
+	s.mu.Unlock()
+	again, _, sendAgain := watch(t, s)
+	sendAgain(&controlpb.CollectorReport{})
+	if _, err := again.Recv(); err != nil {
+		t.Fatalf("reconnect refused: %v", err)
+	}
+	s.mu.Lock()
+	replaced := s.peers[id]
+	s.mu.Unlock()
+	if replaced == nil || replaced == old || old.alive() || replaced.info.Generation <= old.info.Generation {
+		t.Fatal("silent peer was not replaced")
+	}
+	if _, err := first.Recv(); err == nil {
+		t.Fatal("replaced stream stayed open")
 	}
 }

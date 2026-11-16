@@ -16,6 +16,7 @@ helm lint --strict "$chart" "${bundled[@]}"
 echo "== helm template $chart"
 helm template linea "$chart" "${bundled[@]}" >/dev/null
 helm template linea "$chart" "${bundled[@]}" --set fleet.deploy.enabled=true >/dev/null
+helm template linea "$chart" "${bundled[@]}" --set fleet.deploy.enabled=true --set fleet.deploy.livecapture.tls.pluginAPI=true >/dev/null
 
 # Missing secret files do not fail `config`; only the YAML and its
 # interpolation are checked.
@@ -29,6 +30,7 @@ compose deploy/compose/linea/compose.yaml
 compose deploy/compose/linea/compose.yaml deploy/compose/linea/compose.fleet.yaml
 compose deploy/compose/fleet/compose.yaml
 compose deploy/compose/fleet/compose.yaml deploy/compose/fleet/compose.ha.yaml
+compose deploy/compose/fleet/compose.yaml deploy/compose/fleet/compose.ha.yaml examples/fleet-agent-summary-plugin/compose.yaml examples/fleet-agent-summary-plugin/compose.ha.yaml
 compose deploy/compose/fleet/compose.yaml deploy/compose/fleet/compose.livecapture.yaml
 compose deploy/compose/fleet/compose.yaml deploy/compose/fleet/compose.supervised.yaml
 compose deploy/compose/collector/compose.yaml

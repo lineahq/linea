@@ -321,6 +321,17 @@ export function relTime(iso: string | undefined | null, now = Date.now()): strin
   return `${Math.floor(s / 86400)} d ago`;
 }
 
+/**
+ * affectedCount is how many connected agents a group save refused for
+ * reaching too many at once would reconfigure; 0 for any other failure.
+ * Resending with that `max_affected` accepts the change.
+ */
+export function affectedCount(e: unknown): number {
+  const err = e as { status?: number; body?: { affected?: unknown } } | undefined;
+  const n = err?.status === 409 ? err.body?.affected : undefined;
+  return typeof n === 'number' && Number.isInteger(n) && n > 0 ? n : 0;
+}
+
 /** problemText words an API failure, with the fix for the common fleet refusals. */
 export function problemText(e: unknown): string {
   const err = e as { status?: number; message?: string; body?: { code?: string } };

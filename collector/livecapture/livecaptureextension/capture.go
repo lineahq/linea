@@ -18,6 +18,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 	"go.opentelemetry.io/otel/metric"
+	"go.uber.org/zap"
 )
 
 // envelopeTag over-estimates a nested message's field tag and length prefix,
@@ -51,10 +52,15 @@ type capture struct {
 	pending   int64 // Envelope bytes of groups no staged record paid for yet.
 	budget    bool  // Some record was refused for the session budget.
 	refused   dropReason
+	spent     int64 // Time the session's window had spent when this call began.
+	examined  int
 	// Flushed to the session and telemetry once per call.
 	selected, filterErrors int64
 	drops                  [dropReasonCount]int64
 }
+
+// clock reads the time for the time budget; tests replace it.
+var clock = time.Now
 
 func (m *Manager) begin(signal Signal, point Point) *capture {
 	s := m.active.Load()
@@ -65,14 +71,26 @@ func (m *Manager) begin(signal Signal, point Point) *capture {
 	if !ok {
 		return nil
 	}
-	started := time.Now()
-	c := &capture{manager: m, session: s, signal: signal, point: point, options: selected.options, redact: selected.redactor, started: started, now: started.UnixNano(), refused: -1}
+	started := clock()
+	now := started.UnixNano()
+	if reason := s.exhausted(now); reason >= 0 {
+		// The window cannot admit anything, so the call is not examined. One
+		// drop marks the capture incomplete; the records are not counted.
+		s.run.drops[reason].Add(1)
+		m.telemetry.dropped.Add(context.Background(), 1, m.telemetry.dropLabels[signal][reason])
+		return nil
+	}
+	c := &capture{manager: m, session: s, signal: signal, point: point, options: selected.options, redact: selected.redactor, started: started, now: now, refused: -1, spent: s.run.spent(now)}
 	c.sizes = c.sizeArray[:0]
 	return c
 }
 
 func (c *capture) finish() {
 	if recover() != nil {
+		// The panic value can hold telemetry, so it is never logged.
+		if c.session.run.panicked.CompareAndSwap(false, true) {
+			c.manager.settings.Logger.Warn("capture panicked; session ends", zap.String("session_id", c.session.run.id), zap.String("signal", string(c.signal)), zap.String("pipeline", c.point.Pipeline), zap.String("point", c.point.Point))
+		}
 		c.session.requestStop("failed", "capture_panic")
 	}
 	r, t := c.session.run, &c.manager.telemetry
@@ -90,10 +108,46 @@ func (c *capture) finish() {
 			t.dropped.Add(context.Background(), n, t.dropLabels[c.signal][reason])
 		}
 	}
-	t.duration.Record(context.Background(), time.Since(c.started).Seconds(), c.options)
+	elapsed := clock().Sub(c.started)
+	r.spend(c.started.Add(elapsed).UnixNano(), int64(elapsed))
+	t.duration.Record(context.Background(), elapsed.Seconds(), c.options)
 }
 
-func (c *capture) stopped() bool { return c.session.stopped.Load() }
+// exhausted reports why the current window admits no record, or -1.
+func (s *session) exhausted(now int64) dropReason {
+	r, limits := s.run, &s.request.Limits
+	if r.spent(now) >= int64(timeBudget) {
+		return dropTime
+	}
+	if now-r.windowStart.Load() >= int64(time.Second) {
+		return -1
+	}
+	if r.windowRecords.Load() >= limits.RecordsPerSecond {
+		return dropRateRecords
+	}
+	if r.windowBytes.Load() >= limits.BytesPerSecond {
+		return dropRateBytes
+	}
+	return -1
+}
+
+// halted ends the walk over the records: the session stopped, or a record
+// was refused. Admission keeps a prefix of the staged records, so no later
+// record of this call could be admitted and none is examined.
+func (c *capture) halted() bool {
+	if c.refused >= 0 || c.session.stopped.Load() {
+		return true
+	}
+	// Reading the clock costs more than a record's pre-checks, so check the
+	// time budget every 32 records.
+	c.examined++
+	if c.examined&31 == 0 && c.spent+int64(clock().Sub(c.started)) >= int64(timeBudget) {
+		c.refused = dropTime
+		c.drops[dropTime]++
+		return true
+	}
+	return false
+}
 
 func (c *capture) matched(ok bool, err error) bool {
 	if err != nil {
@@ -154,8 +208,8 @@ func (c *capture) refusal(size int64) dropReason {
 	return -1
 }
 
-// precheck runs before a selected record is copied. It refuses every record
-// once one was refused: admission keeps a prefix of the staged records.
+// precheck runs before a selected record is copied. The first refusal halts
+// the call: admission keeps a prefix of the staged records.
 func (c *capture) precheck() bool {
 	if c.refused < 0 {
 		c.refused = c.refusal(1)
@@ -165,6 +219,17 @@ func (c *capture) precheck() bool {
 		return false
 	}
 	return true
+}
+
+// oversized refuses a record of n encoded bytes above the record size limit.
+// Raw points call it on the original before copying: their copy is the
+// original, so an oversized one is never copied.
+func (c *capture) oversized(n int) bool {
+	if fieldSize(n) > c.session.request.Limits.RecordBytes {
+		c.drops[dropRecordSize]++
+		return true
+	}
+	return false
 }
 
 // stage accounts a redacted record of n encoded bytes. It returns false and
@@ -238,6 +303,8 @@ func (c *capture) admit(prune func(int), size func() int64, send func() error) {
 		prune(keep)
 		// Estimates bound admission; counters record the exact copy.
 		actual := size()
+		// Before the send, so an export failing at once finds this run.
+		c.manager.sender.Store(r)
 		if err := send(); err != nil {
 			if errors.Is(err, exporterQueueFull) {
 				c.drops[dropQueueFull] += int64(keep)
@@ -288,7 +355,7 @@ records:
 			var scope ptrace.ScopeSpans
 			hasScope := false
 			for _, span := range ss.Spans().All() {
-				if c.stopped() {
+				if c.halted() {
 					break records
 				}
 				if len(s.filter.span) > 0 {
@@ -302,6 +369,12 @@ records:
 				c.selected++
 				if !c.sampled(func() uint64 { return traceHash(span.TraceID()) }) || !c.precheck() {
 					continue
+				}
+				n := 0
+				if redact == nil {
+					if n = sizer.SpanSize(span); c.oversized(n) {
+						continue
+					}
 				}
 				if !created {
 					out, scratch, created = ptrace.NewTraces(), ptrace.NewSpan(), true
@@ -323,7 +396,10 @@ records:
 					redact.scope(scope.Scope())
 					c.pending += envelopeTag + int64(sizer.ScopeSpansSize(scope))
 				}
-				if c.stage(sizer.SpanSize(scratch)) {
+				if redact != nil {
+					n = sizer.SpanSize(scratch)
+				}
+				if c.stage(n) {
 					scratch.MoveTo(scope.Spans().AppendEmpty())
 				}
 			}
@@ -366,7 +442,7 @@ records:
 			var scope plog.ScopeLogs
 			hasScope := false
 			for _, log := range sl.LogRecords().All() {
-				if c.stopped() {
+				if c.halted() {
 					break records
 				}
 				if len(s.filter.log) > 0 {
@@ -380,6 +456,12 @@ records:
 				c.selected++
 				if !c.sampled(func() uint64 { return logHash(log) }) || !c.precheck() {
 					continue
+				}
+				n := 0
+				if redact == nil {
+					if n = sizer.LogRecordSize(log); c.oversized(n) {
+						continue
+					}
 				}
 				if !created {
 					out, scratch, created = plog.NewLogs(), plog.NewLogRecord(), true
@@ -401,7 +483,10 @@ records:
 					redact.scope(scope.Scope())
 					c.pending += envelopeTag + int64(sizer.ScopeLogsSize(scope))
 				}
-				if c.stage(sizer.LogRecordSize(scratch)) {
+				if redact != nil {
+					n = sizer.LogRecordSize(scratch)
+				}
+				if c.stage(n) {
 					scratch.MoveTo(scope.LogRecords().AppendEmpty())
 				}
 			}
@@ -520,7 +605,7 @@ records:
 		for _, sm := range rm.ScopeMetrics().All() {
 			mc.sm, mc.hasScope = sm, false
 			for _, source := range sm.Metrics().All() {
-				if c.stopped() {
+				if c.halted() {
 					break records
 				}
 				if len(s.filter.metric) > 0 {
@@ -541,11 +626,17 @@ records:
 						points = source.Gauge().DataPoints()
 					}
 					for _, p := range points.All() {
-						if c.stopped() {
+						if c.halted() {
 							break records
 						}
 						if !selects(mc, p) {
 							continue
+						}
+						n := 0
+						if redact == nil {
+							if n = sizer.NumberDataPointSize(p); c.oversized(n) {
+								continue
+							}
 						}
 						if number == (pmetric.NumberDataPoint{}) {
 							number = pmetric.NewNumberDataPoint()
@@ -553,7 +644,10 @@ records:
 						p.CopyTo(number)
 						redact.numberDataPoint(number)
 						target := mc.target()
-						if c.stage(sizer.NumberDataPointSize(number)) {
+						if redact != nil {
+							n = sizer.NumberDataPointSize(number)
+						}
+						if c.stage(n) {
 							if target.Type() == pmetric.MetricTypeSum {
 								number.MoveTo(target.Sum().DataPoints().AppendEmpty())
 							} else {
@@ -563,11 +657,17 @@ records:
 					}
 				case pmetric.MetricTypeHistogram:
 					for _, p := range source.Histogram().DataPoints().All() {
-						if c.stopped() {
+						if c.halted() {
 							break records
 						}
 						if !selects(mc, p) {
 							continue
+						}
+						n := 0
+						if redact == nil {
+							if n = sizer.HistogramDataPointSize(p); c.oversized(n) {
+								continue
+							}
 						}
 						if histogram == (pmetric.HistogramDataPoint{}) {
 							histogram = pmetric.NewHistogramDataPoint()
@@ -575,17 +675,26 @@ records:
 						p.CopyTo(histogram)
 						redact.histogramDataPoint(histogram)
 						target := mc.target()
-						if c.stage(sizer.HistogramDataPointSize(histogram)) {
+						if redact != nil {
+							n = sizer.HistogramDataPointSize(histogram)
+						}
+						if c.stage(n) {
 							histogram.MoveTo(target.Histogram().DataPoints().AppendEmpty())
 						}
 					}
 				case pmetric.MetricTypeExponentialHistogram:
 					for _, p := range source.ExponentialHistogram().DataPoints().All() {
-						if c.stopped() {
+						if c.halted() {
 							break records
 						}
 						if !selects(mc, p) {
 							continue
+						}
+						n := 0
+						if redact == nil {
+							if n = sizer.ExponentialHistogramDataPointSize(p); c.oversized(n) {
+								continue
+							}
 						}
 						if exponential == (pmetric.ExponentialHistogramDataPoint{}) {
 							exponential = pmetric.NewExponentialHistogramDataPoint()
@@ -593,17 +702,26 @@ records:
 						p.CopyTo(exponential)
 						redact.exponentialHistogramDataPoint(exponential)
 						target := mc.target()
-						if c.stage(sizer.ExponentialHistogramDataPointSize(exponential)) {
+						if redact != nil {
+							n = sizer.ExponentialHistogramDataPointSize(exponential)
+						}
+						if c.stage(n) {
 							exponential.MoveTo(target.ExponentialHistogram().DataPoints().AppendEmpty())
 						}
 					}
 				case pmetric.MetricTypeSummary:
 					for _, p := range source.Summary().DataPoints().All() {
-						if c.stopped() {
+						if c.halted() {
 							break records
 						}
 						if !selects(mc, p) {
 							continue
+						}
+						n := 0
+						if redact == nil {
+							if n = sizer.SummaryDataPointSize(p); c.oversized(n) {
+								continue
+							}
 						}
 						if summary == (pmetric.SummaryDataPoint{}) {
 							summary = pmetric.NewSummaryDataPoint()
@@ -611,7 +729,10 @@ records:
 						p.CopyTo(summary)
 						redact.summaryDataPoint(summary)
 						target := mc.target()
-						if c.stage(sizer.SummaryDataPointSize(summary)) {
+						if redact != nil {
+							n = sizer.SummaryDataPointSize(summary)
+						}
+						if c.stage(n) {
 							summary.MoveTo(target.Summary().DataPoints().AppendEmpty())
 						}
 					}

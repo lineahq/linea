@@ -45,12 +45,8 @@ func (s *Store) CreateConfig(ctx context.Context, actor string, c configmgmt.Con
 		if err := requireManager(ctx, tx, actor); err != nil {
 			return err
 		}
-		var count int
-		if err := tx.QueryRow(ctx, "SELECT count(*) FROM fleet.configs").Scan(&count); err != nil {
+		if err := capped(ctx, tx, "fleet.configs", configmgmt.MaxConfigs); err != nil {
 			return err
-		}
-		if count >= configmgmt.MaxConfigs {
-			return fleet.ErrCapacity
 		}
 		var err error
 		c, err = scanConfig(tx.QueryRow(ctx, `INSERT INTO fleet.configs(id,name,description,revision,created_at,created_by)
@@ -454,8 +450,13 @@ func (s *Store) ManagedCredentials(ctx context.Context) (map[string]map[string]s
 // ClearHold, is returned unchanged. A session this replica no longer owns at
 // generation gets ErrStale.
 func (s *Store) SetConfigHold(ctx context.Context, id string, generation uint64, expected, next string) (string, error) {
+	release, err := s.agentWrite()
+	if err != nil {
+		return expected, err
+	}
+	defer release()
 	current := expected
-	err := s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
+	err = s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		var held *string
 		err := tx.QueryRow(ctx, "SELECT config_hold_hash FROM fleet.agents WHERE id=$1 AND generation=$2 AND owner_replica=$3 FOR UPDATE", id, int64(generation), s.replica).Scan(&held)
 		if errors.Is(err, pgx.ErrNoRows) {

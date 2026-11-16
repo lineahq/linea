@@ -145,6 +145,10 @@ type Agent struct {
 	AcceptsRemoteConfig bool
 	Status              Status
 	Held                []byte
+	// Retry is set for the one send a cleared failure hold owes: the desired
+	// config goes out whatever hash the agent reports, so an agent that
+	// failed it gets it again. The caller clears it once the config is sent.
+	Retry bool
 }
 
 // Decision is the outcome of the send rule.
@@ -156,6 +160,9 @@ type Decision struct {
 	// Missing lists component types the agent's build lacks; the plan is
 	// not sent.
 	Missing []string
+	// Unverified: the plan is not sent because the agent's build is not
+	// resolved.
+	Unverified bool
 }
 
 // Decide applies the send rule. desired is the plan from Desired with its ok
@@ -180,7 +187,7 @@ func Decide(a Agent, desired Plan, matched bool) Decision {
 		}
 		d.ClearHold = true
 	}
-	if !bytes.Equal(a.Status.Hash, plan.Hash) {
+	if !bytes.Equal(a.Status.Hash, plan.Hash) || a.Retry {
 		d.Send, d.Plan = true, plan
 	}
 	return d

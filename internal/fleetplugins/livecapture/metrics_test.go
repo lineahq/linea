@@ -18,7 +18,7 @@ func TestMetricsCredentialsAndPublicSnapshotIsolation(t *testing.T) {
 		r.Header.Set("Authorization", "Bearer "+token)
 		if bound {
 			r.Header.Set(pluginsdk.CallerIDHeader, "owner")
-			r.Header.Set(pluginsdk.CallerRoleHeader, "reader")
+			r.Header.Set(pluginsdk.CallerAccessHeader, "read")
 			r.Header.Set(pluginsdk.InstanceHeader, s.instance)
 			r.Header.Set(pluginsdk.EpochHeader, s.epoch)
 		}

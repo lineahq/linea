@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -277,6 +278,9 @@ func fleetError(ctx context.Context, err error) error {
 	}
 	if refused.Code == "collector_busy" {
 		return &Error{Code: CodeConflict, Message: "a selected Collector is already serving another capture; a Collector serves one capture at a time, so wait for it to end"}
+	}
+	if refused.Code == "too_many_affected" && refused.Affected > 0 {
+		return &Error{Code: CodeConflict, Affected: refused.Affected, Message: fmt.Sprintf("the change gives %d connected agents a new config at once, above fleet's limit; confirm with max_affected=%d or stage the change with a rollout", refused.Affected, refused.Affected)}
 	}
 	if refused.Code == "config_management_disabled" {
 		return &Error{Code: CodeUnavailable, Message: "fleet runs without config management; start fleet with --config-management"}
