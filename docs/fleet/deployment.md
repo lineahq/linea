@@ -416,7 +416,13 @@ docker compose --project-name fleet-restore --env-file restore.env up -d --wait 
   ledger, owners and grants; the migration job verifies compatibility and
   runtime grants.
 - Startup detects the new cluster, expires event cursors once and requires
-  renewed reporting.
+  renewed reporting. The first replica to start moves every retained event
+  ahead of new ones in one transaction of its own, allowed up to four
+  minutes, before it registers; other replicas wait for it. Serving
+  statements stay bounded at 2 s.
+- Migrations and offline administration (`migrate`, `bootstrap`) run with a
+  5-minute statement timeout, a 10 s lock timeout and a 10-minute overall
+  bound.
 - Original API tokens work if they were active at backup and are still
   unexpired. Bootstrap is unnecessary while an admin remains.
 - Restore returns credential validity to the backup point. Reconcile or

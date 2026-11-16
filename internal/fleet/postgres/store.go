@@ -181,12 +181,24 @@ func connConfig(url string) (*pgx.ConnConfig, error) {
 	return cfg, nil
 }
 
+// Administration and migrations run offline and may rewrite whole tables, so
+// their sessions and contexts allow longer statements than serving does.
+const (
+	adminTimeout          = 10 * time.Minute
+	adminStatementTimeout = "300000"
+	// streamTimeout bounds the restore rewrite of every retained event.
+	streamTimeout          = 5 * time.Minute
+	streamStatementTimeout = "240s"
+)
+
 // openAdmin returns one session holding the administration lock.
 func openAdmin(ctx context.Context, url string) (*pgx.Conn, error) {
 	cfg, err := connConfig(url)
 	if err != nil {
 		return nil, err
 	}
+	cfg.RuntimeParams["statement_timeout"] = adminStatementTimeout
+	cfg.RuntimeParams["lock_timeout"] = "10000"
 	conn, err := pgx.ConnectConfig(ctx, cfg)
 	if err != nil {
 		return nil, fleet.ErrUnavailable
@@ -211,7 +223,7 @@ func closeAdmin(conn *pgx.Conn) {
 
 // adminTx runs one offline administration transaction on the locked session.
 func adminTx(ctx context.Context, url string, work func(context.Context, pgx.Tx) error) error {
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, adminTimeout)
 	defer cancel()
 	conn, err := openAdmin(ctx, url)
 	if err != nil {
@@ -281,7 +293,7 @@ func checkSchema(ctx context.Context, c querier) error {
 }
 
 func Migrate(ctx context.Context, url string) error {
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, adminTimeout)
 	defer cancel()
 	conn, err := openAdmin(ctx, url)
 	if err != nil {
@@ -391,6 +403,9 @@ func (s *Store) register(ctx context.Context) error {
 	if err := checkSchema(ctx, s.pool); err != nil {
 		return err
 	}
+	if err := s.checkStream(ctx); err != nil {
+		return err
+	}
 	return s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if err := identity(ctx, tx, s.options.ServerID); err != nil {
 			return err
@@ -402,9 +417,6 @@ func (s *Store) register(ctx context.Context) error {
 		if admins == 0 {
 			return auth.ErrUnauthorized
 		}
-		if err := s.checkStream(ctx, tx); err != nil {
-			return err
-		}
 		if _, err := tx.Exec(ctx, "INSERT INTO fleet.replicas(id) VALUES($1)", s.replica); err != nil {
 			return err
 		}
@@ -415,7 +427,32 @@ func (s *Store) register(ctx context.Context) error {
 // checkStream rotates the event epoch once when the database is restored into
 // another cluster, detected by system identifier or a transaction counter
 // that moved backwards. Old events keep their order ahead of new ones.
-func (s *Store) checkStream(ctx context.Context, tx pgx.Tx) error {
+//
+// It runs in a transaction of its own, before registration: rewriting every
+// retained event (up to --max-events) can outlast the bounds of a serving
+// write, so it gets its own context and statement timeout. The metadata row
+// lock serializes replicas that start together.
+func (s *Store) checkStream(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), streamTimeout)
+	defer cancel()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fleet.ErrUnavailable
+	}
+	defer tx.Rollback(context.Background())
+	if _, err := tx.Exec(ctx, "SET LOCAL lock_timeout = '"+streamStatementTimeout+"'"); err != nil {
+		return normalize(err)
+	}
+	if err := identity(ctx, tx, s.options.ServerID); err != nil {
+		return normalize(err)
+	}
+	if err := rotateStream(ctx, tx); err != nil {
+		return normalize(err)
+	}
+	return normalize(tx.Commit(ctx))
+}
+
+func rotateStream(ctx context.Context, tx pgx.Tx) error {
 	var stored *string
 	if err := tx.QueryRow(ctx, "SELECT system_identifier FROM fleet.metadata WHERE singleton FOR UPDATE").Scan(&stored); err != nil {
 		return err
@@ -439,7 +476,10 @@ func (s *Store) checkStream(ctx context.Context, tx pgx.Tx) error {
 	}
 	changed := stored != nil && current != nil && *stored != *current
 	if regressed || changed {
-		if _, err := tx.Exec(ctx, "UPDATE fleet.events SET xid='0'"); err != nil {
+		if _, err := tx.Exec(ctx, "SET LOCAL statement_timeout = '"+streamStatementTimeout+"'"); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, "UPDATE fleet.events SET xid='0' WHERE xid <> '0'"); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, "UPDATE fleet.metadata SET event_epoch=$1, event_floor_xid='0' WHERE singleton", randomID()); err != nil {
