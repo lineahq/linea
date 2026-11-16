@@ -56,8 +56,9 @@ docker run --rm -e LINEA_WORKER_TOKEN ghcr.io/lineahq/linea-worker:0.2.0 \
 | `--ca-file` | PEM bundle that verifies the server's certificate, for a private CA; needs an `https` URL. Without it the system roots are used. |
 
 `--name`, `--capacity`, `--token-file`, `--ca-file`, `--pool`, `--warm`,
-`--idle`, `--cache` and `--cache-dir` need `--connect`; the last four need
-`--pool`. A worker accepts no connection: it holds no certificate and serves no
+`--idle`, `--cache`, `--cache-dir` and `--child-user` need `--connect`; the
+last five need `--pool`. `--capacity` is at most 1024; the server refuses a
+hello with more, or with a name over 128 bytes. A worker accepts no connection: it holds no certificate and serves no
 health endpoint.
 
 ## Pool workers
@@ -71,9 +72,14 @@ A pool also runs its own build, the built-in runtime of its release, with
 nothing to download. A pool of the server's release registers the built-in
 runtime, so a team server with only a pool runs requests that name no runtime.
 
+A pool runs on Linux as root with only `CAP_SETUID` and `CAP_SETGID`, and
+starts every runtime as another user (`--child-user`):
+
 ```sh
-export LINEA_WORKER_TOKEN=$(cat registration-token)
-/worker --connect https://linea.example.com --pool --cache-dir /cache
+docker run -d --user 0:0 --cap-drop ALL --cap-add SETUID --cap-add SETGID \
+  --security-opt no-new-privileges -e LINEA_WORKER_TOKEN="$(cat registration-token)" \
+  -v pool-cache:/cache ghcr.io/lineahq/linea-worker:<version> \
+  --connect https://linea.example.com --pool --cache-dir /cache --child-user 65534:65534
 ```
 
 For each runtime in use the pool downloads the binary once through a presigned
@@ -88,6 +94,7 @@ runs it as a child process, one per runtime. Besides the flags of any
 | `--idle` | 10m | Stop a child that no request used for this long; `0` keeps it. |
 | `--cache` | 5GiB | The size the cache directory is kept within: whole bytes or a `KiB`, `MiB`, `GiB` or `TiB` size. Over it, the least recently used binaries that no running child uses are removed. |
 | `--cache-dir` | `<tmp>/linea-pool-cache` | Where binaries are cached. It must allow executing files (not a `noexec` `/tmp`) and may persist between restarts, so a restarted pool starts its children without downloading again. |
+| `--child-user` | required | `UID:GID` (neither 0) to start every child as. The pool needs `CAP_SETUID` and `CAP_SETGID` for it, which in a container means running as root with only those two (`--cap-drop ALL --cap-add SETUID --cap-add SETGID`; a non-root process does not get them under `no-new-privileges`). The pool keeps the cache at mode 0711, marks itself undumpable, and warns at startup when that user can read `--token-file`. |
 
 What the pool guarantees:
 
@@ -105,6 +112,7 @@ What the pool guarantees:
 - A child's environment is the pool's without every `LINEA_*` variable, so the
   registration token never reaches it. Its standard error goes to the pool's
   log.
+- A pool runs on Linux only, the system of the runtimes it starts.
 - When the connection is lost the pool cancels what runs, stops every child and
   keeps the cache. It reconnects like any worker.
 

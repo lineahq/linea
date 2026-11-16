@@ -25,7 +25,8 @@ ARG GOMAXPROCS=
 ARG VERSION=
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOMAXPROCS=${GOMAXPROCS} go build -p ${GO_BUILD_PARALLELISM} -trimpath -ldflags="-s -w -X github.com/lineahq/linea/internal/debugger/release.version=${VERSION}" -o /out/worker ./cmd/linea-worker
 # The pool worker's binary cache (linea-worker --pool --cache-dir /cache): a
-# volume mounted there starts with this directory's owner.
+# volume mounted there starts with this directory's owner, root, which a pool
+# runs as (with --child-user).
 RUN mkdir /out/cache
 # The third-party notices of what the binary links, for the target platform.
 # The tool itself is built for this host.
@@ -38,7 +39,7 @@ RUN GOOS= GOARCH= go build -o /tmp/notices ./tools/notices \
 # the system roots.
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 COPY --from=build /out/worker /worker
-COPY --from=build --chown=65534:65534 /out/cache /cache
+COPY --from=build /out/cache /cache
 COPY --from=build /out/licenses /licenses
 # The label marks a runtime image, so `linea runtime register` accepts it;
 # the worker's hello describes the build.

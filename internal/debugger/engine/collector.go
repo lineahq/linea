@@ -42,6 +42,9 @@ type Collector interface {
 	Run(ctx context.Context, opts runresult.Options) (*runresult.Result, error)
 	// RunReference executes the configuration without instrumentation.
 	RunReference(ctx context.Context, opts runresult.Options) (*runresult.Result, error)
+	// SelfCheck probes, once per process, the Collector internals the
+	// instrumentation relies on: one check per assumption.
+	SelfCheck() []runresult.SelfCheck
 }
 
 // ErrNoCollector marks work on the built-in runtime in a process that runs

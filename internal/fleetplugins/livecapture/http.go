@@ -142,7 +142,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	caller, roles := r.Header.Values(pluginsdk.CallerIDHeader), r.Header.Values(pluginsdk.CallerRoleHeader)
-	if len(caller) != 1 || len(roles) != 1 || !safeName(caller[0]) || (roles[0] != "admin" && roles[0] != "reader") {
+	if len(caller) != 1 || len(roles) != 1 || !safeName(caller[0]) || (roles[0] != "admin" && roles[0] != "operator" && roles[0] != "reader") {
 		fail(w, ErrForbidden)
 		return
 	}
@@ -190,7 +190,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, page)
 		return
 	}
-	if r.Method != "GET" && roles[0] != "admin" {
+	if r.Method != "GET" && roles[0] != "admin" && roles[0] != "operator" {
 		fail(w, ErrForbidden)
 		return
 	}

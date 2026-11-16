@@ -23,6 +23,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,6 +34,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/lineahq/linea/internal/debugger/artifact"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // S3Config selects an S3-compatible bucket. Every object key starts with
@@ -48,6 +50,9 @@ type S3Config struct {
 	// UsePathStyle addresses buckets as endpoint/bucket/key instead of
 	// bucket.endpoint/key, which most S3-compatible servers need.
 	UsePathStyle bool
+	// CreateBucket makes the bucket at open when it does not exist, for a
+	// server whose credentials may. Without it a missing bucket is an error.
+	CreateBucket bool
 }
 
 // Config opens a Store.
@@ -62,7 +67,17 @@ type Config struct {
 	Limits  artifact.Limits
 	// MaxConns bounds the connection pool; nonpositive means 8.
 	MaxConns int32
+	// TracerProvider records a client span for each PostgreSQL statement and
+	// object storage call made under a span in the caller's context, with no
+	// arguments, keys or error messages. Calls without a parent span record
+	// nothing. Nil records nothing.
+	TracerProvider trace.TracerProvider
 }
+
+const (
+	statementTimeout         = 2 * time.Minute
+	idleInTransactionTimeout = 5 * time.Minute
+)
 
 // Store is an artifact.Repository over PostgreSQL and object storage.
 type Store struct {
@@ -87,6 +102,8 @@ type Store struct {
 	// generation is the last workspace generation read, returned by Info when
 	// the database cannot be reached.
 	generation atomic.Uint64
+	// clock moves lease times onto the database's clock (clock.go).
+	clock dbClock
 }
 
 var _ artifact.Repository = (*Store)(nil)
@@ -112,7 +129,18 @@ func Open(ctx context.Context, cfg Config) (_ *Store, err error) {
 	if cfg.MaxConns > 0 {
 		pc.MaxConns = cfg.MaxConns
 	}
+	if cfg.TracerProvider != nil {
+		// One value implements the query, batch and copy tracer interfaces;
+		// pgx asserts each of them on ConnConfig.Tracer.
+		pc.ConnConfig.Tracer = newPGTracer(cfg.TracerProvider)
+		objects = newTracedObjects(objects, cfg.TracerProvider)
+	}
 	pc.ConnConfig.RuntimeParams["application_name"] = "linea-debugger"
+	// A hung statement or a transaction left open, which may hold the
+	// installation lock, ends instead of stalling every writer. The bounds
+	// are far above any query's run time; migrations lift them.
+	pc.ConnConfig.RuntimeParams["statement_timeout"] = strconv.Itoa(int(statementTimeout.Milliseconds()))
+	pc.ConnConfig.RuntimeParams["idle_in_transaction_session_timeout"] = strconv.Itoa(int(idleInTransactionTimeout.Milliseconds()))
 	pool, err := pgxpool.NewWithConfig(ctx, pc)
 	if err != nil {
 		return nil, fmt.Errorf("%w: connect: %w", artifact.ErrStorage, err)
@@ -216,6 +244,17 @@ func (s *Store) inTx(ctx context.Context, op string, fn func(pgx.Tx) error) erro
 		return storageErr(op, err)
 	}
 	return storageErr(op, tx.Commit(ctx))
+}
+
+// inReadTx runs fn in a read-only transaction and rolls it back: for checks
+// that write nothing.
+func (s *Store) inReadTx(ctx context.Context, op string, fn func(pgx.Tx) error) error {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return storageErr(op, err)
+	}
+	defer tx.Rollback(context.WithoutCancel(ctx))
+	return storageErr(op, fn(tx))
 }
 
 // storageErr passes repository errors and cancellations through and wraps

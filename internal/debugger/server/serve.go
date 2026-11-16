@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/lineahq/linea/internal/debugger/api"
 	"github.com/lineahq/linea/internal/debugger/artifact"
@@ -133,8 +134,6 @@ type teamServe struct {
 	// drain bounds how long running work may finish at shutdown before
 	// it is handed back to the queue for another instance.
 	drain time.Duration
-	// metricsAddr, when set, serves the build metrics there.
-	metricsAddr string
 }
 
 // serveAPI serves the team server until ctx is cancelled. It authenticates
@@ -146,6 +145,13 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 	if err != nil {
 		return err
 	}
+	telemetry, err := newServerTelemetry(ctx, processEnvironment().lookup, logger)
+	if err != nil {
+		return err
+	}
+	// Deferred before the service's Close, it runs after it: the last
+	// collection and spans are sent once the service has stopped.
+	defer telemetry.shutdown()
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return err
@@ -167,15 +173,34 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 	}
 	defer ln.Close()
 	ln = newLimitListener(ln, tm.connections)
-	var metricsLn net.Listener
-	if tm.metricsAddr != "" {
-		if metricsLn, err = net.Listen("tcp", tm.metricsAddr); err != nil {
-			return fmt.Errorf("--metrics-listen: %w", err)
-		}
-		defer metricsLn.Close()
+	// The server answers from the moment it listens: /healthz with 200, and
+	// /readyz and every other request with 503 until its storage is open, so
+	// a liveness probe does not restart it while the database or object
+	// store beside it is still starting.
+	var state serveState
+	srv := newTeamHTTPServer(securityHeaders(health(&state)))
+	srv.TLSConfig = tlsConfig
+	serve := srv.Serve
+	if tlsConfig != nil {
+		serve = func(ln net.Listener) error { return srv.ServeTLS(ln, "", "") }
 	}
-	repo, err := OpenStore(ctx, tm.store)
+	served := make(chan error, 1)
+	go func() { served <- serve(ln) }()
+	defer srv.Close()
+	scheme := "http"
+	if tlsConfig != nil {
+		scheme = "https"
+	}
+	fmt.Fprintf(stderr, "listening on %s://%s, opening storage\n", scheme, ln.Addr())
+	// The store records its statements and object storage calls under the
+	// spans of the work that made them.
+	storeConfig := tm.store
+	storeConfig.TracerProvider = telemetry.tracerProvider()
+	repo, err := openStoreRetrying(ctx, storeConfig, stderr)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
 		return err
 	}
 	// A team server needs no Docker: its runtimes are the catalog's, served
@@ -185,20 +210,31 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 		Logger: logger,
 		Access: tm.access, BuiltInOnWorkers: true, WorkerToken: tm.workerToken, BuilderToken: tm.buildToken, BuildExport: tm.buildExport,
 		QueueCapacity: tm.queue, Limits: tm.principals, Retention: tm.retention, Shared: true, Capture: captureOptions,
-		GitCloneBytes: tm.gitClone,
+		GitCloneBytes: tm.gitClone, AdminPassword: tm.adminPassword, MeterProvider: telemetry.meterProvider(), TracerProvider: telemetry.tracerProvider(),
 	})
 	if err != nil {
 		return err
 	}
 	defer service.Close()
 	chain := platform.Authenticators{service.TokenAuthenticator()}
-	var signIn *platform.OIDC
+	// A browser reaching plain HTTP on loopback drops Secure cookies; behind
+	// a TLS-terminating proxy it speaks https.
+	insecureCookie := tlsConfig == nil && !tm.allowHTTP
+	var oidc *platform.OIDC
+	sessionTTL := time.Duration(0)
 	if tm.oidc != nil {
 		o := *tm.oidc
-		// A browser reaching plain HTTP on loopback drops Secure cookies;
-		// behind a TLS-terminating proxy it speaks https.
-		o.InsecureCookie = tlsConfig == nil && !tm.allowHTTP
-		if signIn, err = service.OIDC(ctx, o); err != nil {
+		o.InsecureCookie = insecureCookie
+		if oidc, err = service.OIDC(ctx, o); err != nil {
+			return err
+		}
+		sessionTTL = o.SessionTTL
+	}
+	// Sign-in serves OIDC and the built-in admin account under /auth/ and
+	// authenticates the web sessions both start.
+	var signIn *platform.SignIn
+	if oidc != nil || tm.adminPassword != "" {
+		if signIn, err = service.SignIn(platform.SignInOptions{OIDC: oidc, SessionTTL: sessionTTL, InsecureCookie: insecureCookie}); err != nil {
 			return err
 		}
 		chain = append(chain, signIn)
@@ -209,12 +245,15 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 	var auth platform.Authenticator = chain
 	h := api.New(api.Options{Platform: service, Fallback: webui.Handler(), Logger: logger, Authenticator: auth, RemoteAccess: true})
 	var handler http.Handler = h
-	scheme := "http"
-	if tlsConfig != nil {
-		scheme = "https"
-	}
+	route := h.Route
 	if signIn != nil || enableMCP {
 		mux := http.NewServeMux()
+		route = func(r *http.Request) string {
+			if _, pattern := mux.Handler(r); pattern != "/" {
+				return pattern
+			}
+			return h.Route(r)
+		}
 		mux.Handle("/", h)
 		handler = mux
 		if signIn != nil {
@@ -226,18 +265,8 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 			mux.Handle("/mcp", mcp.New(mcp.Options{Platform: service, Logger: logger, Authenticator: auth}))
 		}
 	}
-	srv := newTeamHTTPServer(securityHeaders(handler))
-	srv.TLSConfig = tlsConfig
 	stopped := make(chan struct{})
 	defer close(stopped)
-	if metricsLn != nil {
-		// Counts only and no credentials, on a listener of its own that no
-		// ingress routes to.
-		metrics := newTeamHTTPServer(api.Metrics(service))
-		go func() { _ = metrics.Serve(metricsLn) }()
-		defer metrics.Close()
-		fmt.Fprintf(stderr, "serving build metrics on http://%s/metrics\n", metricsLn.Addr())
-	}
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -245,7 +274,9 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 			return
 		}
 		// Claim nothing more and let running work finish while the API
-		// still answers; Close hands the rest to another instance.
+		// still answers; Close hands the rest to another instance. Readiness
+		// fails first, so a load balancer sends new requests elsewhere.
+		state.draining.Store(true)
 		drainCtx, cancel := context.WithTimeout(context.Background(), tm.drain)
 		if err := service.Drain(drainCtx); err != nil {
 			fmt.Fprintf(stderr, "drain: work still running after %s is handed back to the queue\n", tm.drain)
@@ -259,12 +290,17 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
 	}()
+	state.watchStorage(service.StorageReady)
+	state.serve(traced(handler, telemetry.tracerProvider(), route))
 	fmt.Fprintf(stderr, "serving API on %s://%s/api/v1 (contract: /api/v1/openapi.json)\n", scheme, ln.Addr())
 	if enableMCP {
 		fmt.Fprintf(stderr, "serving MCP on %s://%s/mcp\n", scheme, ln.Addr())
 	}
 	methods := []string{"API token"}
-	if signIn != nil {
+	if tm.adminPassword != "" {
+		methods = append(methods, "the built-in admin account")
+	}
+	if oidc != nil {
 		methods = append(methods, "OIDC sign-in with "+tm.oidc.Issuer)
 	}
 	if tm.headers != nil {
@@ -272,19 +308,68 @@ func serveAPI(ctx context.Context, addr string, tm *teamServe, enableMCP bool, l
 	}
 	fmt.Fprintf(stderr, "team mode: requests are authenticated by %s, authorized by the server config's bindings, and run on the team's default runtime unless they name one\n",
 		strings.Join(methods, ", "))
+	if telemetry.meters != nil {
+		fmt.Fprintf(stderr, "exporting server metrics over OTLP (%s)\n", telemetry.metricsProtocol)
+	}
+	if telemetry.tracers != nil {
+		fmt.Fprintf(stderr, "exporting server traces over OTLP (%s)\n", telemetry.tracesProtocol)
+	}
 	if captureOptions.Fleet.Endpoint != "" {
 		fmt.Fprintf(stderr, "live capture through fleet at %s\n", captureOptions.Fleet.Endpoint)
 	}
-	fmt.Fprintf(stderr, "storage: PostgreSQL, payloads in object storage bucket %s\n", tm.store.S3.Bucket)
-	fmt.Fprintln(stderr, "requests read no host file or host environment variable: they send their files inline or name saved ones, and ${env:...} reads declared values only")
-	serve := srv.Serve
-	if tlsConfig != nil {
-		serve = func(ln net.Listener) error { return srv.ServeTLS(ln, "", "") }
+	created := ""
+	if tm.store.S3.CreateBucket {
+		created = " (created at startup if missing)"
 	}
-	if err := serve(ln); !errors.Is(err, http.ErrServerClosed) {
+	fmt.Fprintf(stderr, "storage: PostgreSQL, payloads in object storage bucket %s%s\n", tm.store.S3.Bucket, created)
+	fmt.Fprintln(stderr, "requests read no host file or host environment variable: they send their files inline or name saved ones, and ${env:...} reads declared values only")
+	if err := <-served; !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
+}
+
+// Retrying the storage at startup: the first delay, doubled after each
+// failure up to the last. A database or object store started beside the
+// server, by Compose or a Helm install, is often not up yet.
+const (
+	storeRetryFirst = time.Second
+	storeRetryMax   = 30 * time.Second
+)
+
+// storeRetryWait waits d or until ctx ends. Tests replace it.
+var storeRetryWait = func(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+// openStoreRetrying opens the store. While it fails with a storage error (a
+// database or object store that does not answer, or a bucket missing) it
+// says why on stderr and tries again, with a growing delay, until ctx ends.
+// Any other error, such as an invalid URL or a schema newer than this
+// binary, fails at once.
+func openStoreRetrying(ctx context.Context, c pg.Config, stderr io.Writer) (artifact.Repository, error) {
+	delay := storeRetryFirst
+	for {
+		repo, err := OpenStore(ctx, c)
+		if err == nil {
+			return repo, nil
+		}
+		if !errors.Is(err, artifact.ErrStorage) || ctx.Err() != nil {
+			return nil, err
+		}
+		fmt.Fprintf(stderr, "storage not available, retrying in %s: %v\n", delay, err)
+		if err := storeRetryWait(ctx, delay); err != nil {
+			return nil, err
+		}
+		delay = min(2*delay, storeRetryMax)
+	}
 }
 
 // loopbackHost reports whether a host name or address is this machine's.
@@ -308,32 +393,43 @@ const (
 )
 
 // usage is how the server is started.
-const usage = "--config <file> [--addr 127.0.0.1:7070] [--tls-cert-file FILE --tls-key-file FILE | --allow-http] [--drain-timeout D] [--metrics-listen ADDR] [--mcp] [--fleet-url URL --fleet-token-file FILE [--fleet-allow-http]] [--verbose]"
+const usage = "[--config <file>] [--addr 127.0.0.1:7070] [--tls-cert-file FILE --tls-key-file FILE | --allow-http] [--drain-timeout D] [--mcp] [--fleet-url URL --fleet-token-file FILE [--fleet-allow-http]] [--verbose]"
 
-// noConfig refuses a start without a server config.
-const noConfig = "linea-server needs --config <file>: run a team server on Kubernetes (docs/debugger/deploy-kubernetes.md) or locally with Docker Compose (docs/debugger/deploy-compose.md)"
+// noConfig refuses a start with no server config at all: neither a file nor
+// a LINEA_* variable that sets a key.
+const noConfig = "linea-server has no configuration: set LINEA_STORE_DATABASE_URL_FILE, LINEA_STORE_OBJECTS_BUCKET and the other LINEA_* variables, or pass --config <file> (docs/debugger/team-server.md). Run a team server on Kubernetes (docs/debugger/deploy-kubernetes.md) or locally with Docker Compose (docs/debugger/deploy-compose.md)"
 
 // Main serves the team server's HTTP API until ctx ends and returns the
 // process's exit code. The server config composes it; there is no other
 // server mode.
 func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	return run(ctx, args, stdout, stderr, processEnvironment())
+}
+
+// run is Main with the environment that overrides the server config.
+func run(ctx context.Context, args []string, stdout, stderr io.Writer, env environment) int {
+	if len(args) > 0 && args[0] == "probe" {
+		return probe(ctx, args[1:], stderr)
+	}
+	if len(args) > 0 && args[0] == "revoke-admin" {
+		return revokeAdmin(ctx, args[1:], stdout, stderr, env)
+	}
 	fs := flag.NewFlagSet("linea-server", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
-		fmt.Fprintf(stderr, "usage: linea-server %s\n", usage)
+		fmt.Fprintf(stderr, "usage: linea-server %s\n       linea-server probe [--url http://127.0.0.1:7070/readyz]\n       linea-server revoke-admin [--config <file>]\n", usage)
 		fs.PrintDefaults()
-		fmt.Fprintln(stderr, "\nThe server config names the storage (PostgreSQL and object storage), authentication, role bindings and worker registration; see docs/debugger/team-server.md.\nRequests read no host file or host environment variable: they send their files inline or name saved ones, and ${env:NAME} reads only scenario/setup values and URI defaults; any other name gets a stand-in.")
+		fmt.Fprintln(stderr, "\nThe server config, a file and the LINEA_* environment variables that override it, names the storage (PostgreSQL and object storage), authentication, role bindings and worker registration; see docs/debugger/team-server.md.\nRequests read no host file or host environment variable: they send their files inline or name saved ones, and ${env:NAME} reads only scenario/setup values and URI defaults; any other name gets a stand-in.")
 	}
 	addr := fs.String("addr", "127.0.0.1:7070", "address to listen on")
-	configPath := fs.String("config", "", "the server config that composes the server: storage, secrets, authentication, role bindings, retention and limits (required)")
+	configPath := fs.String("config", "", "a server config file: storage, secrets, authentication, role bindings, retention and limits; optional, and every key in it can be set or overridden by its LINEA_* environment variable")
 	var tm teamServe
 	fs.StringVar(&tm.certFile, "tls-cert-file", "", "serve TLS with this PEM certificate chain")
 	fs.StringVar(&tm.keyFile, "tls-key-file", "", "the PEM private key of --tls-cert-file")
 	fs.BoolVar(&tm.allowHTTP, "allow-http", false, "serve plain HTTP off loopback, behind a TLS-terminating proxy on a protected network")
 	fs.DurationVar(&tm.drain, "drain-timeout", 25*time.Second, "how long running work may finish when the server stops before it is handed to another instance")
-	fs.StringVar(&tm.metricsAddr, "metrics-listen", "", "serve the build queue's metrics for an autoscaler at http://ADDR/metrics, on a listener of its own without credentials (counts only)")
 	enableMCP := fs.Bool("mcp", false, "serve the MCP endpoint at /mcp; clients present an API token")
-	verbose := fs.Bool("verbose", false, "write debug logs to stderr")
+	verbose := fs.Bool("verbose", false, "also write debug logs; info and above are always written to stderr as JSON")
 	var fleet fleetServeOptions
 	fs.StringVar(&fleet.url, "fleet-url", "", "linea-fleet management API, such as https://fleet:8080, for live capture through its livecapture plugin")
 	fs.StringVar(&fleet.tokenFile, "fleet-token-file", "", "file holding the fleet API token (never passed as an argument)")
@@ -352,29 +448,40 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	switch {
 	case fs.NArg() > 0:
 		return refuse(fmt.Sprintf("unexpected argument %q", fs.Arg(0)))
-	case *configPath == "":
-		return refuse(noConfig)
 	case (tm.certFile == "") != (tm.keyFile == ""):
 		return refuse("--tls-cert-file and --tls-key-file go together")
 	case tm.certFile != "" && tm.allowHTTP:
 		return refuse("--allow-http cannot be used with --tls-cert-file")
 	}
-	t, err := loadConfig(*configPath)
+	t, err := loadConfig(*configPath, env)
+	if errors.Is(err, errNoConfig) {
+		return refuse(noConfig)
+	}
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitError
 	}
 	tm.team = t
-	var logger *zap.Logger
-	if *verbose {
-		if logger, err = zap.NewDevelopment(); err != nil {
-			return fail(stderr, err)
-		}
-	}
+	logger := newLogger(stderr, *verbose)
+	defer func() { _ = logger.Sync() }()
 	if err := serveAPI(ctx, *addr, &tm, *enableMCP, logger, stderr, fleet); err != nil {
 		return fail(stderr, err)
 	}
 	return exitOK
+}
+
+// newLogger is the server's log: one JSON object per line on w, at info and
+// above, or debug and above when verbose. Its callers never log
+// credentials, configuration, environment or telemetry.
+func newLogger(w io.Writer, verbose bool) *zap.Logger {
+	level := zapcore.InfoLevel
+	if verbose {
+		level = zapcore.DebugLevel
+	}
+	enc := zap.NewProductionEncoderConfig()
+	enc.EncodeTime = zapcore.ISO8601TimeEncoder
+	core := zapcore.NewCore(zapcore.NewJSONEncoder(enc), zapcore.Lock(zapcore.AddSync(w)), level)
+	return zap.New(core, zap.ErrorOutput(zapcore.Lock(zapcore.AddSync(w))))
 }
 
 func fail(stderr io.Writer, err error) int {

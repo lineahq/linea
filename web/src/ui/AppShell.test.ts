@@ -48,7 +48,7 @@ async function settle(until: () => boolean) {
 async function render(entry: string) {
   const rootRoute = createRootRoute({ component: AppShell });
   const page = (path: string) => createRoute({ getParentRoute: () => rootRoute, path, component: () => createElement('p', null, `Page ${path}`) });
-  const tree = rootRoute.addChildren([page('/'), page('/runs'), page('/audit')]);
+  const tree = rootRoute.addChildren([page('/'), page('/runs'), page('/audit'), page('/sign-in')]);
   const router = createRouter({ routeTree: tree, history: createMemoryHistory({ initialEntries: [entry] }) });
   await act(async () => root.render(createElement(QueryClientProvider, { client }, createElement(RouterProvider, { router: router as never }))));
 }
@@ -64,6 +64,15 @@ describe('AppShell', () => {
     await settle(() => text().includes('Sign in to the debugger'));
     expect(document.querySelector('a')!.getAttribute('href')).toBe('/auth/login?return_to=%2Fruns%3Frun%3Dr-1');
     expect(text()).not.toContain('Page /runs');
+  });
+
+  it('renders the sign-in page alone, without reading the session', async () => {
+    session = () => json({ error: 'unauthenticated: sign in first' }, 401);
+    await render('/sign-in?return_to=%2Fruns');
+    await settle(() => text().includes('Page /sign-in'));
+    expect(text()).not.toContain('Sign in to the debugger');
+    expect(rail()).toEqual([]);
+    expect(calls).toEqual([]);
   });
 
   it('lists only the destinations a viewer can use', async () => {

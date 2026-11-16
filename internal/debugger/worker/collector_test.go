@@ -6,6 +6,7 @@ import (
 
 	"github.com/lineahq/linea/internal/debugger/engine"
 	"github.com/lineahq/linea/internal/debugger/engine/local"
+	"github.com/lineahq/linea/internal/debugger/runresult"
 )
 
 // Tests execute on the built-in runtime in process.
@@ -40,5 +41,37 @@ func TestOnlyAReleasesOwnWorkerIsTheBuiltInRuntime(t *testing.T) {
 	}
 	if own.Runtime != built.Runtime {
 		t.Fatalf("the claim changed the runtime identity: %s, %s", own.Runtime, built.Runtime)
+	}
+}
+
+// failingSelfCheck is the built-in Collector with a self-check that failed.
+type failingSelfCheck struct{ engine.Collector }
+
+func (failingSelfCheck) SelfCheck() []runresult.SelfCheck {
+	return []runresult.SelfCheck{{Code: runresult.SelfCheckPipelineAttribution, Detail: "no pipeline ID"}}
+}
+
+// TestTheHelloCarriesTheSelfCheckOutsideTheIdentity: a worker reports its
+// runtime's self-check, and the result is no part of the runtime identity,
+// so a runtime whose check fails keeps its identity.
+func TestTheHelloCarriesTheSelfCheckOutsideTheIdentity(t *testing.T) {
+	passed, err := Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(passed.SelfCheck) == 0 || len(runresult.FailedSelfChecks(passed.SelfCheck)) != 0 {
+		t.Fatalf("self-check = %+v", passed.SelfCheck)
+	}
+	engine.Use(failingSelfCheck{local.Collector})
+	t.Cleanup(func() { engine.Use(local.Collector) })
+	failed, err := Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runresult.FailedSelfChecks(failed.SelfCheck)) != 1 {
+		t.Fatalf("self-check = %+v", failed.SelfCheck)
+	}
+	if passed.Runtime != failed.Runtime {
+		t.Fatalf("the self-check changed the runtime identity: %s, %s", passed.Runtime, failed.Runtime)
 	}
 }

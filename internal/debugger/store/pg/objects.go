@@ -6,13 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	"github.com/lineahq/linea/internal/debugger/artifact"
 )
@@ -51,6 +54,9 @@ type ObjectStore interface {
 	// Open starts a streaming read of the object, or fails with an error
 	// wrapping ErrObjectNotFound. The caller closes the body.
 	Open(ctx context.Context, key string) (ObjectReader, error)
+	// Stat reports an object's size and age without reading it, or fails
+	// with an error wrapping ErrObjectNotFound.
+	Stat(ctx context.Context, key string) (ObjectInfo, error)
 	// Copy copies src to dst inside the store, replacing any object at dst,
 	// without moving the bytes through the caller. A nonempty ifMatch is the
 	// ETag Open reported for src: the copy then fails with ErrObjectChanged
@@ -105,6 +111,28 @@ func (s *Store) putBlob(ctx context.Context, digest string, raw []byte) error {
 	return nil
 }
 
+// keepBlob makes sure the object putBlob stored before a transaction is
+// still there. The caller holds the installation lock, so a Sweep that listed
+// the object as old before putBlob refreshed it can no longer delete it; one
+// that already did is undone by storing it again.
+func (s *Store) keepBlob(ctx context.Context, digest string, raw []byte) error {
+	key, err := objectKey(s.prefix, digest)
+	if err != nil {
+		return err
+	}
+	_, err = s.objects.Stat(ctx, key)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, ErrObjectNotFound):
+		return s.putBlob(ctx, digest, raw)
+	case ctx.Err() != nil:
+		return ctx.Err()
+	default:
+		return fmt.Errorf("%w: check object: %w", artifact.ErrStorage, err)
+	}
+}
+
 // readBlob returns the object a row names, checking its size and digest.
 func (s *Store) readBlob(ctx context.Context, digest string, size int64) ([]byte, error) {
 	key, err := objectKey(s.prefix, digest)
@@ -126,6 +154,9 @@ func (s *Store) readBlob(ctx context.Context, digest string, size int64) ([]byte
 	return raw, nil
 }
 
+// s3ResponseTimeout bounds the wait for an S3 response's headers.
+const s3ResponseTimeout = 2 * time.Minute
+
 // s3Store is the ObjectStore over any S3-compatible service.
 type s3Store struct {
 	client  *s3.Client
@@ -146,6 +177,13 @@ func newS3Client(c S3Config) (*s3.Client, error) {
 		UsePathStyle:               c.UsePathStyle,
 		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
 		ResponseChecksumValidation: aws.ResponseChecksumValidationWhenRequired,
+		// A server that accepts a request and never answers fails it instead
+		// of holding the caller; the SDK's default sets no such bound. The
+		// wait starts after the request body is sent, so it does not limit
+		// how long an upload or download takes.
+		HTTPClient: awshttp.NewBuildableClient().WithTransportOptions(func(t *http.Transport) {
+			t.ResponseHeaderTimeout = s3ResponseTimeout
+		}),
 	}
 	if opts.Region == "" {
 		opts.Region = "us-east-1"
@@ -169,10 +207,91 @@ func newS3(ctx context.Context, c S3Config) (ObjectStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(c.Bucket)}); err != nil {
-		return nil, fmt.Errorf("%w: object storage bucket %q: %w", artifact.ErrStorage, c.Bucket, err)
+	region := c.Region
+	if region == "" {
+		region = "us-east-1"
+	}
+	if err := ensureBucketExists(ctx, client, c.Bucket, region, c.CreateBucket); err != nil {
+		return nil, err
 	}
 	return &s3Store{client: client, presign: s3.NewPresignClient(client), bucket: c.Bucket}, nil
+}
+
+// bucketAPI is the part of the S3 client that opening a bucket uses.
+type bucketAPI interface {
+	HeadBucket(context.Context, *s3.HeadBucketInput, ...func(*s3.Options)) (*s3.HeadBucketOutput, error)
+	CreateBucket(context.Context, *s3.CreateBucketInput, ...func(*s3.Options)) (*s3.CreateBucketOutput, error)
+}
+
+// ensureBucketExists checks that the bucket exists and, when create is set,
+// makes it if HeadBucket says it is missing. Any other HeadBucket failure
+// (access denied, a network error) is returned as it is: it never triggers a
+// create. Instances that start together may race: a create that finds the
+// bucket already there is accepted once a second HeadBucket confirms the
+// credentials can reach it.
+func ensureBucketExists(ctx context.Context, api bucketAPI, bucket, region string, create bool) error {
+	head := func() error {
+		_, err := api.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(bucket)})
+		return err
+	}
+	err := head()
+	if err == nil {
+		return nil
+	}
+	if !create || !bucketMissing(err) {
+		return fmt.Errorf("%w: object storage bucket %q: %w", artifact.ErrStorage, bucket, err)
+	}
+	in := &s3.CreateBucketInput{Bucket: aws.String(bucket)}
+	if region != "us-east-1" {
+		in.CreateBucketConfiguration = &s3types.CreateBucketConfiguration{LocationConstraint: s3types.BucketLocationConstraint(region)}
+	}
+	if _, err := api.CreateBucket(ctx, in); err != nil {
+		if !bucketExists(err) {
+			return fmt.Errorf("%w: create object storage bucket %q: %w", artifact.ErrStorage, bucket, err)
+		}
+		if err := head(); err != nil {
+			return fmt.Errorf("%w: object storage bucket %q: %w", artifact.ErrStorage, bucket, err)
+		}
+	}
+	return nil
+}
+
+// bucketMissing reports whether a HeadBucket error says the bucket does not
+// exist. S3-compatible servers answer a HEAD without a body, so besides the
+// typed errors it accepts the generic codes and a bare HTTP 404.
+func bucketMissing(err error) bool {
+	var notFound *s3types.NotFound
+	var noBucket *s3types.NoSuchBucket
+	if errors.As(err, &notFound) || errors.As(err, &noBucket) {
+		return true
+	}
+	var api smithy.APIError
+	if errors.As(err, &api) {
+		switch api.ErrorCode() {
+		case "NotFound", "NoSuchBucket", "404":
+			return true
+		}
+	}
+	var resp *awshttp.ResponseError
+	return errors.As(err, &resp) && resp.HTTPStatusCode() == http.StatusNotFound
+}
+
+// bucketExists reports whether a CreateBucket error says the bucket is
+// already there, which a concurrent start of another instance causes.
+func bucketExists(err error) bool {
+	var owned *s3types.BucketAlreadyOwnedByYou
+	var exists *s3types.BucketAlreadyExists
+	if errors.As(err, &owned) || errors.As(err, &exists) {
+		return true
+	}
+	var api smithy.APIError
+	if errors.As(err, &api) {
+		switch api.ErrorCode() {
+		case "BucketAlreadyOwnedByYou", "BucketAlreadyExists":
+			return true
+		}
+	}
+	return false
 }
 
 func (m *s3Store) Put(ctx context.Context, key string, data []byte) error {
@@ -208,6 +327,14 @@ func (m *s3Store) Open(ctx context.Context, key string) (ObjectReader, error) {
 		return ObjectReader{}, notFound(err)
 	}
 	return ObjectReader{Body: out.Body, Size: aws.ToInt64(out.ContentLength), ETag: aws.ToString(out.ETag)}, nil
+}
+
+func (m *s3Store) Stat(ctx context.Context, key string) (ObjectInfo, error) {
+	out, err := m.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(m.bucket), Key: aws.String(key)})
+	if err != nil {
+		return ObjectInfo{}, notFound(err)
+	}
+	return ObjectInfo{Key: key, Size: aws.ToInt64(out.ContentLength), Modified: aws.ToTime(out.LastModified)}, nil
 }
 
 func (m *s3Store) Copy(ctx context.Context, src, dst, ifMatch string) error {

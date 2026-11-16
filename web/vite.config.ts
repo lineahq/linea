@@ -14,7 +14,7 @@ export default defineConfig({
     license: { fileName: 'licenses.md' },
   },
   server: {
-    proxy: { '/api': 'http://127.0.0.1:7070' },
+    proxy: { '/api': 'http://127.0.0.1:7070', '/auth': 'http://127.0.0.1:7070' },
   },
   test: {
     environment: 'node',

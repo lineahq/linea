@@ -98,7 +98,11 @@ topology mode `real`, note "a custom extension: it runs for real".
   and `Stopping`, then `Stopped` (or a permanent error) around each
   Shutdown, synchronously, to every extension that is a
   `componentstatus.Watcher`, started or not (`NotifyComponentStatusChange`
-  iterates the extension map). It logs "Extension is starting..." and
+  iterates the extension map). From v0.165.0 it notifies
+  `extensioncapabilities.ComponentStatusWatcher` instead, whose method is
+  `Changed` with the same arguments; `componentstatus.Watcher` is gone
+  (verified against service v0.165.0). The debugger's watcher implements
+  both methods. It logs "Extension is starting..." and
   "Extension started." but nothing per extension at shutdown. A run with a
   custom extension in `service.extensions` therefore adds the debugger's
   `linea_status` extension last through `yaml:` overrides

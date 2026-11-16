@@ -234,18 +234,22 @@ func TestSuiteCancellationDuringPreparationWritesNoSuite(t *testing.T) {
 				finished <- err
 			}()
 			receive(t, preparing)
-			firstID := receive(t, started)
 			cancel()
 			err := receive(t, finished)
 			wantCode(t, err, CodeCancelled)
 			if !errors.Is(err, context.Canceled) {
 				t.Fatal(err)
 			}
-			r, err := s.Get(firstID)
-			if err != nil {
-				t.Fatal(err)
+			// Members are admitted together once every one is prepared, so
+			// the prepared first member never ran.
+			select {
+			case id := <-started:
+				t.Fatalf("member %s started before the suite was admitted", id)
+			default:
 			}
-			waitRun(t, r)
+			if runs := s.List(); len(runs) != 0 {
+				t.Fatalf("cancelled submission left %d runs", len(runs))
+			}
 			list, _ := s.ListSuites(context.Background(), testCaller)
 			if len(list) != 0 || s.reserved != 0 || s.preparing != 0 || s.suiteSubmitting != 0 {
 				t.Fatal("cancelled submission retained a suite or reservation")
@@ -600,14 +604,20 @@ func TestRunSuiteContextCancellationReturnsReport(t *testing.T) {
 		errCh <- err
 	}()
 	receive(t, preparing)
-	id := receive(t, started)
 	cancel()
 	rep := receive(t, finished)
 	if err := receive(t, errCh); err != nil {
 		t.Fatal("foreground returned context error", err)
 	}
-	if rep == nil || len(rep.Scenarios) != 3 || rep.Outcome != assertion.Error || rep.Scenarios[0].RunID != id {
+	// No member was admitted: they are admitted together once every one is
+	// prepared.
+	if rep == nil || len(rep.Scenarios) != 3 || rep.Outcome != assertion.Error || rep.Scenarios[0].RunID != "" {
 		t.Fatal(rep)
+	}
+	select {
+	case id := <-started:
+		t.Fatalf("member %s started before the suite was admitted", id)
+	default:
 	}
 	for _, member := range rep.Scenarios {
 		if member.Error != "run cancelled" || member.Outcome != assertion.Error {

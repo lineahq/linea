@@ -25,6 +25,11 @@ func (r *countingRepository) AdmitRun(ctx context.Context, a artifact.Admission)
 	return r.Repository.AdmitRun(ctx, a)
 }
 
+func (r *countingRepository) AdmitRuns(ctx context.Context, as []artifact.Admission) ([]*artifact.RunRecord, error) {
+	r.runWrites.Add(int32(len(as)))
+	return r.Repository.AdmitRuns(ctx, as)
+}
+
 func (r *countingRepository) SaveRun(ctx context.Context, id, project string, expected uint64, terminal bool, index artifact.RunIndex, metadata, evidence []byte) (*artifact.RunRecord, error) {
 	r.runWrites.Add(1)
 	return r.Repository.SaveRun(ctx, id, project, expected, terminal, index, metadata, evidence)

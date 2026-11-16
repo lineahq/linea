@@ -18,14 +18,37 @@ config:
   storageLimit: 4GiB
   runLimit: 16MiB
   # oidc and/or trusted_headers, as in the server config, without
-  # client_secret_file (set oidc.clientSecret or oidc.existingSecret).
+  # client_secret_file (set oidc.clientSecret or oidc.existingSecret). The
+  # built-in admin account (admin below) is the third sign-in method; the
+  # chart sets its password_file.
   authentication: {}
-  # Required: without a binding nothing is allowed.
+  # Required unless the built-in admin account is on: without a binding
+  # nothing else is allowed. The admin account needs none.
   bindings: []
   limits: {}
   # Run history kept, as in the server config: runs (count) and age, such as
   # {runs: 10000, age: 30d}; empty keeps the server's defaults.
   retention: {}
+
+# The built-in admin account: the user admin, with the admin role on
+# everything and no binding to write
+# (authentication.admin.password_file in the server config). It signs in at
+# /sign-in and with `linea login`. The server refuses more than 5 failed
+# sign-ins a minute per client address and 20 in total, per instance; behind
+# an ingress the address is the ingress's, so one client can use up the limit
+# for the others.
+admin:
+  # null: on when config.authentication sets neither oidc nor trusted_headers,
+  # so an install with no identity provider can be signed in to. true or
+  # false decides. Turn it off once a group from your identity provider
+  # holds the admin role.
+  enabled: null
+  # The password, at least 16 characters on one line, or a Secret holding it
+  # under the key password. Generated once and kept when both are empty;
+  # read it from the Secret <release>-linea-admin (the notes the chart prints
+  # show the command).
+  password: ""
+  existingSecret: ""
 
 oidc:
   # The web client's secret at the identity provider, or a Secret holding
@@ -44,10 +67,17 @@ fleet:
   existingSecret: ""
   # Fleet and the live-capture plugin in this release, connected to the
   # server on their own (docs/debugger/deploy-kubernetes.md#fleet-and-live-capture).
-  # The chart generates the server's fleet token once, keeps it in a Secret
-  # and installs it as fleet's first admin; it does not expire. Each runs one
-  # pod that is replaced, not rolled, so its migrations, run by an init
-  # container, never overlap a running instance.
+  # The chart generates two fleet tokens once and keeps them, neither
+  # expiring, in the Secret <fullname>-fleet (the release's fullname and
+  # -fleet): operator-token, which it installs as an operator credential and
+  # gives the server, and token, which it installs as fleet's first admin and
+  # the server never gets. The admin token is for whoever administers fleet,
+  # to issue credentials and run plugin operations:
+  #   kubectl -n <namespace> get secret <fullname>-fleet -o jsonpath='{.data.token}' | base64 -d
+  # An upgrade of an earlier release keeps its token as the admin token and
+  # generates the operator token. Fleet and the plugin each run one pod that
+  # is replaced, not rolled, so their migrations, run by an init container,
+  # never overlap a running instance.
   deploy:
     enabled: false
     # The fleet identity recorded in its database; never change it later.
@@ -89,8 +119,8 @@ fleet:
     tolerations: []
     affinity: {}
     livecapture:
-      # Lets the server's fleet credential capture points a Collector marks
-      # raw (the plugin's raw_principals). Who may then capture raw is the
+      # Lets the server's fleet operator credential capture points a
+      # Collector marks raw (the plugin's raw_principals). Who may then capture raw is the
       # debugger's capture.raw permission. Off: only redacted points.
       rawCapture: false
       image:
@@ -132,19 +162,6 @@ server:
   drainSeconds: 25
   # Serve MCP at /mcp.
   mcp: true
-  # The build queue's metrics: GET /metrics in the Prometheus
-  # text format on a port of its own, counts only and without credentials,
-  # behind a Service named after the server's full name plus -metrics. On
-  # when enabled or when builder.autoscaling.kind is keda or hpa. With networkPolicy.enabled, a
-  # NetworkPolicy admits the port only from allowFrom (NetworkPolicy `from`
-  # peers; by default KEDA's namespace) and leaves the API port open.
-  metrics:
-    enabled: false
-    port: 9090
-    allowFrom:
-      - namespaceSelector:
-          matchLabels:
-            kubernetes.io/metadata.name: keda
   # TLS in the pod from a kubernetes.io/tls Secret. Without it the server
   # serves plain HTTP, for an ingress that ends TLS in front of it.
   tls:
@@ -170,7 +187,8 @@ server:
 
 store:
   # PostgreSQL, e.g. postgres://linea@db:5432/linea?sslmode=verify-full. The
-  # server creates and migrates its tables in this database.
+  # server creates and migrates its tables in this database, and needs only
+  # ownership of it, not superuser.
   databaseURL: ""
   objects:
     # The S3 API endpoint, http:// or https://.
@@ -181,6 +199,10 @@ store:
     region: ""
     # Path-style requests, as SeaweedFS and most self-hosted stores need.
     pathStyle: true
+    # Create the bucket at startup when it is missing (the credentials must
+    # allow it). Off: the bucket is yours and the server refuses to start
+    # without it. The bundled SeaweedFS always creates its bucket.
+    createBucket: false
     accessKey: ""
     secretKey: ""
   # A Secret holding database-url, access-key and secret-key instead of
@@ -200,7 +222,9 @@ postgresql:
     tag: "17"
     digest: sha256:b8faeff7712663c2773a190181e1246e37e364b887611c04658c28b44e2408fe
     pullPolicy: IfNotPresent
-  # The password of the user linea. Generated once and kept when empty.
+  # The password of the user linea, which owns the database linea, and of
+  # the superuser postgres, which works only inside the pod. Generated once
+  # and kept when empty.
   password: ""
   persistence:
     size: 10Gi
@@ -215,8 +239,9 @@ postgresql:
   tolerations: []
   affinity: {}
 
-# SeaweedFS with its S3 gateway. A Job per release creates the bucket. The
-# pool and builders reach it without networkPolicy.objectStorage.
+# SeaweedFS with its S3 gateway. The server creates the bucket at startup
+# (store.objects.create_bucket). The pool and builders reach it without
+# networkPolicy.objectStorage.
 seaweedfs:
   enabled: false
   image:
@@ -325,35 +350,8 @@ builder:
     pullPolicy: IfNotPresent
   # 0 turns builds off: the Deployment scales to zero and queued builds wait,
   # while the server keeps accepting builders (the build token stays).
-  # Ignored when autoscaling.kind is keda or hpa.
   replicas: 1
-  # Scaling with the build queue, for clusters that run an
-  # autoscaler; off by default. The target is one builder per `capacity`
-  # unfinished builds (linea_runtime_builds_unfinished, queued plus running).
-  #   none: builder.replicas pods.
-  #   keda: a KEDA ScaledObject reads the server's /metrics directly
-  #     (metrics-api trigger); minReplicas 0 runs no builder while nothing
-  #     is built. Needs KEDA's CRDs in the cluster.
-  #   hpa: an autoscaling/v2 HorizontalPodAutoscaler on the external metric
-  #     hpa.metricName, which your metrics adapter (such as
-  #     prometheus-adapter) must serve from the server's /metrics. The HPA
-  #     cannot scale to zero, so it keeps at least one builder.
-  # Both turn on server.metrics. A builder that is scaled in finishes its
-  # builds first (terminationGracePeriodSeconds).
-  autoscaling:
-    kind: none
-    minReplicas: 0
-    maxReplicas: 2
-    # KEDA: seconds without a build before the last builder stops, which
-    # keeps it warm for a follow-up build.
-    cooldownPeriod: 600
-    # KEDA: seconds between reads of /metrics.
-    pollingInterval: 30
-    hpa:
-      metricName: linea_runtime_builds_unfinished
-      # Labels that select the metric in the adapter, when it needs them.
-      selector: {}
-  # A builder that stops (scale-in, rolling update, node drain) finishes
+  # A builder that stops (scale-down, rolling update, node drain) finishes
   # the builds it runs, which take at most 30 minutes, then exits. 35
   # minutes covers that; a build still running at the end is retried once.
   terminationGracePeriodSeconds: 2100
@@ -374,7 +372,7 @@ builder:
   # warm across restarts and scaling to zero: existingClaim names your
   # claim, or create makes one with size, storageClassName and accessMode.
   # accessMode is also the existing claim's. ReadWriteOnce allows one
-  # builder (replicas, or autoscaling.maxReplicas, at most 1) and replaces
+  # builder (replicas at most 1) and replaces
   # the builder instead of rolling it, since two pods cannot mount it; with
   # more builders use ReadWriteMany.
   cache:
@@ -508,10 +506,23 @@ networkPolicy:
   #     ports: [{port: 443}]
   objectStorage: []
   # What builders may reach besides the above: the module proxy and the git
-  # hosts a manifest names. The default is open to every address; narrow it
-  # to your module proxy and git hosts. A NetworkPolicy matches addresses, not
-  # names, so give the CIDRs those hosts resolve to.
+  # hosts a manifest names. The default reaches public addresses only: a
+  # manifest cannot make a build reach the cluster, the private network or
+  # the cloud metadata endpoint. An internal module proxy, git host or
+  # registry is opt-in: replace the list with rules for it, such as
+  #   - to:
+  #       - ipBlock: {cidr: 10.30.0.0/16}
+  #     ports: [{port: 443}]
+  # A NetworkPolicy matches addresses, not names, so give the CIDRs those
+  # hosts resolve to.
   builderEgress:
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.168.0.0/16

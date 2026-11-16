@@ -203,6 +203,14 @@ func (s *Server) Close() {
 // token, and builders /v1/builders/connect with the build
 // token, instead of a principal's credential; a browser cannot open either:
 // the platform refuses an upgrade that carries an Origin.
+// Route is the API route pattern that serves r, such as
+// "GET /api/v1/runs/{id}", or "" for a request no API route serves. It
+// serves nothing; the server's tracing names request spans with it.
+func (s *Server) Route(r *http.Request) string {
+	_, pattern := s.mux.Handler(r)
+	return pattern
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case workersConnectPath:

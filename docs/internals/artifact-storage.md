@@ -47,9 +47,10 @@ debugger database `linea`; fleet uses its own database and role in the same
 cluster and the two never share tables.
 
 The server config's `store` block names the connection (`database_url_file`, a
-file holding a `postgres://` URL) and the object storage (`objects`:
-`endpoint`, `bucket`, `prefix`, `region`, `path_style`, `access_key_file`,
-`secret_key_file`); see [team-server.md](../debugger/team-server.md). The client is the
+file holding a `postgres://` URL, or `database_url` without a password plus
+`database_password_file`) and the object storage (`objects`:
+`endpoint`, `bucket`, `create_bucket`, `prefix`, `region`, `path_style`,
+`access_key_file`, `secret_key_file`); see [team-server.md](../debugger/team-server.md). The client is the
 AWS SDK for Go v2 with static credentials and checksums only where S3 requires
 them, so AWS S3, Ceph RGW, SeaweedFS and other S3-compatible services work.
 Self-hosted stores usually need `path_style: true`.
@@ -65,10 +66,23 @@ installation lock, so it never removes an object a writer is about to
 reference. The upkeep leader runs it in `Housekeep`. Reads verify the stored
 size and SHA-256 of every object; a missing or changed object is `ErrCorrupt`.
 
+`SaveRun` uploads a run's evidence before its transaction, so the
+installation lock is not held for the upload; under the lock it checks the
+object is still there and uploads it again if a sweep that listed an older
+object of that digest deleted it. An input bundle is still uploaded inside
+`AdmitRun`'s transaction. Every database session has a two-minute
+`statement_timeout` and a five-minute `idle_in_transaction_session_timeout`, so
+a hung statement or an abandoned transaction holding the lock ends; migrations
+lift the statement bound. S3 requests fail when the service sends no response
+headers within two minutes of the request body, which leaves long transfers
+unbounded.
+
 A build's binary is the one object written outside the installation lock:
-`StoreBuildBinary` copies the staged upload to its blob key without the lock,
-then, under it, checks the lease and the limit again, confirms the copy is
-still there when no row references its digest (a sweep that listed an older
+`StoreBuildBinary` checks the lease and the limit in a read-only transaction
+without the lock (it only refuses early), copies the staged upload to its blob
+key without the lock, then, under it, checks the lease and the limit again,
+confirms with a `Stat` that the copy is still there when no row references its
+digest (a sweep that listed an older
 object of that digest may have deleted it), and records it. A copy that check
 refuses is left to `Sweep`. `SaveRuntime` takes the lock too when an entry
 names a build, and refuses (`ErrConflict`) an entry naming a binary that the
@@ -110,7 +124,9 @@ A run record holds the run ID, admission ordinal, generation, terminal flag,
 bounded application metadata (8 KiB), optional evidence digest and size, and
 optional immutable input-bundle digest and size. `AdmitRun` uploads the bundle
 and inserts the run in one transaction; later lifecycle writes preserve that
-binding. A terminal write publishes the terminal flag, metadata and evidence
+binding. `AdmitRuns` admits several runs in one transaction under one
+installation lock: all of them or none, each member's principal count
+seeing the members before it. A terminal write publishes the terminal flag, metadata and evidence
 reference together. Terminal records cannot change; unfinished updates check
 the generation. The repository does not interpret Collector reports or replay
 work. The platform stores schema-2 evidence archives: engine report 0.5,

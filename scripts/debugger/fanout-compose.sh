@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # The shared platform's fan-out gate: starts the Compose stack
-# (deploy/compose/linea) as a disposable project with two instances and
-# FANOUT_POOLS pool workers, registers nothing (the pools register the
-# built-in runtime), sends FANOUT_RUNS runs that name no runtime
+# (deploy/compose/linea) as a disposable project, with the override
+# fanout-compose.yaml that runs two server instances behind a load balancer
+# and points the workers at it, and FANOUT_POOLS pool workers. It registers
+# nothing (the pools register the built-in runtime), signs in as the built-in
+# admin account for an API token, sends FANOUT_RUNS runs that name no runtime
 # through FANOUT_CLIENTS concurrent `linea test --server`, restarts one
 # instance once half of them were submitted, and fails unless every run
 # passes. The project, its volumes and its secrets are removed on exit.
@@ -11,8 +13,8 @@
 #
 # Settings: FANOUT_RUNS (200), FANOUT_CLIENTS (8), FANOUT_POOLS (4),
 # FANOUT_PORT (7079), FANOUT_SAMPLE (logs-cleanup); FANOUT_KEEP=1 keeps the
-# project and its files for inspection. The gate's networks are
-# fixed at 10.207.70-73.0/24, so stop a running local stack first.
+# project and its files for inspection. The gate publishes
+# 127.0.0.1:FANOUT_PORT, so stop a local stack on that port first.
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
 # Native paths: Go and Docker on Windows (Git Bash) cannot read /f/... paths.
@@ -28,24 +30,26 @@ project="linea-fanout-$id"
 work="$(native "$(mktemp -d)")"
 server="http://127.0.0.1:$port"
 
-export LINEA_PORT="$port"
-# The gate's shape, whatever the shell sets: two instances, so one can
-# restart, and pools of capacity 4.
-export LINEA_REPLICAS=2 LINEA_POOL_CAPACITY=4
-# Fixed subnets beside the stack's edge network, so the gate also runs on a
-# host whose Docker default address pools are used up.
-cat > "$work/subnets.yaml" <<'YAML'
-networks:
-  database: {ipam: {config: [{subnet: 10.207.71.0/24}]}}
-  storage: {ipam: {config: [{subnet: 10.207.72.0/24}]}}
-  ingress: {ipam: {config: [{subnet: 10.207.73.0/24}]}}
-YAML
-compose() { docker compose -p "$project" --env-file "$work/.env" -f "$root/deploy/compose/linea/compose.yaml" -f "$work/subnets.yaml" "$@"; }
+# The gate's settings come from this script and its .env, not from the
+# shell: --env-file loses to the environment. LINEA_VERSION stays, to name
+# the images.
+for v in $(compgen -e); do
+  case "$v" in
+    LINEA_VERSION) ;;
+    LINEA_*) unset "$v" ;;
+  esac
+done
+# The gate's shape: pools of capacity 4, the balancer on $port.
+export LINEA_PORT="$port" LINEA_POOL_CAPACITY=4
+compose() {
+  docker compose -p "$project" --env-file "$work/.env" \
+    -f "$root/deploy/compose/linea/compose.yaml" -f "$root/scripts/debugger/fanout-compose.yaml" "$@"
+}
 
 cleanup() {
   status=$?
   if [ "$status" -ne 0 ]; then
-    compose logs --no-color --tail 40 linea pool >&2 2>&1 || true
+    compose logs --no-color --tail 40 linea lb pool >&2 2>&1 || true
   fi
   if [ "${FANOUT_KEEP:-}" = 1 ]; then
     echo "kept: docker compose -p $project, its .env and runs in $work" >&2
@@ -57,21 +61,39 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# The stack's .env, with fresh random values; --env-file keeps a local
-# deploy/compose/linea/.env out of the gate.
-for name in POSTGRES_PASSWORD S3_ACCESS_KEY S3_SECRET_KEY WORKER_TOKEN BUILDER_TOKEN; do
-  echo "LINEA_$name=$(od -An -N32 -tx1 /dev/urandom | tr -d ' 
-')"
-done >"$work/.env"
+# The stack's secrets: fresh random files in the gate's own directory (the
+# identity provider's stays empty), named by LINEA_SECRETS_DIR in an .env
+# of its own, so a local deploy/compose/linea/.env and secrets/ stay out of
+# the gate.
+random() { od -An -N32 -tx1 /dev/urandom | tr -d ' \n'; }
+mkdir "$work/secrets"
+for name in postgres_password s3_access_key s3_secret_key worker_token builder_token admin_password; do
+  random >"$work/secrets/$name"
+done
+: >"$work/secrets/oidc_client_secret"
+echo "LINEA_SECRETS_DIR=$work/secrets" >"$work/.env"
 linea="$work/bin/linea$(go env GOEXE)"
 go build -C "$root" -o "$linea" ./cmd/linea
 
-echo "Starting $project: 2 instances, $pools pools"
+echo "Starting $project: 2 instances behind a load balancer, $pools pools"
 # The gate runs no builds: leave out the builder (its image compiles the
 # worker source into a Go toolchain image), and with it the egress network.
 # The pools run only their own build, so sharing the cache volume costs
-# nothing: they download no binary.
-compose up -d --build --scale "pool=$pools" proxy pool
+# nothing: they download no binary. --wait returns once PostgreSQL,
+# SeaweedFS, both instances and the balancer are healthy and the pools run.
+compose up -d --build --wait --wait-timeout 600 --scale "pool=$pools" lb pool
+
+# The CLI signs in as the built-in admin account for an API token. The
+# password goes to curl on stdin, never into a command line or the output.
+admin_password="$(cat "$work/secrets/admin_password")"
+reply="$(printf '{"user":"admin","password":"%s","client":"cli"}' "$admin_password" |
+  curl -fsS -H 'Content-Type: application/json' --data-binary @- "$server/auth/password")" ||
+  { echo "the admin sign-in failed" >&2; exit 1; }
+LINEA_TOKEN="$(printf '%s' "$reply" | sed -n 's/.*"token" *: *"\([^"]*\)".*/\1/p')"
+unset admin_password reply
+[ -n "$LINEA_TOKEN" ] || { echo "the admin sign-in returned no token" >&2; exit 1; }
+export LINEA_TOKEN
+
 # Nobody registers a runtime: wait until a pool registered the built-in one
 # and it is the only runtime, the default.
 deadline=$((SECONDS + 180))
@@ -80,21 +102,17 @@ until "$linea" runtime list --server "$server" >"$work/runtimes.out" 2>&1 &&
   [ "$SECONDS" -lt "$deadline" ] || { cat "$work/runtimes.out" >&2; exit 1; }
   sleep 2
 done
-# The proxy signs requests in as the local admin, so it refuses other host
-# names: a page rebound to 127.0.0.1 must not reach the API.
-rebound="$(curl -s -o "$work/rebound.out" -w '%{http_code}' -H 'Host: rebound.example' "$server/api/v1/runs")"
-[ "$rebound" = 421 ] || { echo "a rebound host name got $rebound, want 421" >&2; exit 1; }
 
 # One run: its exit code and output land in $work/runs/<n>.
 mkdir -p "$work/runs"
-cat > "$work/run.sh" <<EOF
+cat > "$work/run.sh" <<RUN
 #!/usr/bin/env bash
 touch "$work/runs/\$1.started"
 cd "$root"
 "$linea" test --server "$server" --config "samples/$sample/config.yaml" --scenario "samples/$sample/scenario.yaml" \
   > "$work/runs/\$1.out" 2>&1
 echo \$? > "$work/runs/\$1.code"
-EOF
+RUN
 chmod +x "$work/run.sh"
 
 start=$SECONDS

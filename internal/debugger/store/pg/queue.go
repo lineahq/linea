@@ -14,7 +14,9 @@ import (
 
 const assignmentColumns = "id, runtime, worker, queue_state, attempt, released, lease_expires_at, cancel_requested, generation, binary_digest, binary_bytes, binary_platform"
 
-func scanAssignment(row pgx.Row) (artifact.Assignment, error) {
+// scanAssignment reads an assignment; fromDB moves its lease back onto the
+// caller's clock (clock.go).
+func scanAssignment(row pgx.Row, fromDB func(time.Time) time.Time) (artifact.Assignment, error) {
 	var a artifact.Assignment
 	var state string
 	var expires *time.Time
@@ -24,7 +26,7 @@ func scanAssignment(row pgx.Row) (artifact.Assignment, error) {
 		&bin.Digest, &bin.Bytes, &bin.Platform)
 	a.State, a.Attempt, a.Released, a.Generation = artifact.QueueState(state), int(attempt), int(released), uint64(generation)
 	if expires != nil {
-		a.Expires = expires.UTC()
+		a.Expires = fromDB(*expires)
 	}
 	if bin.Digest != "" {
 		a.Binary = &bin
@@ -32,11 +34,11 @@ func scanAssignment(row pgx.Row) (artifact.Assignment, error) {
 	return a, err
 }
 
-func collectAssignments(rows pgx.Rows, op string) ([]artifact.Assignment, error) {
+func collectAssignments(rows pgx.Rows, op string, fromDB func(time.Time) time.Time) ([]artifact.Assignment, error) {
 	defer rows.Close()
 	out := []artifact.Assignment{}
 	for rows.Next() {
-		a, err := scanAssignment(rows)
+		a, err := scanAssignment(rows, fromDB)
 		if err != nil {
 			return nil, storageErr(op, err)
 		}
@@ -78,6 +80,10 @@ func (s *Store) claim(ctx context.Context, worker, runtime, platform string, n i
 	if n == 0 {
 		return []artifact.Assignment{}, nil
 	}
+	toDB, fromDB, err := s.leaseClock(ctx)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.pool.Query(ctx, `WITH picked AS (
 			SELECT id FROM runs WHERE queue_state = 'queued' AND runtime = $1
 				AND ($5 = '' OR (binary_platform = $5 AND binary_digest <> ''))
@@ -86,11 +92,11 @@ func (s *Store) claim(ctx context.Context, worker, runtime, platform string, n i
 			UPDATE runs r SET queue_state = 'assigned', worker = $3, attempt = r.attempt + 1, lease_expires_at = $4
 			FROM picked WHERE r.id = picked.id RETURNING r.*)
 		SELECT `+assignmentColumns+` FROM claimed ORDER BY priority, ordinal`,
-		runtime, n, worker, expires.UTC(), platform)
+		runtime, n, worker, toDB(expires), platform)
 	if err != nil {
 		return nil, storageErr("claim", err)
 	}
-	return collectAssignments(rows, "claim")
+	return collectAssignments(rows, "claim", fromDB)
 }
 
 // Start moves an assignment the worker still holds to running.
@@ -117,13 +123,17 @@ func (s *Store) Renew(ctx context.Context, worker string, expires time.Time) ([]
 	if !validWorker(worker) || expires.IsZero() {
 		return nil, invalid("invalid renewal")
 	}
+	toDB, fromDB, err := s.leaseClock(ctx)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.pool.Query(ctx, `UPDATE runs SET lease_expires_at = $2
 		WHERE worker = $1 AND queue_state IN ('assigned', 'running')
-		RETURNING `+assignmentColumns, worker, expires.UTC())
+		RETURNING `+assignmentColumns, worker, toDB(expires))
 	if err != nil {
 		return nil, storageErr("renew", err)
 	}
-	out, err := collectAssignments(rows, "renew")
+	out, err := collectAssignments(rows, "renew", fromDB)
 	slices.SortFunc(out, func(x, y artifact.Assignment) int { return cmp.Compare(x.RunID, y.RunID) })
 	return out, err
 }
@@ -133,8 +143,12 @@ func (s *Store) RequestCancel(ctx context.Context, id string) (artifact.Assignme
 	if err := s.ready(ctx); err != nil {
 		return artifact.Assignment{}, err
 	}
+	_, fromDB, err := s.leaseClock(ctx)
+	if err != nil {
+		return artifact.Assignment{}, err
+	}
 	var out artifact.Assignment
-	err := s.inTx(ctx, "cancel", func(tx pgx.Tx) error {
+	err = s.inTx(ctx, "cancel", func(tx pgx.Tx) error {
 		var terminal bool
 		err := tx.QueryRow(ctx, "SELECT terminal FROM runs WHERE id = $1 FOR UPDATE", id).Scan(&terminal)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -149,23 +163,28 @@ func (s *Store) RequestCancel(ctx context.Context, id string) (artifact.Assignme
 		out, err = scanAssignment(tx.QueryRow(ctx, `UPDATE runs SET cancel_requested = true,
 				queue_state = CASE WHEN worker = '' THEN NULL ELSE queue_state END
 			WHERE id = $1 RETURNING id, runtime, worker, coalesce(queue_state, ''), attempt, released, lease_expires_at, cancel_requested, generation,
-				binary_digest, binary_bytes, binary_platform`, id))
+				binary_digest, binary_bytes, binary_platform`, id), fromDB)
 		return err
 	})
 	return out, err
 }
 
-// Expired lists leases that ended before now.
+// Expired lists leases that ended before now, judged on the database's
+// clock.
 func (s *Store) Expired(ctx context.Context, now time.Time) ([]artifact.Assignment, error) {
 	if err := s.ready(ctx); err != nil {
 		return nil, err
 	}
+	toDB, fromDB, err := s.leaseClock(ctx)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.pool.Query(ctx, `SELECT `+assignmentColumns+` FROM runs
-		WHERE queue_state IN ('assigned', 'running') AND lease_expires_at < $1 ORDER BY ordinal`, now.UTC())
+		WHERE queue_state IN ('assigned', 'running') AND lease_expires_at < $1 ORDER BY ordinal`, toDB(now))
 	if err != nil {
 		return nil, storageErr("expired leases", err)
 	}
-	return collectAssignments(rows, "expired leases")
+	return collectAssignments(rows, "expired leases", fromDB)
 }
 
 // Requeue returns an expired assignment's run to the queue, once per lease.
@@ -173,10 +192,14 @@ func (s *Store) Requeue(ctx context.Context, a artifact.Assignment, now time.Tim
 	if err := s.ready(ctx); err != nil {
 		return 0, err
 	}
+	toDB, _, err := s.leaseClock(ctx)
+	if err != nil {
+		return 0, err
+	}
 	var generation int64
-	err := s.pool.QueryRow(ctx, `UPDATE runs SET queue_state = 'queued', worker = '', lease_expires_at = NULL, generation = generation + 1, updated_at = now()
+	err = s.pool.QueryRow(ctx, `UPDATE runs SET queue_state = 'queued', worker = '', lease_expires_at = NULL, generation = generation + 1, updated_at = now()
 		WHERE id = $1 AND worker = $2 AND attempt = $3 AND queue_state IN ('assigned', 'running') AND lease_expires_at < $4
-		RETURNING generation`, a.RunID, a.Worker, a.Attempt, now.UTC()).Scan(&generation)
+		RETURNING generation`, a.RunID, a.Worker, a.Attempt, toDB(now)).Scan(&generation)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, artifact.ErrConflict
 	}
@@ -210,7 +233,11 @@ func (s *Store) Assignment(ctx context.Context, id string) (artifact.Assignment,
 	if err := s.ready(ctx); err != nil {
 		return artifact.Assignment{}, err
 	}
-	a, err := scanAssignment(s.pool.QueryRow(ctx, "SELECT "+assignmentColumns+" FROM runs WHERE id = $1 AND queue_state IS NOT NULL", id))
+	_, fromDB, err := s.leaseClock(ctx)
+	if err != nil {
+		return artifact.Assignment{}, err
+	}
+	a, err := scanAssignment(s.pool.QueryRow(ctx, "SELECT "+assignmentColumns+" FROM runs WHERE id = $1 AND queue_state IS NOT NULL", id), fromDB)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return artifact.Assignment{}, artifact.ErrNotFound
 	}

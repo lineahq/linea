@@ -31,11 +31,19 @@ export interface HowItRuns {
   /** A stand-in is a warning; every other mode is an explanation. */
   warn: boolean;
   facts: [string, string][];
+  /** What the real component does in a deployment that a run does not show. */
+  notShown: string[];
   pipelines: { id: string; position?: string }[];
   available: { ok: boolean; text: string };
 }
 
-const sentence = (s: string) => (/[.!?]$/.test(s) ? s : `${s}.`);
+/** modeTitle is the tooltip of a component's mode chip: its note, then each behavior a run does not show. */
+export function modeTitle(c: TopologyComponent): string | undefined {
+  const lines = [c.note, ...(c.not_shown ?? []).map((g) => `Not shown: ${g.detail}`)].filter(Boolean);
+  return lines.length ? lines.join('\n') : undefined;
+}
+
+const sentence = (s: string) =>(/[.!?]$/.test(s) ? s : `${s}.`);
 
 /** howItRuns explains how a component will execute in the next run, from its execution mode. */
 export function howItRuns(c: TopologyComponent, graph?: Graph): HowItRuns {
@@ -82,6 +90,7 @@ export function howItRuns(c: TopologyComponent, graph?: Graph): HowItRuns {
     body,
     warn: standIn,
     facts,
+    notShown: (c.not_shown ?? []).map((g) => g.detail),
     pipelines,
     available: standIn
       ? { ok: false, text: 'Not available in the selected runtime' }

@@ -130,6 +130,8 @@ type UpgradeCheckRequest struct {
 // runtime difference alone never makes a scenario different.
 func (s *Service) CheckUpgrade(ctx context.Context, caller Caller, req UpgradeCheckRequest) (_ *UpgradeCheck, err error) {
 	defer s.audit(&caller, "CheckUpgrade", &err)()
+	// The operations below share one catch-up and each runtime's binding.
+	ctx = withRequestScope(ctx)
 	if err := s.begin(ctx, caller, authz.RunSubmit); err != nil {
 		return nil, err
 	}

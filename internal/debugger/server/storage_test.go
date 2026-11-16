@@ -56,12 +56,12 @@ func TestServerConfigStorageLimits(t *testing.T) {
 		{"run_limit: 512MiB", "run_limit 512 MiB exceeds storage_limit 256 MiB"},
 		{"storage_limit: lots", "store.storage_limit: invalid size"},
 	} {
-		_, err := loadConfig(writeTeam(t, strings.Replace(teamYAML(), "storage_limit: 64MiB", tc.limits, 1)))
+		_, err := loadTest(writeTeam(t, strings.Replace(teamYAML(), "storage_limit: 64MiB", tc.limits, 1)))
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%q: %v; want %q", tc.limits, err, tc.want)
 		}
 	}
-	tm, err := loadConfig(writeTeam(t, strings.Replace(teamYAML(), "storage_limit: 64MiB", "storage_limit: 64MiB\n  run_limit: 4MiB", 1)))
+	tm, err := loadTest(writeTeam(t, strings.Replace(teamYAML(), "storage_limit: 64MiB", "storage_limit: 64MiB\n  run_limit: 4MiB", 1)))
 	if err != nil || tm.limits.storage != 64<<20 || tm.limits.run != 4<<20 || tm.store.Limits.RunBytes != 4<<20 {
 		t.Fatalf("limits = %+v, %v", tm, err)
 	}
@@ -69,7 +69,7 @@ func TestServerConfigStorageLimits(t *testing.T) {
 	if got := tm.store.Limits.BuildBytes; got != 8<<20 {
 		t.Errorf("build reservation = %d; want 8 MiB", got)
 	}
-	tm, err = loadConfig(writeTeam(t, strings.Replace(teamYAML(), "storage_limit: 64MiB", "storage_limit: 4GiB", 1)))
+	tm, err = loadTest(writeTeam(t, strings.Replace(teamYAML(), "storage_limit: 64MiB", "storage_limit: 4GiB", 1)))
 	if err != nil || tm.store.Limits.BuildBytes != artifact.BuildAllowance {
 		t.Errorf("build reservation at 4GiB = %+v, %v; want %d", tm.store.Limits, err, artifact.BuildAllowance)
 	}

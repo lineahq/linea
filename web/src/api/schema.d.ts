@@ -2554,6 +2554,7 @@ export interface components {
             id: string;
             kind: string;
             mode: string;
+            not_shown?: components["schemas"]["Gap"][];
             note?: string;
             pipelines?: string[];
             provider?: string;
@@ -3109,6 +3110,10 @@ export interface components {
             total: number;
             value: string;
         };
+        Gap: {
+            code: string;
+            detail: string;
+        };
         Graph: {
             components?: components["schemas"]["Component"][];
             edges?: components["schemas"]["Edge"][];
@@ -3547,6 +3552,7 @@ export interface components {
             stages?: components["schemas"]["Stage"][];
             timestamps?: components["schemas"]["Timestamps"];
             topology?: components["schemas"]["Graph"];
+            warnings?: components["schemas"]["RunWarning"][];
         };
         ReportCustomModule: {
             commit?: string;
@@ -3576,6 +3582,7 @@ export interface components {
             module_set?: string;
             name?: string;
             providers?: components["schemas"]["ReportProvider"][];
+            self_check?: components["schemas"]["SelfCheck"][];
             verified: boolean;
         };
         Request: {
@@ -3811,6 +3818,12 @@ export interface components {
             stand_ins?: number;
             truncated_reason?: string;
             uri?: string;
+            warnings?: components["schemas"]["RunWarning"][];
+        };
+        RunWarning: {
+            code: string;
+            component?: string;
+            detail: string;
         };
         Runtime: {
             catalog?: components["schemas"]["RuntimeCatalogEntry"];
@@ -3826,6 +3839,7 @@ export interface components {
             projects?: string[];
             protocol: number;
             providers?: components["schemas"]["ReportProvider"][];
+            self_check?: components["schemas"]["SelfCheck"][];
             size: number;
             tags?: string[];
             verified: boolean;
@@ -4016,6 +4030,11 @@ export interface components {
             path: string;
             run_id?: string;
         };
+        SelfCheck: {
+            code: string;
+            detail?: string;
+            ok: boolean;
+        };
         Sent: {
             component: string;
             confidence: string;
@@ -4166,6 +4185,7 @@ export interface components {
             projects?: string[];
             protocol: number;
             providers?: components["schemas"]["ReportProvider"][];
+            self_check?: components["schemas"]["SelfCheck"][];
             size: number;
             state: string;
             tags?: string[];

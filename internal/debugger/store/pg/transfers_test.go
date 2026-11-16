@@ -66,6 +66,16 @@ func (m *memObjects) Open(_ context.Context, key string) (ObjectReader, error) {
 	return ObjectReader{Body: io.NopCloser(bytes.NewReader(raw)), Size: int64(len(raw)), ETag: digestOf(raw)}, nil
 }
 
+func (m *memObjects) Stat(_ context.Context, key string) (ObjectInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	raw, ok := m.objects[key]
+	if !ok {
+		return ObjectInfo{}, ErrObjectNotFound
+	}
+	return ObjectInfo{Key: key, Size: int64(len(raw)), Modified: m.modTime[key]}, nil
+}
+
 func (m *memObjects) Copy(_ context.Context, src, dst, ifMatch string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

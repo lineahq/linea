@@ -80,4 +80,19 @@ describe('limitations', () => {
       { level: 'error', text: 'The engine could not run the request: bad config' },
     ]);
   });
+  it('warns where the instrumentation itself may be wrong', () => {
+    const l = limitations(
+      run({
+        result: { mode: 'instrumented', status: 'completed' },
+        warnings: [
+          { code: 'self_check_failed', detail: 'connector_routes: routes do not name their pipelines' },
+          { code: 'unattributed_stage', component: 'batch', detail: 'the Collector gave this processor no pipeline ID' },
+        ],
+      }),
+    );
+    expect(l.filter((x) => x.level === 'warning').map((x) => x.text)).toEqual([
+      'The runtime failed its self-check, so this evidence may be wrong: connector_routes: routes do not name their pipelines.',
+      'batch: the Collector gave this processor no pipeline ID.',
+    ]);
+  });
 });

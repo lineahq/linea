@@ -16,6 +16,7 @@ import (
 	"github.com/lineahq/linea/internal/debugger/container"
 	"github.com/lineahq/linea/internal/debugger/engine"
 	"github.com/lineahq/linea/internal/debugger/release"
+	"github.com/lineahq/linea/internal/debugger/runresult"
 	"github.com/lineahq/linea/internal/debugger/worker"
 )
 
@@ -50,6 +51,9 @@ type RuntimeInfo struct {
 	CustomModules []CustomModule
 	// Providers are the debugger providers the custom modules export.
 	Providers []RuntimeProvider
+	// SelfCheck is the runtime's self-check from its worker's hello; nil
+	// when no worker reported one.
+	SelfCheck []SelfCheck
 	// Size is the image's size in bytes, when the store knows it.
 	Size int64
 	// Catalog is set for a runtime of the catalog.
@@ -69,6 +73,9 @@ type RuntimeInfo struct {
 // CustomModule is a module a runtime was built from a supplied source,
 // with the git commit when the source was a repository.
 type CustomModule = engine.ReportCustomModule
+
+// SelfCheck is one check of a runtime's self-check.
+type SelfCheck = runresult.SelfCheck
 
 // RuntimeProvider is a component module's debugger provider in a runtime.
 type RuntimeProvider = engine.ReportProvider
@@ -176,6 +183,7 @@ func (b *boundRuntime) stamp(rep *engine.Report) {
 		rt.FeatureGates = rep.Runtime.FeatureGates
 		rt.MissingFeatures = rep.Runtime.MissingFeatures
 		rt.Providers = rep.Runtime.Providers
+		rt.SelfCheck = rep.Runtime.SelfCheck
 	}
 	if rt.FeatureGates == nil {
 		rt.FeatureGates = []release.FeatureGate{}
@@ -272,6 +280,19 @@ func checkProtocol(info *RuntimeInfo) error {
 // first use: the catalog's runtime first, served by connected workers, then the
 // store's. A runtime neither has is unavailable, naming it.
 func (s *Service) bind(ctx context.Context, name string) (*boundRuntime, error) {
+	sc := scopeOf(ctx)
+	if b := sc.boundRuntime(name); b != nil {
+		return b, nil
+	}
+	b, err := s.bindRuntime(ctx, name)
+	if err == nil {
+		sc.keep(name, b)
+	}
+	return b, err
+}
+
+// bindRuntime is bind without the request's scope.
+func (s *Service) bindRuntime(ctx context.Context, name string) (*boundRuntime, error) {
 	if name == BuiltInRuntime && s.builtInOnWorkers {
 		return s.bindBuiltIn(ctx)
 	}
@@ -544,6 +565,12 @@ type unbindOnFailure struct {
 }
 
 func (u *unbindOnFailure) Target() engine.RuntimeTarget { return u.b.target }
+
+// isPooled reports whether rt runs on a pooled worker.
+func isPooled(rt Runtime) bool {
+	u, ok := rt.(*unbindOnFailure)
+	return ok && u.b.pooled
+}
 
 // policyFor is the capture policy for a runtime: a connected worker receives
 // only the environment values its policy lets leave the machine.

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/lineahq/linea/build/versions"
 	"github.com/lineahq/linea/internal/debugger/artifact"
 	"github.com/lineahq/linea/internal/debugger/authz"
@@ -51,6 +53,9 @@ type serverBuildSpec struct {
 	Warnings         []string `json:"warnings,omitempty"`
 	GoImage          string   `json:"go_image"`
 	Builder          string   `json:"builder"`
+	// Submitted is the span of the request that asked for the build. It
+	// is not part of the build key.
+	Submitted *storedSpan `json:"submitted,omitempty"`
 }
 
 // serverBuildResult is a server build's stored outcome: an error, or the
@@ -92,6 +97,9 @@ func (s *Service) queueServerBuild(ctx context.Context, caller Caller, builds ar
 	if src.Path != "" {
 		return nil, &Error{Code: CodeInvalidRequest, Message: "a team server reads no manifest file: send the manifest's text or a saved manifest"}
 	}
+	if err := s.mayTakeRuntimeName(ctx, caller, req.Name); err != nil {
+		return nil, err
+	}
 	if _, err := s.resolveSource(ctx, caller, &src, artifact.Manifest, "manifest"); err != nil {
 		return nil, err
 	}
@@ -112,7 +120,8 @@ func (s *Service) queueServerBuild(ctx context.Context, caller Caller, builds ar
 		return nil, classify(err, CodeValidationFailed)
 	}
 	spec := serverBuildSpec{Name: req.Name, CollectorVersion: m.CollectorVersion(), Verified: support == versions.Verified,
-		Warnings: manifest.Warnings(raw), GoImage: container.GoImage, Builder: builderVersion}
+		Warnings: manifest.Warnings(raw), GoImage: container.GoImage, Builder: builderVersion,
+		Submitted: storeSpan(trace.SpanContextFromContext(ctx))}
 	var modules []string
 	for _, e := range m.Entries() {
 		modules = append(modules, e.ModulePath())
@@ -125,7 +134,7 @@ func (s *Service) queueServerBuild(ctx context.Context, caller Caller, builds ar
 		return nil, err
 	}
 	record, err := builds.AdmitBuild(ctx, artifact.BuildAdmission{
-		ID: instrument.NewRunID(), Principal: caller.Principal.ID, Name: req.Name, Key: buildKey(raw, sources, spec),
+		ID: newBuildID(), Principal: caller.Principal.ID, Name: req.Name, Key: buildKey(raw, sources, spec),
 		Spec: encoded, Manifest: raw, Sources: sources, Created: time.Now().UTC(),
 	}, artifact.BuildLimits{PerPrincipal: serverBuildsPerPrincipal, Total: serverBuildsTotal})
 	if errors.Is(err, artifact.ErrLimit) {
@@ -402,4 +411,10 @@ func (s *Service) buildChanged(id string) {
 		close(s.buildQueued)
 		s.buildQueued = nil
 	}
+}
+
+// newBuildID returns a new random build ID ("build-" and 16 hex digits).
+// Builds admitted before IDs had their own prefix keep their "run-" IDs.
+func newBuildID() string {
+	return "build-" + strings.TrimPrefix(instrument.NewRunID(), "run-")
 }

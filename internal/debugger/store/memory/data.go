@@ -52,7 +52,10 @@ type Data struct {
 	admitted map[string]time.Time          // when each run was admitted, for retention
 	queue    entries                       // unfinished admitted runs by ID
 	pins     map[string]artifact.RunBinary // binary of each unfinished run admitted with one, by run ID
-	runtimes runtimeCatalog
+	// principals is the principal of each unfinished run admitted with one,
+	// by run ID (Admission.PrincipalRuns).
+	principals map[string]string
+	runtimes   runtimeCatalog
 	// defaultRuntime is nil until one is set.
 	defaultRuntime *artifact.DefaultRuntime
 	captures       *captureCatalog
@@ -72,7 +75,8 @@ type Data struct {
 
 // NewData returns empty storage with a new workspace ID.
 func NewData() *Data {
-	d := &Data{blobs: map[string][]byte{}, admitted: map[string]time.Time{}, queue: entries{}, pins: map[string]artifact.RunBinary{}, runtimes: runtimeCatalog{}, logins: map[string]artifact.LoginRecord{}}
+	d := &Data{blobs: map[string][]byte{}, admitted: map[string]time.Time{}, queue: entries{}, pins: map[string]artifact.RunBinary{},
+		principals: map[string]string{}, runtimes: runtimeCatalog{}, logins: map[string]artifact.LoginRecord{}}
 	d.cat = catalog{Workspace: artifact.Info{ID: newID(), Schema: artifact.SchemaVersion},
 		Artifacts: map[string]artifact.Metadata{}, Revisions: map[string]artifact.Revision{}}
 	d.catSize = encodedSize(d.cat)

@@ -50,7 +50,7 @@ func run(t *testing.T, f processor.Factory) (ptrace.Traces, bool) {
 	t.Helper()
 	ctx := context.Background()
 	sink := new(consumertest.TracesSink)
-	p, err := f.CreateTraces(ctx, processortest.NewNopSettings(f.Type()), transformConfig(t, f), sink)
+	p, err := f.CreateTraces(ctx, attributedSettings(f.Type()), transformConfig(t, f), sink)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestProcessorRecordsOwnErrorsOnly(t *testing.T) {
 				t.Fatal(err)
 			}
 			rec := NewRecorder()
-			p, err := Processor(f, rec).CreateTraces(context.Background(), processortest.NewNopSettings(f.Type()), cfg, tt.next)
+			p, err := Processor(f, rec).CreateTraces(context.Background(), attributedSettings(f.Type()), cfg, tt.next)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -224,4 +224,12 @@ func mustJSON(t *testing.T, p telemetry.Payload) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// attributedSettings are nop settings whose logger carries a pipeline ID,
+// as the Collector's do.
+func attributedSettings(typ component.Type) processor.Settings {
+	set := processortest.NewNopSettings(typ)
+	set.Logger = zap.NewNop().WithOptions(zap.WrapCore(WrapCore)).With(zap.String(pipelineIDKey, "traces"))
+	return set
 }

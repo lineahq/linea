@@ -8,6 +8,7 @@ import (
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componenttest"
+	"go.opentelemetry.io/collector/processor"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
@@ -111,5 +112,31 @@ func TestComponentMetricsAreReadAtTheEnd(t *testing.T) {
 	}
 	if again := rec.ComponentMetrics(context.Background()); len(again) != 0 {
 		t.Errorf("metrics read twice: %+v", again)
+	}
+}
+
+// TestAProcessorWithoutAPipelineIsAWarning: a processor whose logger carries
+// no pipeline ID logs a warning the report shows as its own; one that has
+// it logs nothing.
+func TestAProcessorWithoutAPipelineIsAWarning(t *testing.T) {
+	root := zap.NewNop().WithOptions(zap.WrapCore(WrapCore))
+	for name, tc := range map[string]struct {
+		logger *zap.Logger
+		warned bool
+	}{
+		"attributed":   {root.With(zap.String(pipelineIDKey, "logs/a")), false},
+		"unattributed": {root, true},
+	} {
+		rec := NewRecorder()
+		set := processor.Settings{ID: component.MustNewID("batch"), TelemetrySettings: componenttest.NewNopTelemetrySettings()}
+		set.Logger = tc.logger
+		newStage(set, "logs", rec).observe(set)
+		var warned bool
+		for _, e := range rec.Events() {
+			warned = warned || e.Kind == KindComponentLog && e.Log.Level == "warn" && e.Log.Message == UnattributedWarning && e.Component == "batch"
+		}
+		if warned != tc.warned {
+			t.Errorf("%s: warned %v, want %v (events %+v)", name, warned, tc.warned, rec.Events())
+		}
 	}
 }

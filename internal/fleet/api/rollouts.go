@@ -46,7 +46,7 @@ func (h *Handler) rolloutCollection(w http.ResponseWriter, r *http.Request, p au
 	}
 	ctx := r.Context()
 	if r.Method == "POST" {
-		if !admin(w, p) || !noQuery(w, r) {
+		if !manager(w, p) || !noQuery(w, r) {
 			return
 		}
 		body := rolloutBody{rolloutPolicy: *defaultRollout()}
@@ -126,7 +126,7 @@ func (h *Handler) rolloutItem(w http.ResponseWriter, r *http.Request, p auth.Pri
 			failure(w, fleet.ErrNotFound)
 			return
 		}
-		if !method(w, r, "POST") || !admin(w, p) || !noQuery(w, r) {
+		if !method(w, r, "POST") || !manager(w, p) || !noQuery(w, r) {
 			return
 		}
 		view, err := h.configs.ControlRollout(ctx, p.ID, id, c)

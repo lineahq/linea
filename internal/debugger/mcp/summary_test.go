@@ -202,3 +202,18 @@ func TestSummaryFactsCountEndpointOutputsAndComponentLogs(t *testing.T) {
 		t.Fatalf("facts = %q", facts)
 	}
 }
+
+// TestSummaryFactsNameRunWarnings: the summary names each run warning's code
+// and component, so an agent knows where the evidence may be wrong.
+func TestSummaryFactsNameRunWarnings(t *testing.T) {
+	facts := summaryFacts(&platform.RunSummary{Complete: true, Warnings: []platform.RunWarning{
+		{Code: platform.WarningSelfCheckFailed, Detail: "connector_routes: ..."},
+		{Code: platform.WarningUnattributedStage, Component: "batch", Detail: "..."},
+	}})
+	if !strings.Contains(facts, "; 2 run warnings (self_check_failed) (unattributed_stage: batch)") {
+		t.Fatalf("facts = %q", facts)
+	}
+	if facts := summaryFacts(&platform.RunSummary{Complete: true}); strings.Contains(facts, "warning") {
+		t.Fatalf("facts = %q", facts)
+	}
+}

@@ -4,9 +4,10 @@ package platform
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
+
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/lineahq/linea/internal/debugger/runresult"
 
@@ -103,17 +104,20 @@ type Handle struct {
 	attempt     int
 	kept        bool
 	generation  uint64
-	// shared is set when other instances publish the run too (Options.Shared):
-	// a publication they superseded leaves the handle unfinished.
-	shared bool
 	// ordinal is the run's admission order in the repository; zero without
 	// one. stored is set while the repository holds the run's terminal
 	// state, so a cache may drop the handle and read it again.
 	ordinal uint64
 	stored  bool
-	// used is when the service last read the run (Service.uses), under the
-	// service's mu.
+	// used is when the service last admitted, ended or read the run
+	// (Service.uses), under the service's mu.
 	used uint64
+	// submitted is the span of the request that submitted the run, stored
+	// with it so every instance that runs an attempt links to it.
+	submitted trace.SpanContext
+	// weight is the decoded size of the stored evidence the handle holds,
+	// which bounds the run cache (RunCacheBytes).
+	weight int64
 	// requestCancel marks the run in the queue; held reports that a worker
 	// holds it, so the worker, not the caller, ends it. Called with mu held.
 	requestCancel func() (held bool, err error)
@@ -123,8 +127,16 @@ type Handle struct {
 	runtimeKey string
 	// binary pins the run of a runtime built on the server to its binary,
 	// recorded at admission.
-	binary      *artifact.RunBinary
-	persist     func(bool) error // called with mu held; true includes terminal evidence
+	binary *artifact.RunBinary
+	// principalRuns is limits.runs_per_principal for the repository to check
+	// at admission against every instance's runs, or zero for a member of a
+	// suite or comparison, whose capacity was reserved when it was accepted.
+	principalRuns int
+	// endRun writes the run's end p and ends the handle once the repository
+	// accepts it (Service.endRun). Called without mu.
+	endRun func(p runPublication) (bool, error)
+	// bundle is the raw run bundle, until the repository holds the run's
+	// terminal state (storedLocked); RunBundle then reads it from there.
 	bundle      []byte
 	bundleInfo  *engine.BundleInfo
 	evaluations []retainedEvaluation // private source and result bytes; evicted with this run
@@ -145,37 +157,28 @@ func (r *Handle) notifyLocked() {
 	r.changed = make(chan struct{})
 }
 
-func (r *Handle) finishLocked(state State, report *engine.Report, err error) error {
-	priorState, priorReport, priorErr, priorFinished := r.state, r.report, r.err, r.finished
-	priorLog, priorTruncated, priorRunLog := r.log, r.logTruncated, r.runLog
-	r.state, r.report, r.err = state, report, err
-	r.finished = time.Now().UTC()
+// endingLocked is the run's publication as ending in state records it.
+func (r *Handle) endingLocked(state State, report *engine.Report, err error) runPublication {
+	p := r.publicationLocked()
+	p.state, p.report, p.err, p.finished = state, report, err, time.Now().UTC()
 	if r.runLog != nil && keepsLog(state, report) {
-		r.log, r.logTruncated = r.runLog.Tail()
+		p.log, p.logTruncated = r.runLog.Tail()
 	}
-	r.runLog = nil
-	var publicationErr error
-	if r.persist != nil {
-		if err := r.persist(true); r.shared && errors.Is(err, artifact.ErrConflict) {
-			// Another instance published the run first: the handle keeps
-			// what it was and catches up on what that instance wrote.
-			r.state, r.report, r.err, r.finished = priorState, priorReport, priorErr, priorFinished
-			r.log, r.logTruncated, r.runLog = priorLog, priorTruncated, priorRunLog
-			return persistenceError(err)
-		} else if err != nil {
-			publicationErr = persistenceError(err)
-			r.state, r.report, r.err = StateError, nil, publicationErr
-			// Best effort to record the failure without evidence (for example an
-			// oversized report). An uncertain repository refuses this write.
-			_ = r.persist(false)
-		}
-	}
+	return p
+}
+
+// endLocked ends the run as p records it and wakes its observers. The events
+// are p's too: one the Collector recorded after p was decided is not
+// published, so the handle drops it.
+func (r *Handle) endLocked(p runPublication) {
+	r.state, r.report, r.err, r.finished, r.interrupted = p.state, p.report, p.err, p.finished, p.interrupted
+	r.events = p.events
+	r.log, r.logTruncated, r.runLog = p.log, p.logTruncated, nil
 	if r.ended != nil {
 		r.ended()
 	}
 	r.notifyLocked()
 	close(r.done)
-	return publicationErr
 }
 
 // View includes snapshot stores only when full is true. Neither view changes
@@ -312,29 +315,43 @@ func (r *Handle) cancelWithCause(cause error) error {
 }
 
 // cancelRequest reports whether the run was still unfinished, so the request
-// took effect.
+// took effect. The queue records the request first; a run no worker holds is
+// then ended here, once the repository accepts its end.
 func (r *Handle) cancelRequest(cause error) (bool, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.terminalLocked() {
+		r.mu.Unlock()
 		return false, nil
 	}
 	held := r.state != StateQueued
-	if r.requestCancel != nil {
-		h, err := r.requestCancel()
+	request := r.requestCancel
+	r.mu.Unlock()
+	if request != nil {
+		h, err := request()
 		if err != nil {
 			// The queue is unreachable: stop what this process executes, and
 			// leave a queued run for the queue to end.
 			if held {
+				r.mu.Lock()
 				r.cancel(cause)
+				r.mu.Unlock()
 			}
 			return false, persistenceError(err)
 		}
 		held = h
 	}
+	r.mu.Lock()
 	r.cancel(cause)
-	if !held {
-		return true, r.finishLocked(StateCancelled, nil, nil)
+	if held || r.terminalLocked() {
+		r.mu.Unlock()
+		return true, nil
+	}
+	p := r.endingLocked(StateCancelled, nil, nil)
+	r.mu.Unlock()
+	// A conflict means the run moved first, here or on another instance.
+	// When the repository accepts no end, it is written again later.
+	if _, err := r.endRun(p); err != nil {
+		return false, err
 	}
 	return true, nil
 }

@@ -8,10 +8,27 @@ on:
 permissions:
   contents: read
 
-# CI only builds the product images, the ones release.yml publishes. Tests
-# and the test-only images are checked locally: see "Before a release" in
-# docs/internals/development.md.
+# CI builds the product images, the ones release.yml publishes, and runs the
+# checks that fit a hosted runner: the tests whose binaries do not link the
+# Collector registry (scripts/test-light.sh) and the chart and Compose files
+# (scripts/check-deploy.sh). The remaining tests and the test-only images are
+# checked locally: see "Before a release" in docs/internals/development.md.
 jobs:
+  checks:
+    name: Light tests and deploy files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Light tests
+        run: scripts/test-light.sh
+      - name: Deploy files
+        run: scripts/check-deploy.sh
+
+
   images:
     name: Image (${{ matrix.image }})
     runs-on: ubuntu-latest
@@ -25,6 +42,6 @@ jobs:
           - linea-fleet
           - linea-fleet-livecapture
     steps:
-      - uses: actions/checkout@v5.1.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Build
         run: docker build --file deploy/docker/${{ matrix.image }}.Dockerfile --tag ${{ matrix.image }}:ci .

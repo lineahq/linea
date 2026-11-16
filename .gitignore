@@ -21,8 +21,11 @@ internal/debugger/webui/static/app/
 .env
 .env.*
 !.env.example
+/deploy/compose/linea/secrets/
+/deploy/compose/linea/*.local.json
 *.pem
 *.key
+*.crt
 *.p12
 tmp/
 *.log

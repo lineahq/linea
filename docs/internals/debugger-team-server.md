@@ -87,6 +87,24 @@ protocols in [debugger-workers.md](debugger-workers.md).
   requeued run executes as a new attempt: its event stream sends `restart`,
   and the new attempt's events replace the earlier ones. The worker reconnects
   with a backoff of 1 s to 30 s until stopped.
+- Lease clock: instances pass lease times from their own clocks, which may
+  disagree. The PostgreSQL store (`store/pg/clock.go`) moves each lease time
+  onto the database's clock by an offset it measures with
+  `SELECT clock_timestamp()` (midpoint of the round trip, in whole
+  microseconds) and refreshes every 30 s. It keeps the offset while a new
+  measurement stays within 250 ms, so round-trip noise never moves a
+  boundary, and drops a later measurement whose round trip exceeds 1 s.
+  Times read back are moved onto the reader's clock. Run and build leases
+  both go through it; `TestLeasesUseTheDatabaseClock` runs two instances an
+  hour apart.
+- `runs_per_principal` with instances: each run row records its principal
+  (migration `017_run_principal.sql`). A single run's admission counts the
+  principal's unfinished rows under the installation lock that every
+  admission takes and is refused with `artifact.ErrRunLimit`
+  (`resource_exhausted`, retryable). Suites and comparisons admit their
+  members in one transaction (`AdmitRuns`) whose count sees the members
+  before each, so a suite that would exceed the limit is refused whole and
+  never admitted in part.
 - An instance claims the runs it learned of from the change feed. As a safety
   net, every heartbeat (a third of the lease, 10 s) it also claims for each
   runtime its connected workers run without starting one: a worker's runtime,
@@ -147,23 +165,45 @@ protocols in [debugger-workers.md](debugger-workers.md).
   the chart uses `server.drainSeconds` plus 20 s.
 - A killed instance loses its runs' 30 s leases; another instance requeues
   them once, as a new attempt.
-- `--metrics-listen ADDR` serves the build queue's counts at `GET /metrics` on
-  a listener of its own, without credentials, for a builder autoscaler.
+- An interactive request (one that needs a worker slot but is not a run) that no worker
+  claims fails as `unavailable` after 30 s. Jobs have no lease: when the
+  instance that claimed one is killed, the posting instance waits for the
+  execution budget plus 1.5 minutes (about 11.5 minutes with the default
+  budget) before it fails the request.
+- `linea-server` always writes info and above to stderr as JSON lines;
+  `--verbose` adds debug logs. Credentials, configuration, environment and
+  telemetry are never logged.
+- With an OTLP endpoint in the standard `OTEL_*` variables, `linea-server`
+  exports its own metrics (`server/telemetry.go`); it serves no metrics
+  endpoint.
 - The connected CLI retries a report wait (`run`, `test`, suites,
   `runs report --wait`, compare waits) that gets a lost connection or a 502,
   503 or 504 without an operation error code, such as a load balancer's page,
-  for up to 30 s of such failures, so it reaches another instance.
+  for up to 30 s of such failures, so it reaches another instance. Any
+  request (`exchange` in `client/client.go`), a submission included, that
+  gets a 503 without an operation error code is sent again after its
+  `Retry-After` for up to 30 s, when its body can be sent again: such a
+  refusal, an instance waiting for its storage or a load balancer with no
+  instance ready, handled nothing. The fan-out gate needs this: haproxy
+  may send a request to an instance that has just restarted before its
+  checks (`fall 2`, every 500 ms) take it out of rotation.
 
 ### Verification
 
 `scripts/debugger/fanout-compose.sh` is the gate of the shared platform. It
-starts the Compose stack as a disposable project (two instances and
-`FANOUT_POOLS` pools of capacity 4), registers nothing, waits until a pool has
+starts the Compose stack as a disposable project with the test-only override
+`scripts/debugger/fanout-compose.yaml`: two instances behind an HAProxy load
+balancer (`scripts/debugger/fanout-haproxy.cfg`), which checks `GET /readyz`
+and which the workers dial too, and
+`FANOUT_POOLS` pools of capacity 4. It registers nothing, signs in as the
+built-in admin account (an API token from `POST /auth/password`, sent as
+`LINEA_TOKEN`), waits until a pool has
 registered the built-in runtime and it is the only one, then sends
 `FANOUT_RUNS` runs that name no runtime through `FANOUT_CLIENTS` concurrent
 `linea test --server`. It restarts one instance gracefully once half of the
-runs are submitted and fails unless every run passes. It removes the project,
-volumes and its `.env` on exit. Run it before a release
+runs are submitted and fails unless every run passes. It writes fresh secret
+files and an `.env` that sets `LINEA_SECRETS_DIR` into a temporary directory,
+and removes that directory, the project and its volumes on exit. Run it before a release
 ([development.md](development.md#before-a-release)).
 
 | Variable | Default |
@@ -174,8 +214,10 @@ volumes and its `.env` on exit. Run it before a release
 | `FANOUT_PORT` | 7079 |
 | `FANOUT_SAMPLE` | `logs-cleanup` |
 
-The edge network is fixed at `10.207.70.0/24`, so stop a running local stack
-before running it. The script starts only `proxy` and `pool`.
+The gate publishes only `127.0.0.1:FANOUT_PORT`, so stop whatever uses that
+port. It starts the load balancer and the pools with what they depend on,
+not the builder. The Compose deployment itself runs one instance; the load
+balancer exists only in the gate.
 
 ## Fleet attribution
 

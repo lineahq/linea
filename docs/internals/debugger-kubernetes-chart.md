@@ -9,18 +9,24 @@ every key is in [`values.yaml`](../../deploy/charts/linea/values.yaml).
 | Pod | Runs as | Writable volumes | Why |
 | --- | --- | --- | --- |
 | Server | 65532 | `/tmp` (scratch) | The server stores nothing locally: everything is in PostgreSQL and the bucket. |
-| Pool | 65534 | `/cache` (emptyDir, executable), `/tmp` | The pool starts runtime binaries from `/cache`, so it must allow execution. `pool.cache.volumeSizeLimit` (default 6Gi) is a little above the `pool.cache.size` budget (5GiB). |
-| Builder | 65532 | `/work` (emptyDir, executable) | `/work` holds the module cache, the build cache and build directories. It allows execution because a build starts the program it compiles. |
+| Pool | 0, with `CAP_SETUID` and `CAP_SETGID`; children 65534 | `/cache` (emptyDir, executable), `/tmp` | The pool starts runtime binaries from `/cache`, so it must allow execution. `pool.cache.volumeSizeLimit` (default 6Gi) is a little above the `pool.cache.size` budget (5GiB). Children run as 65534 (`--child-user`) and cannot read the token in the pool's environment. |
+| Builder | 0, with `CAP_SETUID` and `CAP_SETGID`; hello checks 65534 | `/work` (emptyDir or claim, executable) | `/work` holds the module cache, the build cache and build directories. It allows execution because a build starts the program it compiles. The secret files are mode 0400 and the caches 0700, so the hello check (`--check-user`) reads neither. |
 | Bundled PostgreSQL | 999 (the image's `postgres` user) | `/var/run/postgresql`, `/tmp`, the data volume | Data lives in `pgdata`, a subdirectory, because the volume's root may hold `lost+found`. |
 | Bundled SeaweedFS | 65532 | `/tmp`, the data volume | |
 
-Every pod has a read-only root filesystem, no capabilities and no service
-account token.
+Every pod has a read-only root filesystem and no service account token. Every
+pod but the pool and the builder has no capabilities; those two keep only
+`CAP_SETUID` and `CAP_SETGID` to start what they run as another user, so their
+namespace needs the baseline Pod Security level, not restricted.
 
 ## Server
 
-- Probes check the TCP port, not an HTTP route: every route except the web
-  client's assets needs a credential.
+- Readiness is `GET /readyz` and liveness `GET /healthz`, which need no
+  credential; `/readyz` answers 503 until the instance has opened its storage
+  and while it drains, so the Service sends it requests only in between. The
+  server retries its storage instead of exiting, so a first install whose
+  PostgreSQL and SeaweedFS start later does not crash-loop. With `server.tls` the probes use HTTPS, and the
+  kubelet does not verify the certificate.
 - `RollingUpdate` with `maxSurge` 1 and `maxUnavailable` 0 starts a new pod
   before an old one stops. Any instance serves any request because the run
   queue, events, sessions and sign-ins are in PostgreSQL.
@@ -75,21 +81,17 @@ roots, and a public identity provider would then fail verification.
   (`linea.checkObjectStorage`). With `seaweedfs.enabled` the chart adds its own
   egress rule to the bundled gateway (port 8333).
 - A NetworkPolicy matches addresses, not names. The default
-  `builderEgress` (`0.0.0.0/0`) also matches pod and node addresses.
+  `builderEgress` is `0.0.0.0/0` except 10/8, 100.64/10, 127/8, 169.254/16,
+  172.16/12 and 192.168/16, so a manifest cannot point a build at the
+  cluster, the private network or the metadata endpoint. Rules are a union:
+  the server, DNS and object-store rules still reach private addresses.
+  The default has no IPv6 rule, so a builder reaches IPv6 addresses only
+  through the other rules.
 - Bundled PostgreSQL admits only the server on its port, and with
   `fleet.deploy.enabled` also fleet, the plugin and the database Job.
   Bundled SeaweedFS admits the server, pool, worker and builder pods on the
-  S3 port, the bucket Job on the master and filer ports, and itself (the pod
-  reaches its own master and filer through the Service).
-
-## Builder autoscaling
-
-- The target is one builder per `builder.capacity` unfinished builds; running
-  builds count, so it never drops below what builds in progress need.
-- Each instance reports the same queue, so the HPA metric rule uses `max`
-  across instances; a sum would double it.
-- The metrics Service is the server's name plus `-metrics`. It is never behind
-  the ingress.
+  S3 port, and itself (the pod reaches its own master and filer through the
+  Service).
 
 ## Bundled stores
 
@@ -116,14 +118,10 @@ roots, and a public identity provider would then fail verification.
   (`-s3.config` from the Secret's `s3.json`, one identity with Admin, Read,
   Write, List and Tagging), `-volume.max=0` (as many volumes as the disk
   holds) and `-master.volumeSizeLimitMB` from `seaweedfs.volumeSizeLimitMB`
-  (256). The Service exposes the S3 port (8333) and the master (9333 and gRPC
-  19333).
-- **Bucket Job.** One Job per release revision (`<release>-seaweedfs-bucket-<revision>`),
-  with `backoffLimit` 6, removed 600 s after it finishes. It loops up to 120
-  times, 2 s apart: it lists buckets with `weed shell` against the master,
-  exits when the bucket exists, and otherwise creates it. It fails if the
-  bucket cannot be created. The pod advertises its own IP (`-ip`) so the
-  shell can reach the filer.
+  (256). The Service exposes only the S3 port (8333). The server creates the
+  bucket at startup (`store.objects.create_bucket`, which the chart sets for
+  the bundled SeaweedFS) and restarts until SeaweedFS answers; there is no
+  bucket Job. The pod still advertises its own IP (`-ip`).
 
 ## Fleet
 
@@ -131,11 +129,13 @@ roots, and a public identity provider would then fail verification.
 `fleet.deploy.enabled`; `linea.fleetDeployed` checks the values.
 
 - **Tokens.** `linea.keptSecret` takes a format: `fleet` gives an
-  `of1_<32 hex>_<64 hex>` admin token, `hex` 64 lowercase hex characters for
+  `of1_<32 hex>_<64 hex>` fleet token, `hex` 64 lowercase hex characters for
   the plugin's host, service and metrics tokens (`pluginsdk.ValidToken`).
-  Fleet's `bootstrap` installs the admin token from
-  `LINEA_FLEET_BOOTSTRAP_TOKEN_FILE`, so the chart never reads a token back
-  from fleet.
+  The fleet Secret holds two: `token`, the admin token (the key an existing
+  release already kept), and `operator-token`, the server's. Fleet's
+  `bootstrap` installs the admin from `LINEA_FLEET_BOOTSTRAP_TOKEN_FILE` and
+  the operator from `LINEA_FLEET_OPERATOR_TOKEN_FILE`, so the chart never
+  reads a token back from fleet. The server mounts only `operator-token`.
 - **One pod each, `Recreate`.** The plugin holds an advisory lock on its
   database while it runs and its migration takes the same lock; fleet's
   migration expects no running instance either. Migrations run as init

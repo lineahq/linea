@@ -60,6 +60,13 @@ describe('the default runtime', () => {
     expect(runtimeDetail(rows[0], '0.162.0').facts).toContainEqual(['Workers', '1 connected · 2 slots']);
   });
 
+  it('states the self-check reported by the built-in runtime workers', () => {
+    const served = catalog('built-in', { self_check: [{ code: 'lifecycle', ok: true }] } as Partial<Runtime>);
+    expect(runtimeDetail(runtimeRows([served], '0.162.0')[0], '0.162.0').facts).toContainEqual(
+      ['Self-check', 'Passed: the Collector internals the debugger relies on behave as verified'],
+    );
+  });
+
   it('offers Make default on built-in and catalog rows that are not the default', () => {
     const rows = runtimeRows([catalog('lab'), runtime('acme', '0.162.0')], '0.162.0', 'lab');
     expect(rows.map((r) => [r.name, canBeDefault(r)])).toEqual([['built-in', true], ['acme', false], ['lab', false]]);
@@ -99,7 +106,7 @@ describe('runtimeDetail', () => {
     const d = runtimeDetail(row, '0.136.0');
     expect(d.title).toBe('acme 0.136.0');
     expect(d.facts).toEqual([
-      ['Type', 'Local container'], ['Verification', 'Verified release'], ['Image', '70.0 MB · acme0.136.0a'], ['Tags', 'linea-runtime:acme'],
+      ['Type', 'Local container'], ['Verification', 'Verified release'], ['Self-check', 'Not checked: no worker of this runtime has reported one'], ['Image', '70.0 MB · acme0.136.0a'], ['Tags', 'linea-runtime:acme'],
     ]);
     expect(d.providers).toEqual(['stamp from example.com/stamp (processor/stamp)']);
     expect(d.custom).toEqual(['github.com/acme/enrich from ./components/enrich']);

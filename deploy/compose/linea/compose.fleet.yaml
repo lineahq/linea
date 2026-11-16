@@ -3,17 +3,54 @@
 # with its own roles. linea-server is connected to fleet, so the web client's
 # live capture works. See docs/debugger/deploy-compose.md#fleet-and-live-capture.
 #
+# Its secrets are more files in the stack's secrets/ directory, created
+# before the first start (scripts/debugger/compose-fleet.sh names a missing
+# one). The database URLs carry the roles' passwords, which fleet-db sets, so
+# use hex passwords (openssl rand -hex 32), with nothing that needs URL
+# escaping:
+#   fleet_database_url            postgres://fleet_app:<pw>@postgres:5432/fleet?sslmode=disable
+#   fleet_migrate_database_url    postgres://fleet_migrator:<pw>@postgres:5432/fleet?sslmode=disable
+#   capture_database_url          postgres://capture_app:<pw>@postgres:5432/livecapture?sslmode=disable
+#   capture_migrate_database_url  postgres://capture_migrator:<pw>@postgres:5432/livecapture?sslmode=disable
+#   fleet_admin_token             the fleet admin token, which fleet-bootstrap
+#       installs as the first fleet admin. It stays with you, for issuing
+#       fleet credentials and plugin operations; linea-server never gets it:
+#       printf 'of1_%s_%s\n' "$(openssl rand -hex 16)" "$(openssl rand -hex 32)" > secrets/fleet_admin_token
+#   fleet_operator_token          linea-server's fleet credential, which
+#       fleet-bootstrap installs as a fleet operator (admin without the
+#       credentials API and plugin lifecycle operations); a different token:
+#       printf 'of1_%s_%s\n' "$(openssl rand -hex 16)" "$(openssl rand -hex 32)" > secrets/fleet_operator_token
+#   capture_host_token, capture_service_token, capture_metrics_token
+#                                 the plugin's tokens (openssl rand -hex 32)
+#   capture_tls.crt, capture_tls.key
+#       the plugin's certificate and key for its control and delivery
+#       endpoints; Collectors trust the certificate as their CA. The key must
+#       be readable by uid 65532, hence chmod 644:
+#   openssl req -x509 -newkey rsa:2048 -nodes -days 825 -subj /CN=livecapture-plugin \
+#     -keyout secrets/capture_tls.key -out secrets/capture_tls.crt \
+#     -addext 'subjectAltName=DNS:livecapture-plugin,DNS:localhost,IP:127.0.0.1' \
+#     -addext 'basicConstraints=critical,CA:TRUE' && chmod 644 secrets/capture_tls.key
+#
+# The plugin's settings are livecapture.json beside this file, and fleet's
+# plugin list fleet-plugins.json. To let captures include raw points, add
+# credential IDs to raw_principals in livecapture.json; linea-server's is the
+# second _-separated field of fleet_operator_token. LINEA_CAPTURE_CONFIG names
+# another copy of it, kept out of the files an upgrade replaces.
+#
 # Initialize once, and again after an upgrade (migrations stay explicit):
 #   scripts/debugger/compose-fleet.sh            (from the repository root)
-# It creates the databases and roles, migrates both schemas, installs
-# linea-server's generated token as the first fleet admin and starts the stack.
+# It creates the databases and roles, migrates both schemas, installs the
+# admin token as the first fleet admin and the operator token as linea-server's
+# fleet operator, and starts the stack. After changing
+# a secret file, run it again, then restart the services that read it.
 #
 # Optional settings, in .env:
 #   LINEA_FLEET_SERVER_ID (linea-fleet), LINEA_FLEET_PORT (8080, management
 #   API), LINEA_FLEET_AGENT_PORT (4320, OpAMP), LINEA_CAPTURE_CONTROL_PORT
 #   (4340), LINEA_CAPTURE_DELIVERY_PORT (4341), all on LINEA_FLEET_BIND
 #   (127.0.0.1). Fleet serves plain HTTP and OpAMP over ws://; put TLS in
-#   front before binding them beyond loopback.
+#   front before binding them beyond loopback. LINEA_FLEET_CONFIG_MANAGEMENT
+#   (false) turns on config management.
 # To keep fleet on its own PostgreSQL instead, use deploy/compose/fleet.
 
 x-fleet-hardened: &fleet-hardened
@@ -36,86 +73,31 @@ x-postgres-tool: &postgres-tool
   restart: "no"
 
 services:
-  # One-shot: creates the fleet and plugin secrets once and keeps them; each
-  # service mounts only its own folder of the setup volume. No network.
-  fleet-setup:
-    <<: *postgres-tool
-    user: "0:0"
-    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]
-    environment:
-      LINEA_CAPTURE_RAW: ${LINEA_CAPTURE_RAW:-false}
-    command:
-      - |
-        set -eu
-        umask 022
-        cd /setup
-        mkdir -p fleet-db fleet fleet-migrate fleet-bootstrap livecapture livecapture-migrate linea
-        new() { [ -s "$$1" ] || openssl rand -hex 32 | tr -d '\n' > "$$1"; }
-        for name in fleet_migrate_password fleet_runtime_password capture_migrate_password capture_runtime_password; do
-          new "fleet-db/$$name"
-        done
-        new livecapture/host_token
-        new livecapture/service_token
-        new livecapture/metrics_token
-        url() { printf 'postgres://%s:%s@postgres:5432/%s?sslmode=disable' "$$1" "$$(cat "fleet-db/$$2")" "$$3"; }
-        url fleet_app fleet_runtime_password fleet > fleet/runtime_url
-        url fleet_migrator fleet_migrate_password fleet > fleet-migrate/migrate_url
-        url fleet_app fleet_runtime_password fleet > fleet-bootstrap/runtime_url
-        # linea-server's fleet admin token, which fleet-bootstrap installs.
-        [ -s linea/fleet_token ] || printf 'of1_%s_%s' "$$(openssl rand -hex 16)" "$$(openssl rand -hex 32)" > linea/fleet_token
-        cp linea/fleet_token fleet-bootstrap/admin_token
-        url capture_app capture_runtime_password livecapture > livecapture/runtime_url
-        url capture_migrator capture_migrate_password livecapture > livecapture-migrate/migrate_url
-        cp livecapture/host_token fleet/capture_host_token
-        cp livecapture/service_token fleet/capture_service_token
-        if [ ! -s livecapture/tls_key.pem ]; then
-          openssl req -x509 -newkey rsa:2048 -nodes -days 825 -subj /CN=livecapture-plugin \
-            -keyout livecapture/tls_key.pem -out livecapture/tls_cert.pem \
-            -addext 'subjectAltName=DNS:livecapture-plugin,DNS:localhost,IP:127.0.0.1' \
-            -addext 'basicConstraints=critical,CA:TRUE' 2>/dev/null
-        fi
-        # LINEA_CAPTURE_RAW=true lets linea-server's credential capture raw
-        # points; its credential ID is the token's second field.
-        raw='[]'
-        case "$${LINEA_CAPTURE_RAW:-false}" in
-          true) raw="[\"$$(cut -d_ -f2 linea/fleet_token)\"]" ;;
-          false) ;;
-          *) echo "LINEA_CAPTURE_RAW must be true or false" >&2; exit 1 ;;
-        esac
-        cat > livecapture/config.json <<JSON
-        {"id":"livecapture","version":"0.4.0","host_endpoint":"http://fleet:8081","allow_insecure_host":true,
-         "host_token_file":"/run/secrets/host_token","service_token_file":"/run/secrets/service_token",
-         "http_listen":"0.0.0.0:8090","control_listen":"0.0.0.0:4340","delivery_listen":"0.0.0.0:4341",
-         "tls_cert_file":"/run/secrets/tls_cert.pem","tls_key_file":"/run/secrets/tls_key.pem","test_insecure":false,
-         "capture_label":"capture","raw_principals":$$raw,"max_peers":256,"metrics_token_file":"/run/secrets/metrics_token"}
-        JSON
-        cat > fleet/plugins.json <<'JSON'
-        {"plugins":[{"id":"livecapture","version":"0.4.0","api_version":"2","endpoint":"http://livecapture-plugin:8090",
-          "enabled":true,"allow_insecure_http":true,"permissions":["agents.read","credentials.introspect"],
-          "host_token_file":"/run/secrets/capture_host_token","service_token_file":"/run/secrets/capture_service_token"}]}
-        JSON
-        chown -R 65532:65532 fleet fleet-migrate fleet-bootstrap livecapture livecapture-migrate linea/fleet_token
-        chmod 0400 fleet-db/* fleet/* fleet-migrate/* fleet-bootstrap/* livecapture/* livecapture-migrate/* linea/fleet_token
-        chmod 0700 fleet-db
-    volumes:
-      - setup:/setup
-    network_mode: none
-    depends_on:
-      setup:
-        condition: service_completed_successfully
-
   # One-shot on every up: creates or updates the fleet and livecapture
-  # databases and roles in the debugger's PostgreSQL, as its owner. Idempotent.
+  # databases and roles in the debugger's PostgreSQL, as linea. Idempotent.
+  # Each role's password is the one in its URL.
   fleet-db:
     <<: *postgres-tool
     command:
       - |
         set -eu
         export PGHOST=postgres PGUSER=linea PGDATABASE=linea
-        PGPASSWORD=$$(cat /run/secrets/postgres/postgres_password); export PGPASSWORD
-        for name in fleet_migrate_password fleet_runtime_password capture_migrate_password capture_runtime_password; do
-          export "$$(echo "$$name" | tr a-z A-Z)=$$(cat "/run/secrets/fleet-db/$$name")"
-        done
+        PGPASSWORD=$$(cat /run/secrets/postgres_password); export PGPASSWORD
+        # password <secret> <role> <database>: the password in the URL.
+        password() {
+          url=$$(cat "/run/secrets/$$1")
+          case "$$url" in
+            "postgres://$$2:"?*"@postgres:5432/$$3?"*) ;;
+            *) echo "$$1 must be postgres://$$2:<password>@postgres:5432/$$3?sslmode=disable" >&2; exit 1 ;;
+          esac
+          url=$${url#*://*:}
+          printf '%s' "$${url%%@*}"
+        }
+        FLEET_MIGRATE_PASSWORD=$$(password fleet_migrate_database_url fleet_migrator fleet)
+        FLEET_RUNTIME_PASSWORD=$$(password fleet_database_url fleet_app fleet)
+        CAPTURE_MIGRATE_PASSWORD=$$(password capture_migrate_database_url capture_migrator livecapture)
+        CAPTURE_RUNTIME_PASSWORD=$$(password capture_database_url capture_app livecapture)
+        export FLEET_MIGRATE_PASSWORD FLEET_RUNTIME_PASSWORD CAPTURE_MIGRATE_PASSWORD CAPTURE_RUNTIME_PASSWORD
         psql --quiet --set ON_ERROR_STOP=1 <<'SQL'
         \getenv fm FLEET_MIGRATE_PASSWORD
         \getenv fr FLEET_RUNTIME_PASSWORD
@@ -123,14 +105,14 @@ services:
         \getenv cr CAPTURE_RUNTIME_PASSWORD
         SELECT format('CREATE ROLE %I', r) FROM unnest(ARRAY['fleet_migrator','fleet_app','capture_migrator','capture_app']) r
           WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = r) \gexec
-        ALTER ROLE fleet_migrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD :'fm';
-        ALTER ROLE fleet_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD :'fr';
-        ALTER ROLE capture_migrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD :'cm';
-        ALTER ROLE capture_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD :'cr';
+        ALTER ROLE fleet_migrator LOGIN NOCREATEDB NOCREATEROLE PASSWORD :'fm';
+        ALTER ROLE fleet_app LOGIN NOCREATEDB NOCREATEROLE PASSWORD :'fr';
+        ALTER ROLE capture_migrator LOGIN NOCREATEDB NOCREATEROLE PASSWORD :'cm';
+        ALTER ROLE capture_app LOGIN NOCREATEDB NOCREATEROLE PASSWORD :'cr';
         SELECT format('CREATE DATABASE %I', d) FROM unnest(ARRAY['fleet','livecapture']) d
           WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = d) \gexec
         -- Each role reaches its own database only.
-        REVOKE ALL ON DATABASE linea, postgres, fleet, livecapture FROM PUBLIC;
+        REVOKE ALL ON DATABASE linea, fleet, livecapture FROM PUBLIC;
         GRANT CONNECT, CREATE ON DATABASE fleet TO fleet_migrator;
         GRANT CONNECT ON DATABASE fleet TO fleet_app;
         GRANT CONNECT, CREATE ON DATABASE livecapture TO capture_migrator;
@@ -141,15 +123,11 @@ services:
         REVOKE CREATE ON SCHEMA public FROM PUBLIC;
         SQL
         echo 'fleet and livecapture databases are ready'
-    volumes:
-      - {type: volume, source: setup, target: /run/secrets/postgres, read_only: true, volume: {subpath: postgres}}
-      - {type: volume, source: setup, target: /run/secrets/fleet-db, read_only: true, volume: {subpath: fleet-db}}
+    secrets: [postgres_password, fleet_database_url, fleet_migrate_database_url, capture_database_url, capture_migrate_database_url]
     networks: [database]
     depends_on:
       postgres:
         condition: service_healthy
-      fleet-setup:
-        condition: service_completed_successfully
 
   fleet:
     <<: *fleet-hardened
@@ -157,13 +135,14 @@ services:
     build:
       context: ../../..
       dockerfile: deploy/docker/linea-fleet.Dockerfile
-    command: [--server-id, "${LINEA_FLEET_SERVER_ID:-linea-fleet}", --management-listen, "0.0.0.0:8080", --agent-listen, "0.0.0.0:4320", --allow-insecure-remote, --plugins-config, /run/secrets/plugins.json, --plugin-listen, "0.0.0.0:8081", "--config-management=${LINEA_FLEET_CONFIG_MANAGEMENT:-false}"]
+    command: [--server-id, "${LINEA_FLEET_SERVER_ID:-linea-fleet}", --management-listen, "0.0.0.0:8080", --agent-listen, "0.0.0.0:4320", --allow-insecure-remote, --plugins-config, /etc/linea/plugins.json, --plugin-listen, "0.0.0.0:8081", "--config-management=${LINEA_FLEET_CONFIG_MANAGEMENT:-false}"]
     environment:
       GOMAXPROCS: "2"
       GOMEMLIMIT: 768MiB
-      LINEA_FLEET_DATABASE_URL_FILE: /run/secrets/runtime_url
-    volumes:
-      - {type: volume, source: setup, target: /run/secrets, read_only: true, volume: {subpath: fleet}}
+      LINEA_FLEET_DATABASE_URL_FILE: /run/secrets/fleet_database_url
+    secrets: [fleet_database_url, capture_host_token, capture_service_token]
+    configs:
+      - {source: fleet_plugins, target: /etc/linea/plugins.json}
     ports:
       - "${LINEA_FLEET_BIND:-127.0.0.1}:${LINEA_FLEET_PORT:-8080}:8080"
       - "${LINEA_FLEET_BIND:-127.0.0.1}:${LINEA_FLEET_AGENT_PORT:-4320}:4320"
@@ -190,13 +169,14 @@ services:
       context: ../../..
       dockerfile: deploy/docker/linea-fleet-livecapture.Dockerfile
       target: plugin
-    command: [serve, --config, /run/secrets/config.json]
+    command: [serve, --config, /etc/linea/livecapture.json]
     environment:
       GOMAXPROCS: "2"
       GOMEMLIMIT: 384MiB
-      LINEA_FLEET_CAPTURE_DATABASE_URL_FILE: /run/secrets/runtime_url
-    volumes:
-      - {type: volume, source: setup, target: /run/secrets, read_only: true, volume: {subpath: livecapture}}
+      LINEA_FLEET_CAPTURE_DATABASE_URL_FILE: /run/secrets/capture_database_url
+    secrets: [capture_database_url, capture_host_token, capture_service_token, capture_metrics_token, capture_tls_cert, capture_tls_key]
+    configs:
+      - {source: livecapture_config, target: /etc/linea/livecapture.json}
     ports:
       - "${LINEA_FLEET_BIND:-127.0.0.1}:${LINEA_CAPTURE_CONTROL_PORT:-4340}:4340"
       - "${LINEA_FLEET_BIND:-127.0.0.1}:${LINEA_CAPTURE_DELIVERY_PORT:-4341}:4341"
@@ -209,14 +189,16 @@ services:
       fleet:
         condition: service_healthy
     healthcheck:
-      test: [CMD, /plugin, probe, --config, /run/secrets/config.json]
+      test: [CMD, /plugin, probe, --config, /etc/linea/livecapture.json]
       interval: 5s
       timeout: 3s
       retries: 10
       start_period: 5s
 
+  # The base stack's flags, plus the fleet connection.
   linea:
-    command: [--config, /run/secrets/config.yaml, --addr, "0.0.0.0:7070", --allow-http, --mcp, --drain-timeout, 25s, --fleet-url, "http://fleet:8080", --fleet-allow-http, --fleet-token-file, /run/secrets/fleet_token]
+    command: [--addr, "0.0.0.0:7070", --allow-http, --mcp, --drain-timeout, 25s, --fleet-url, "http://fleet:8080", --fleet-allow-http, --fleet-token-file, /run/secrets/fleet_operator_token]
+    secrets: [fleet_operator_token]
     networks: [fleet]
     depends_on:
       fleet:
@@ -229,9 +211,8 @@ services:
     profiles: [fleet-init]
     command: [migrate, --runtime-role, fleet_app]
     environment:
-      LINEA_FLEET_DATABASE_URL_FILE: /run/secrets/migrate_url
-    volumes:
-      - {type: volume, source: setup, target: /run/secrets, read_only: true, volume: {subpath: fleet-migrate}}
+      LINEA_FLEET_DATABASE_URL_FILE: /run/secrets/fleet_migrate_database_url
+    secrets: [fleet_migrate_database_url]
     networks: [database]
     restart: "no"
   capture-migrate:
@@ -240,25 +221,57 @@ services:
     profiles: [fleet-init]
     command: [migrate, --runtime-role, capture_app]
     environment:
-      LINEA_FLEET_CAPTURE_DATABASE_URL_FILE: /run/secrets/migrate_url
-    volumes:
-      - {type: volume, source: setup, target: /run/secrets, read_only: true, volume: {subpath: livecapture-migrate}}
+      LINEA_FLEET_CAPTURE_DATABASE_URL_FILE: /run/secrets/capture_migrate_database_url
+    secrets: [capture_migrate_database_url]
     networks: [database]
     restart: "no"
-  # Installs linea-server's token as the first fleet admin; repeating it
-  # changes nothing while that admin is active.
+  # Installs the admin token as the first fleet admin and linea-server's
+  # token as a fleet operator; repeating it changes nothing while they are
+  # active.
   fleet-bootstrap:
     <<: *fleet-hardened
     image: ghcr.io/lineahq/linea-fleet:${LINEA_VERSION:-0.2.0}
     profiles: [fleet-init]
-    command: [bootstrap, --server-id, "${LINEA_FLEET_SERVER_ID:-linea-fleet}", --name, linea-server]
+    command: [bootstrap, --server-id, "${LINEA_FLEET_SERVER_ID:-linea-fleet}", --name, deployment-admin, --operator-name, linea-server]
     environment:
-      LINEA_FLEET_DATABASE_URL_FILE: /run/secrets/runtime_url
-      LINEA_FLEET_BOOTSTRAP_TOKEN_FILE: /run/secrets/admin_token
-    volumes:
-      - {type: volume, source: setup, target: /run/secrets, read_only: true, volume: {subpath: fleet-bootstrap}}
+      LINEA_FLEET_DATABASE_URL_FILE: /run/secrets/fleet_database_url
+      LINEA_FLEET_BOOTSTRAP_TOKEN_FILE: /run/secrets/fleet_admin_token
+      LINEA_FLEET_OPERATOR_TOKEN_FILE: /run/secrets/fleet_operator_token
+    secrets: [fleet_database_url, fleet_admin_token, fleet_operator_token]
     networks: [database]
     restart: "no"
+
+# One file each in the stack's secrets/ directory, mounted only in the
+# services that list it.
+secrets:
+  fleet_database_url:
+    file: ${LINEA_SECRETS_DIR:-./secrets}/fleet_database_url
+  fleet_migrate_database_url:
+    file: ${LINEA_SECRETS_DIR:-./secrets}/fleet_migrate_database_url
+  capture_database_url:
+    file: ${LINEA_SECRETS_DIR:-./secrets}/capture_database_url
+  capture_migrate_database_url:
+    file: ${LINEA_SECRETS_DIR:-./secrets}/capture_migrate_database_url
+  fleet_admin_token:
+    file: ${LINEA_SECRETS_DIR:-./secrets}/fleet_admin_token
+  fleet_operator_token:
+    file: ${LINEA_SECRETS_DIR:-./secrets}/fleet_operator_token
+  capture_host_token:
+    file: ${LINEA_SECRETS_DIR:-./secrets}/capture_host_token
+  capture_service_token:
+    file: ${LINEA_SECRETS_DIR:-./secrets}/capture_service_token
+  capture_metrics_token:
+    file: ${LINEA_SECRETS_DIR:-./secrets}/capture_metrics_token
+  capture_tls_cert:
+    file: ${LINEA_SECRETS_DIR:-./secrets}/capture_tls.crt
+  capture_tls_key:
+    file: ${LINEA_SECRETS_DIR:-./secrets}/capture_tls.key
+
+configs:
+  livecapture_config:
+    file: ${LINEA_CAPTURE_CONFIG:-./livecapture.json}
+  fleet_plugins:
+    file: ./fleet-plugins.json
 
 networks:
   # linea-server to the fleet management API.

@@ -2,37 +2,48 @@
 
 `compose.yaml` starts the debugger's team server (web client, HTTP API and
 MCP endpoint) from the published images, on `http://127.0.0.1:7070` by
-default. It is the whole stack; a `.env` beside it configures it: how people
-sign in, the address, port and TLS, limits and retention. It needs Docker
-Engine 26 or later with Compose v2.30 or later.
+default. One stack serves one person and a team: its secrets are files in a
+`secrets/` directory beside it, and an optional `.env` says how people sign in,
+the address and the limits. It needs Docker Engine 25 or later with Compose
+v2.24 or later.
 
-1. In an empty directory, fetch `compose.yaml` from a release's tag, which
-   pins that release's images:
+1. In an empty directory, fetch `compose.yaml` and `.env.example` from a
+   release's tag, which pins that release's images:
 
    ```sh
    curl -fsSLO https://raw.githubusercontent.com/lineahq/linea/vX.Y.Z/deploy/compose/linea/compose.yaml
-   ```
-
-2. Put five random values and the sign-in mode in a `.env` beside it, and
-   keep it as long as the data: PostgreSQL takes its password when its
-   volume is created. `LINEA_AUTH=local` is one admin on `127.0.0.1` with no
-   sign-in; for a team choose `oidc` or `proxy` ([sign-in](https://github.com/lineahq/linea/blob/main/docs/debugger/deploy-compose.md#sign-in)).
-
-   ```sh
-   for name in POSTGRES_PASSWORD S3_ACCESS_KEY S3_SECRET_KEY WORKER_TOKEN BUILDER_TOKEN; do
-     echo "LINEA_$name=$(openssl rand -hex 32)"
-   done > .env
-   echo LINEA_AUTH=local >> .env
+   curl -fsSLO https://raw.githubusercontent.com/lineahq/linea/vX.Y.Z/deploy/compose/linea/.env.example
    ```
 
    ```powershell
-   $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
-   $values = 'POSTGRES_PASSWORD','S3_ACCESS_KEY','S3_SECRET_KEY','WORKER_TOKEN','BUILDER_TOKEN' | ForEach-Object {
-     $b = [byte[]]::new(32); $rng.GetBytes($b)
-     "LINEA_$_=" + -join ($b | ForEach-Object { $_.ToString('x2') })
-   }
-   $values + 'LINEA_AUTH=local' | Set-Content -Encoding ascii .env
+   Invoke-WebRequest https://raw.githubusercontent.com/lineahq/linea/vX.Y.Z/deploy/compose/linea/compose.yaml -OutFile compose.yaml
+   Invoke-WebRequest https://raw.githubusercontent.com/lineahq/linea/vX.Y.Z/deploy/compose/linea/.env.example -OutFile .env.example
    ```
+
+2. Create the seven secret files: six random values, and the identity
+   provider's client secret, empty without one. Keep `secrets/postgres_password`
+   as long as the data: PostgreSQL takes its password when its volume is
+   created. `secrets/admin_password` is the password of the built-in `admin`
+   account.
+
+   ```sh
+   mkdir secrets && for name in postgres_password s3_access_key s3_secret_key worker_token builder_token admin_password; do
+     openssl rand -hex 32 > secrets/$name
+   done && touch secrets/oidc_client_secret
+   chmod 700 secrets
+   ```
+
+   ```powershell
+   New-Item -ItemType Directory secrets | Out-Null
+   $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+   foreach ($name in 'postgres_password','s3_access_key','s3_secret_key','worker_token','builder_token','admin_password') {
+     $b = [byte[]]::new(32); $rng.GetBytes($b)
+     [IO.File]::WriteAllText("$PWD\secrets\$name", -join ($b | ForEach-Object { $_.ToString('x2') }))
+   }
+   [IO.File]::WriteAllText("$PWD\secrets\oidc_client_secret", '')
+   ```
+
+   `.env` is optional. To change a setting, copy `.env.example` to `.env`.
 
 3. Start it:
 
@@ -40,10 +51,12 @@ Engine 26 or later with Compose v2.30 or later.
    docker compose up -d
    ```
 
-4. Open `http://127.0.0.1:7070` and choose **Try an example**, or send a run
-   from the CLI with `--server`, which keeps it in the server's history:
+4. Open `http://127.0.0.1:7070`, sign in as `admin` with the contents of
+   `secrets/admin_password` and choose **Try an example**, or send a run from
+   the CLI, which keeps it in the server's history:
 
    ```sh
+   linea login --server http://127.0.0.1:7070
    linea samples get logs-cleanup
    linea test --server http://127.0.0.1:7070 \
      --config logs-cleanup/config.yaml --scenario logs-cleanup/scenario.yaml
@@ -62,9 +75,11 @@ LINEA_BUILDER_CPUS=2
 ```
 
 Stop it with `docker compose down` (add `-v` to remove the data too). In a
-checkout, put `.env` here and run the commands from the root with
-`-f deploy/compose/linea/compose.yaml`; `LINEA_VERSION=dev` and `--build`
+checkout, put `secrets/` (and `.env`) here and run the commands from the root
+with `-f deploy/compose/linea/compose.yaml`; `LINEA_VERSION=dev` and `--build`
 build the images from the checkout. After editing `.env`, run
-`docker compose up -d --force-recreate`. Every setting, from sign-in and TLS
-to networks, upgrades and building runtimes, is in
+`docker compose up -d`; after changing a secret file, run
+`docker compose restart`, because services read their secrets when they
+start. Every setting, from sign-in and a reverse proxy for other machines to
+networks, upgrades and building runtimes, is in
 [Running a team server with Docker Compose](https://github.com/lineahq/linea/blob/main/docs/debugger/deploy-compose.md).

@@ -58,6 +58,25 @@ app.kubernetes.io/component: seaweedfs
 {{- .Values.worker.existingSecret | default (printf "%s-worker-token" (include "linea.fullname" .)) -}}
 {{- end -}}
 
+{{/* The token the pool and workers register with, and the server checks: worker.token, else the one kept in the Secret, else a new random one. */}}
+{{- define "linea.workerToken" -}}
+{{- include "linea.keptSecret" (list . (printf "%s-worker-token" (include "linea.fullname" .)) "token" .Values.worker.token "token") -}}
+{{- end -}}
+
+{{/* The token builders register with, and the server checks. */}}
+{{- define "linea.builderToken" -}}
+{{- include "linea.keptSecret" (list . (printf "%s-builder-token" (include "linea.fullname" .)) "token" .Values.builder.token "token") -}}
+{{- end -}}
+
+{{/* The pods that read a Secret only at start restart on a change of it (checksum annotations), but the chart can hash only the Secrets it renders: with an existingSecret the rollout is yours to trigger (kubectl rollout restart). */}}
+{{- define "linea.workerTokenRendered" -}}
+{{- if and (include "linea.acceptsWorkers" .) (not .Values.worker.existingSecret) }}true{{ end -}}
+{{- end -}}
+
+{{- define "linea.builderTokenRendered" -}}
+{{- if and (include "linea.acceptsBuilds" .) (not .Values.builder.existingSecret) }}true{{ end -}}
+{{- end -}}
+
 {{- define "linea.fleetSecret" -}}
 {{- .Values.fleet.existingSecret | default (printf "%s-fleet" (include "linea.fullname" .)) -}}
 {{- end -}}
@@ -68,6 +87,26 @@ app.kubernetes.io/component: seaweedfs
 
 {{- define "linea.oidcSecret" -}}
 {{- .Values.oidc.existingSecret | default (printf "%s-oidc" (include "linea.fullname" .)) -}}
+{{- end -}}
+
+{{- define "linea.adminSecret" -}}
+{{- .Values.admin.existingSecret | default (printf "%s-admin" (include "linea.fullname" .)) -}}
+{{- end -}}
+
+{{/* The built-in admin account is on: admin.enabled, else when no other sign-in method is configured. */}}
+{{- define "linea.adminEnabled" -}}
+{{- $auth := .Values.config.authentication | default dict -}}
+{{- if kindIs "invalid" .Values.admin.enabled -}}
+{{- if not (or $auth.oidc $auth.trusted_headers) }}true{{ end -}}
+{{- else if .Values.admin.enabled }}true{{ end -}}
+{{- end -}}
+
+{{/* The admin password: admin.password, else the one kept in the Secret, else a new random one. */}}
+{{- define "linea.adminPassword" -}}
+{{- if and .Values.admin.password (lt (len .Values.admin.password) 16) -}}
+{{- fail "admin.password must be at least 16 characters" -}}
+{{- end -}}
+{{- include "linea.keptSecret" (list . (include "linea.adminSecret" .) "password" .Values.admin.password) -}}
 {{- end -}}
 
 {{- define "linea.hasOIDCSecret" -}}
@@ -124,9 +163,14 @@ app.kubernetes.io/component: livecapture
 {{- if or .Values.fleet.allowHTTP (include "linea.fleetDeployed" .) }}true{{ end -}}
 {{- end -}}
 
-{{/* The server's fleet admin token, which fleet's bootstrap installs. */}}
-{{- define "linea.fleetToken" -}}
+{{/* The deployment's fleet admin token, which fleet's bootstrap installs as the first admin. Only its Secret holds it: the server never gets it. */}}
+{{- define "linea.fleetAdminToken" -}}
 {{- include "linea.keptSecret" (list . (include "linea.fleetName" .) "token" "" "fleet") -}}
+{{- end -}}
+
+{{/* The server's fleet operator token, which fleet's bootstrap installs as an operator credential. */}}
+{{- define "linea.fleetOperatorToken" -}}
+{{- include "linea.keptSecret" (list . (include "linea.fleetName" .) "operator-token" "" "fleet") -}}
 {{- end -}}
 
 {{/* The Secret with fleet's and the plugin's database URLs. */}}
@@ -177,29 +221,6 @@ app.kubernetes.io/component: livecapture
 {{- if or .Values.builder.enabled .Values.builder.token .Values.builder.existingSecret }}true{{ end -}}
 {{- end -}}
 
-{{/* An autoscaler sets the builder's replicas (builder.autoscaling.kind keda or hpa). */}}
-{{- define "linea.builderAutoscaled" -}}
-{{- $kind := .Values.builder.autoscaling.kind -}}
-{{- if not (has $kind (list "none" "keda" "hpa")) -}}
-{{- fail (printf "builder.autoscaling.kind is %q: use none, keda or hpa" $kind) -}}
-{{- end -}}
-{{- if and .Values.builder.enabled (ne $kind "none") }}true{{ end -}}
-{{- end -}}
-
-{{/* The server serves the build metrics (server.metrics.enabled, or builder autoscaling). */}}
-{{- define "linea.serverMetrics" -}}
-{{- if or .Values.server.metrics.enabled (include "linea.builderAutoscaled" .) }}true{{ end -}}
-{{- end -}}
-
-{{/* The most builder pods that run at once. */}}
-{{- define "linea.builderMaxReplicas" -}}
-{{- if include "linea.builderAutoscaled" . -}}
-{{- .Values.builder.autoscaling.maxReplicas -}}
-{{- else -}}
-{{- .Values.builder.replicas -}}
-{{- end -}}
-{{- end -}}
-
 {{/* The claim mounted at the builder's /work, or empty for an emptyDir. */}}
 {{- define "linea.builderCacheClaim" -}}
 {{- $pvc := .Values.builder.cache.persistentVolumeClaim -}}
@@ -215,25 +236,10 @@ app.kubernetes.io/component: livecapture
 {{- if and (include "linea.builderCacheClaim" .) (eq .Values.builder.cache.persistentVolumeClaim.accessMode "ReadWriteOnce") }}true{{ end -}}
 {{- end -}}
 
-{{/* Fails on builder scaling values the cluster or the cache cannot serve. */}}
+{{/* Fails on builder scaling values the cache cannot serve. */}}
 {{- define "linea.checkBuilderScaling" -}}
-{{- $a := .Values.builder.autoscaling -}}
-{{- if include "linea.builderAutoscaled" . -}}
-{{- if lt (int $a.maxReplicas) (max 1 (int $a.minReplicas)) -}}
-{{- fail "builder.autoscaling.maxReplicas must be at least minReplicas and at least 1" -}}
-{{- end -}}
-{{- if lt (int .Values.builder.capacity) 1 -}}
-{{- fail "builder.capacity must be at least 1 with builder.autoscaling" -}}
-{{- end -}}
-{{- if and (eq $a.kind "keda") (not (.Capabilities.APIVersions.Has "keda.sh/v1alpha1")) -}}
-{{- fail "builder.autoscaling.kind is keda, but the cluster has no keda.sh/v1alpha1 API: install KEDA first, or use hpa or none" -}}
-{{- end -}}
-{{- if and (eq $a.kind "hpa") (not (.Capabilities.APIVersions.Has "autoscaling/v2")) -}}
-{{- fail "builder.autoscaling.kind is hpa, but the cluster has no autoscaling/v2 API" -}}
-{{- end -}}
-{{- end -}}
-{{- if and (include "linea.builderCacheExclusive" .) (gt (int (include "linea.builderMaxReplicas" .)) 1) -}}
-{{- fail "builder.cache.persistentVolumeClaim.accessMode is ReadWriteOnce, which one builder pod can mount: set builder.replicas (or builder.autoscaling.maxReplicas) to 1, or use ReadWriteMany" -}}
+{{- if and (include "linea.builderCacheExclusive" .) (gt (int .Values.builder.replicas) 1) -}}
+{{- fail "builder.cache.persistentVolumeClaim.accessMode is ReadWriteOnce, which one builder pod can mount: set builder.replicas to 1, or use ReadWriteMany" -}}
 {{- end -}}
 {{- end -}}
 
@@ -296,19 +302,30 @@ app.kubernetes.io/component: livecapture
 {{- if not (include "linea.acceptsWorkers" .) -}}
 {{- fail "pool.enabled, worker.enabled or a worker token is required: a team server runs no Collector in its own process" -}}
 {{- end -}}
-{{- if not $config.bindings -}}
-{{- fail "config.bindings is required: without a binding nothing is allowed" -}}
+{{- if and .Values.admin.existingSecret .Values.admin.password -}}
+{{- fail "admin.password and admin.existingSecret are both set: give one" -}}
 {{- end -}}
+{{- $admin := include "linea.adminEnabled" . -}}
 {{- $auth := deepCopy ($config.authentication | default dict) -}}
-{{- if not (or $auth.oidc $auth.trusted_headers) -}}
-{{- fail "config.authentication needs oidc or trusted_headers" -}}
+{{- if not (or $auth.oidc $auth.trusted_headers $admin) -}}
+{{- fail "a sign-in method is required: config.authentication with oidc or trusted_headers, or admin.enabled" -}}
+{{- end -}}
+{{- if and (not $config.bindings) (not $admin) -}}
+{{- fail "config.bindings is required without the admin account: without a binding nothing is allowed" -}}
+{{- end -}}
+{{- if $auth.admin -}}
+{{- fail "config.authentication.admin is set by the chart: use admin.enabled, admin.password and admin.existingSecret" -}}
+{{- end -}}
+{{- if $admin -}}
+{{- $_ := set $auth "admin" (dict "password_file" "/etc/linea/admin/password") -}}
 {{- end -}}
 {{- if $auth.oidc -}}
 {{- if include "linea.hasOIDCSecret" . -}}
 {{- $_ := set $auth.oidc "client_secret_file" "/etc/linea/oidc/client-secret" -}}
 {{- end -}}
 {{- end -}}
-{{- $file := dict "version" 1 "authentication" $auth "bindings" $config.bindings -}}
+{{- $file := dict "version" 1 "authentication" $auth -}}
+{{- if $config.bindings }}{{ $_ := set $file "bindings" $config.bindings }}{{ end -}}
 {{- if include "linea.acceptsWorkers" . }}{{ $_ := set $file "worker_token_file" "/etc/linea/worker-token/token" }}{{ end -}}
 {{- if include "linea.acceptsBuilds" . -}}
 {{- $builds := dict "token_file" "/etc/linea/builder-token/token" -}}
@@ -323,7 +340,16 @@ app.kubernetes.io/component: livecapture
 {{- $objects := dict "endpoint" $o.endpoint "bucket" $o.bucket "path_style" $o.pathStyle "access_key_file" "/etc/linea/store/access-key" "secret_key_file" "/etc/linea/store/secret-key" -}}
 {{- if $o.prefix }}{{ $_ := set $objects "prefix" $o.prefix }}{{ end -}}
 {{- if $o.region }}{{ $_ := set $objects "region" $o.region }}{{ end -}}
-{{- $_ := set $file "store" (dict "database_url_file" "/etc/linea/store/database-url" "objects" $objects "storage_limit" $config.storageLimit "run_limit" $config.runLimit) -}}
+{{- if $o.createBucket }}{{ $_ := set $objects "create_bucket" true }}{{ end -}}
+{{- $store := dict "objects" $objects "storage_limit" $config.storageLimit "run_limit" $config.runLimit -}}
+{{- if .Values.postgresql.enabled -}}
+{{- /* The bundled PostgreSQL: a URL without its password, which the server completes from the Secret that holds it. */ -}}
+{{- $_ := set $store "database_url" (printf "postgres://linea@%s:5432/linea?sslmode=disable" (include "linea.postgresqlName" .)) -}}
+{{- $_ := set $store "database_password_file" "/etc/linea/postgresql/password" -}}
+{{- else -}}
+{{- $_ := set $store "database_url_file" "/etc/linea/store/database-url" -}}
+{{- end -}}
+{{- $_ := set $file "store" $store -}}
 {{- if $config.limits }}{{ $_ := set $file "limits" $config.limits }}{{ end -}}
 {{- if $config.retention }}{{ $_ := set $file "retention" $config.retention }}{{ end -}}
 {{- toYaml $file -}}
@@ -334,7 +360,7 @@ app.kubernetes.io/component: livecapture
 {{- .repository }}:{{ .tag }}{{ with .digest }}@{{ . }}{{ end -}}
 {{- end -}}
 
-{{/* A value from values, else the one kept in an existing Secret, else a new random one: 32 letters and digits, or with a fifth element "hex" 64 lowercase hexadecimal characters, or "fleet" a fleet credential token. Generated once per render: every template sees the same value. */}}
+{{/* A value from values, else the one kept in an existing Secret, else a new random one: 32 letters and digits, or with a fifth element "hex" 64 lowercase hexadecimal characters, or "token" 48 letters and digits, or "fleet" a fleet credential token. Generated once per render: every template sees the same value. */}}
 {{- define "linea.keptSecret" -}}
 {{- $root := index . 0 -}}{{- $secret := index . 1 -}}{{- $key := index . 2 -}}{{- $given := index . 3 -}}
 {{- $kind := "" -}}{{- if gt (len .) 4 }}{{ $kind = index . 4 }}{{ end -}}
@@ -348,6 +374,8 @@ app.kubernetes.io/component: livecapture
 {{- $value = b64dec (index $existing.data $key) -}}
 {{- else if eq $kind "hex" -}}
 {{- $value = sha256sum (randAlphaNum 64) -}}
+{{- else if eq $kind "token" -}}
+{{- $value = randAlphaNum 48 -}}
 {{- else if eq $kind "fleet" -}}
 {{- $value = printf "of1_%s_%s" (sha256sum (randAlphaNum 64) | trunc 32) (sha256sum (randAlphaNum 64)) -}}
 {{- else -}}
@@ -394,18 +422,9 @@ app.kubernetes.io/component: livecapture
 {{- end -}}
 {{- end -}}
 
-{{/* The store the server uses: the bundled stores, or store from values. */}}
-{{- define "linea.databaseURL" -}}
-{{- if .Values.postgresql.enabled -}}
-{{- printf "postgres://linea:%s@%s:5432/linea?sslmode=disable" (include "linea.postgresqlPassword" .) (include "linea.postgresqlName" .) -}}
-{{- else -}}
-{{- .Values.store.databaseURL -}}
-{{- end -}}
-{{- end -}}
-
 {{- define "linea.objects" -}}
 {{- if .Values.seaweedfs.enabled -}}
-{{- toYaml (dict "endpoint" (printf "http://%s:8333" (include "linea.seaweedfsName" .)) "bucket" .Values.seaweedfs.bucket "prefix" "" "region" "" "pathStyle" true "accessKey" (include "linea.seaweedfsAccessKey" .) "secretKey" (include "linea.seaweedfsSecretKey" .)) -}}
+{{- toYaml (dict "endpoint" (printf "http://%s:8333" (include "linea.seaweedfsName" .)) "bucket" .Values.seaweedfs.bucket "prefix" "" "region" "" "pathStyle" true "createBucket" true "accessKey" (include "linea.seaweedfsAccessKey" .) "secretKey" (include "linea.seaweedfsSecretKey" .)) -}}
 {{- else -}}
 {{- toYaml .Values.store.objects -}}
 {{- end -}}

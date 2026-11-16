@@ -14,6 +14,9 @@ import (
 var (
 	ErrCapacity = errors.New("inventory capacity reached")
 	ErrStale    = errors.New("stale connection generation")
+	// ErrUIDHeld refuses a connection whose credential differs from the one
+	// that holds the instance UID while that UID is connected.
+	ErrUIDHeld = errors.New("instance uid is held by another credential")
 	// ErrBusy is writer backpressure: retry later instead of blocking reports.
 	ErrBusy = errors.New("fleet writer busy")
 )
@@ -177,12 +180,23 @@ func ValidID(id string) bool {
 	return err == nil && hex.EncodeToString(b) == id
 }
 
-// Connect takes ownership for a new connection and fences any older one.
+// Connect takes ownership for a new connection and fences any older one. It
+// does not know the credential, so it never refuses.
 func (s *Store) Connect(id string, report Report, now time.Time) (uint64, error) {
+	return s.connect(id, nil, report, now)
+}
+
+// connect applies the credential binding when a credential is given: a
+// different credential cannot take over a connected UID. A disconnected UID
+// changes hands, as in the durable store.
+func (s *Store) connect(id string, credential *string, report Report, now time.Time) (uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now = now.UTC()
 	r, exists := s.agents[id]
+	if exists && r.Connected && credential != nil && r.CredentialID != "" && r.CredentialID != *credential {
+		return 0, ErrUIDHeld
+	}
 	if !exists {
 		if len(s.agents) >= s.max && !s.evict() {
 			return 0, ErrCapacity
@@ -203,6 +217,9 @@ func (s *Store) Connect(id string, report Report, now time.Time) (uint64, error)
 	r.Generation++
 	r.Connected, r.Presence = true, "connected"
 	r.ConnectedAt, r.LastSeenAt, r.DisconnectedAt = now, &now, nil
+	if credential != nil {
+		r.CredentialID = *credential
+	}
 	r.apply(report, now)
 	return r.Generation, nil
 }

@@ -39,6 +39,13 @@ func writeText(w io.Writer, rep *platform.Report) error {
 		}
 	}
 
+	if lines := notShownLines(rep.Topology); len(lines) > 0 {
+		t.heading("not shown by this run")
+		for _, l := range lines {
+			t.line(1, "%s", l)
+		}
+	}
+
 	t.heading("inputs")
 	for i, in := range r.Inputs {
 		status := "accepted"
@@ -348,6 +355,31 @@ func runVerdict(rep *platform.Report) (string, string) {
 	return verdict, detail
 }
 
+// notShownLines groups the topology's not-shown lists by behavior, in the
+// order the components appear: the components, then what is not shown.
+func notShownLines(g *platform.Graph) []string {
+	if g == nil {
+		return nil
+	}
+	var codes []string
+	refs := map[string][]string{}
+	details := map[string]string{}
+	for _, c := range g.Components {
+		for _, gap := range c.NotShown {
+			if _, ok := refs[gap.Code]; !ok {
+				codes = append(codes, gap.Code)
+				details[gap.Code] = gap.Detail
+			}
+			refs[gap.Code] = append(refs[gap.Code], c.Ref)
+		}
+	}
+	out := make([]string, 0, len(codes))
+	for _, code := range codes {
+		out = append(out, strings.Join(refs[code], ", ")+": "+details[code])
+	}
+	return out
+}
+
 // runWarnings collects what makes a run differ from the deployed Collector:
 // stand-ins, unavailable references, wall clock reads that were not
 // rebased, and mock warnings.
@@ -379,7 +411,35 @@ func runWarnings(rep *platform.Report) []string {
 			out = append(out, fmt.Sprintf("mock %s: %s", d.Ref, w))
 		}
 	}
+	for _, w := range rep.Warnings {
+		out = append(out, runWarningLine(w))
+	}
 	return out
+}
+
+// runWarningLine says where a run's evidence may be wrong.
+func runWarningLine(w platform.RunWarning) string {
+	if w.Code == platform.WarningSelfCheckFailed {
+		return "runtime self-check failed, " + w.Detail
+	}
+	return w.Component + ": " + w.Detail
+}
+
+// selfCheckSummary is a runtime's self-check in a word or the codes that
+// failed.
+func selfCheckSummary(checks []platform.SelfCheck) string {
+	if len(checks) == 0 {
+		return "not checked"
+	}
+	failed := platform.FailedSelfChecks(checks)
+	if len(failed) == 0 {
+		return "passed"
+	}
+	codes := make([]string, len(failed))
+	for i, c := range failed {
+		codes[i] = c.Code
+	}
+	return "failed: " + strings.Join(codes, ", ")
 }
 
 // matchingLine names the non-zero record matches of a stage diff.

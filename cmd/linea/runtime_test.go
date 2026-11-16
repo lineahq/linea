@@ -57,14 +57,15 @@ func TestRuntimeCommandRefusesBadUsage(t *testing.T) {
 
 func TestRuntimeTableShortensImageIDs(t *testing.T) {
 	var out bytes.Buffer
-	err := writeRuntimes(&out, []api.Runtime{{Name: "v0162", CollectorVersion: "0.162.0", Verified: true, ImageID: "sha256:0123456789abcdef0123"},
+	err := writeRuntimes(&out, []api.Runtime{{Name: "v0162", CollectorVersion: "0.162.0", Verified: true, ImageID: "sha256:0123456789abcdef0123",
+		SelfCheck: []platform.SelfCheck{{Code: "lifecycle", OK: true}}},
 		{Name: "next", CollectorVersion: "0.162.0", Verified: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-	if len(lines) != 3 || strings.Fields(lines[0])[0] != "NAME" || strings.Join(strings.Fields(lines[1]), " ") != "v0162 0.162.0 true 0123456789ab" ||
-		strings.Join(strings.Fields(lines[2]), " ") != "next 0.162.0 true -" {
+	if len(lines) != 3 || strings.Fields(lines[0])[0] != "NAME" || strings.Join(strings.Fields(lines[1]), " ") != "v0162 0.162.0 true passed 0123456789ab" ||
+		strings.Join(strings.Fields(lines[2]), " ") != "next 0.162.0 true not checked -" {
 		t.Fatalf("table:\n%s", out.String())
 	}
 }

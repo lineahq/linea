@@ -157,8 +157,8 @@ func cliTarget(req CLIRequest) (goos, goarch string) {
 
 // BuildCLI compiles the linea CLI with a manifest's components with the
 // host's go command and writes it to out, replacing a file there only once
-// the build succeeded. The gate generator runs for this host, the CLI
-// compiles for the request's platform; a CLI for this host is started once
+// the build succeeded. The CLI compiles for the request's platform; a CLI
+// for this host is started once
 // to check that its version command names the manifest's Collector and
 // modules. A failure after the steps started is a BuildError.
 func (n *Native) BuildCLI(ctx context.Context, req CLIRequest, out string) (*CLI, error) {
@@ -198,7 +198,7 @@ func (n *Native) buildCLI(ctx context.Context, req CLIRequest, out string) (*CLI
 	if err != nil {
 		return nil, &BuildError{Stage: "compiling", Err: err}
 	}
-	if err := r.stepFor(ctx, "compiling", dir, goMod, false, runtime.GOOS, runtime.GOARCH, genArgs); err != nil {
+	if err := r.gates(ctx, "compiling", dir); err != nil {
 		return nil, err
 	}
 	if err := r.step(ctx, "compiling", dir, goMod, false, cliCompileArgs(bin, p.verified)); err != nil {

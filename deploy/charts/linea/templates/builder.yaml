@@ -1,6 +1,6 @@
 {{- if .Values.builder.enabled }}
 {{- $fullname := include "linea.fullname" . -}}
-{{- if and .Values.networkPolicy.enabled (or (include "linea.builderAutoscaled" .) (gt (int .Values.builder.replicas) 0)) }}{{ include "linea.checkObjectStorage" . }}{{ end -}}
+{{- if and .Values.networkPolicy.enabled (gt (int .Values.builder.replicas) 0) }}{{ include "linea.checkObjectStorage" . }}{{ end -}}
 {{- include "linea.checkBuilderScaling" . -}}
 {{- $claim := include "linea.builderCacheClaim" . -}}
 {{- $modules := .Values.builder.modules -}}
@@ -11,9 +11,8 @@
 # cache, build cache and build directories, allows execution; the root
 # filesystem stays read-only. It holds no database or bucket credentials:
 # inputs and binaries move through presigned URLs. With builder.replicas 0
-# builds are off and queued builds wait. With builder.autoscaling an
-# autoscaler sets the replicas (builder-autoscaling.yaml). On SIGTERM a
-# builder finishes its builds before it exits, within the grace period.
+# builds are off and queued builds wait. On SIGTERM a builder finishes its
+# builds before it exits, within the grace period.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -30,9 +29,7 @@ metadata:
     {{- include "linea.labels" . | nindent 4 }}
     app.kubernetes.io/component: builder
 spec:
-  {{- if not (include "linea.builderAutoscaled" .) }}
   replicas: {{ .Values.builder.replicas }}
-  {{- end }}
   strategy:
     {{- if include "linea.builderCacheExclusive" . }}
     # One pod at a time can mount the ReadWriteOnce cache.
@@ -50,6 +47,11 @@ spec:
     metadata:
       labels:
         {{- include "linea.builderSelector" . | nindent 8 }}
+      {{- if include "linea.builderTokenRendered" . }}
+      annotations:
+        # The token is read at startup; a change restarts the builders.
+        checksum/builder-token: {{ include "linea.builderToken" . | sha256sum }}
+      {{- end }}
     spec:
       serviceAccountName: {{ $fullname }}-builder
       automountServiceAccountToken: false
@@ -58,11 +60,14 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      # Root with only CAP_SETUID and CAP_SETGID (below): the binary a build
+      # makes starts for its hello check as nobody (--check-user), which
+      # reads neither the token nor the other secret files (mode 0400). The
+      # namespace needs the baseline Pod Security level.
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 65532
-        runAsGroup: 65532
-        fsGroup: 65532
+        runAsNonRoot: false
+        runAsUser: 0
+        runAsGroup: 0
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -77,6 +82,7 @@ spec:
             - --cpus={{ .Values.builder.cpus }}
             - --token-file=/etc/linea/builder-token/token
             - --work-dir=/work
+            - --check-user=65534:65534
             {{- if .Values.builder.caSecret }}
             - --ca-file=/etc/linea/ca/ca.crt
             {{- end }}
@@ -116,6 +122,7 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+              add: ["SETUID", "SETGID"]
           volumeMounts:
             - name: work
               mountPath: /work
@@ -163,6 +170,7 @@ spec:
           secret:
             secretName: {{ include "linea.builderSecret" . }}
             items: [{key: token, path: token}]
+            defaultMode: 0400
         {{- if .Values.builder.caSecret }}
         - name: ca
           secret:
@@ -174,12 +182,14 @@ spec:
           secret:
             secretName: {{ .Values.builder.export.authSecret }}
             items: [{key: {{ .Values.builder.export.authKey | quote }}, path: config.json}]
+            defaultMode: 0400
         {{- end }}
         {{- if $modules.netrcSecret }}
         - name: modules-netrc
           secret:
             secretName: {{ $modules.netrcSecret }}
             items: [{key: {{ $modules.netrcKey | quote }}, path: netrc}]
+            defaultMode: 0400
         {{- end }}
         {{- if $modules.caSecret }}
         - name: modules-ca
@@ -207,7 +217,7 @@ spec:
 # The builder accepts no connection. It reaches the server, DNS to find it
 # and the object store, like a worker, and it alone reaches the outside
 # world: the module proxy and the git hosts a manifest names
-# (networkPolicy.builderEgress, open to every address by default).
+# (networkPolicy.builderEgress, public addresses only by default).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

@@ -37,6 +37,14 @@ type Admission struct {
 	Priority int
 	// Index is the run's first index (RunIndex).
 	Index RunIndex
+	// Principal is the ID of the principal that submitted the run, at most
+	// MaxRunIndexField bytes; empty for none.
+	Principal string
+	// PrincipalRuns, when positive, refuses the admission with ErrRunLimit
+	// while Principal already has that many unfinished runs in the store,
+	// whichever instance admitted them. The check and the admission are one
+	// step, so concurrent admissions cannot both pass it.
+	PrincipalRuns int
 }
 
 // RunBinary is the runtime binary a run was admitted with: a stored
@@ -75,9 +83,11 @@ type Assignment struct {
 	Generation uint64
 }
 
-// Queue schedules admitted runs. Times come from the caller,
-// so every instance judges leases against the same clock it renews them with.
-// A terminal SaveRun takes a run off the queue.
+// Queue schedules admitted runs. Times come from the caller's clock. A store
+// that instances share moves them onto one clock of its own, so instances
+// whose clocks disagree still judge a lease by the clock it was renewed with,
+// and returns lease times on the caller's clock. A terminal SaveRun takes a
+// run off the queue.
 type Queue interface {
 	// Claim assigns up to n queued runs of runtime to worker, lowest priority
 	// first and then in admission order, each leased until expires. Runs

@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -114,10 +113,9 @@ func TestBatchingKeepsOneBatcherPerMetadataValue(t *testing.T) {
 		if want := []int{0, 1, 0, 2}; !reflect.DeepEqual(arrivals, want) {
 			t.Fatalf("arrival batchers = %v, want %v", arrivals, want)
 		}
-		// globex's and the no-tenant timers fire within a millisecond of
-		// each other, in either order.
-		slices.Sort(flushes)
-		if want := []string{"size:xxxx:0", "timeout:x:2", "timeout:xx:1"}; !reflect.DeepEqual(flushes, want) {
+		// The no-tenant request comes 100ms after globex's, so their timers
+		// fire in that order.
+		if want := []string{"size:xxxx:0", "timeout:xx:1", "timeout:x:2"}; !reflect.DeepEqual(flushes, want) {
 			t.Fatalf("flushes = %v, want %v (notes %v)", flushes, want, b.Notes)
 		}
 		if b.Verification != analysis.BatchMetricsAgree {

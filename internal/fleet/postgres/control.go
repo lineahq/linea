@@ -13,6 +13,20 @@ import (
 	"github.com/lineahq/linea/internal/fleet/fleet"
 )
 
+// requireManager accepts an active admin or operator credential. Credential
+// and plugin lifecycle writes stay behind requireAdmin.
+func requireManager(ctx context.Context, tx pgx.Tx, id string) error {
+	var ok bool
+	err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM fleet.credentials WHERE id=$1 AND role IN ('admin','operator') AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>clock_timestamp()))", id).Scan(&ok)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return auth.ErrUnauthorized
+	}
+	return nil
+}
+
 func (s *Store) GetGroup(ctx context.Context, id string) (fleet.Group, error) {
 	ctx, cancel := bounded(ctx)
 	defer cancel()
@@ -88,7 +102,7 @@ func (s *Store) PutGroup(ctx context.Context, actor string, g fleet.Group, expec
 		selector = &g.Selector
 	}
 	err = s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		if err := requireAdmin(ctx, tx, actor); err != nil {
+		if err := requireManager(ctx, tx, actor); err != nil {
 			return err
 		}
 		var revision int64
@@ -135,7 +149,7 @@ func (s *Store) PutGroup(ctx context.Context, actor string, g fleet.Group, expec
 }
 func (s *Store) DeleteGroup(ctx context.Context, actor, id string, expected int64) error {
 	return s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		if err := requireAdmin(ctx, tx, actor); err != nil {
+		if err := requireManager(ctx, tx, actor); err != nil {
 			return err
 		}
 		var revision int64

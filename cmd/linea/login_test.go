@@ -8,7 +8,7 @@ import (
 )
 
 // TestLoginSaysWhenNoSignInIsNeeded: a server without CLI sign-in that
-// already signs requests in, as behind the Compose stack's proxy, needs no
+// already signs requests in, as behind an authenticating proxy, needs no
 // login; one that refuses them needs an API token.
 func TestLoginSaysWhenNoSignInIsNeeded(t *testing.T) {
 	for _, tc := range []struct {

@@ -60,6 +60,8 @@ func (collector) Run(ctx context.Context, opts runresult.Options) (*runresult.Re
 	return runtime.Run(ctx, opts)
 }
 
+func (collector) SelfCheck() []runresult.SelfCheck { return runtime.SelfCheck() }
+
 func (collector) RunReference(ctx context.Context, opts runresult.Options) (*runresult.Result, error) {
 	return runtime.RunReference(ctx, opts)
 }

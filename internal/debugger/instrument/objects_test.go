@@ -12,7 +12,6 @@ import (
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/processor"
 	"go.opentelemetry.io/collector/processor/batchprocessor"
-	"go.opentelemetry.io/collector/processor/processortest"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/attributesprocessor"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/filterprocessor"
@@ -52,7 +51,7 @@ func stageObjects(t *testing.T, f processor.Factory, conf map[string]any) (in, o
 		t.Fatal(err)
 	}
 	rec := NewRecorder()
-	p, err := Processor(f, rec).CreateLogs(ctx, processortest.NewNopSettings(f.Type()), cfg, new(consumertest.LogsSink))
+	p, err := Processor(f, rec).CreateLogs(ctx, attributedSettings(f.Type()), cfg, new(consumertest.LogsSink))
 	if err != nil {
 		t.Fatal(err)
 	}

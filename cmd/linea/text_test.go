@@ -2,12 +2,15 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/lineahq/linea/internal/debugger/analysis"
 	"github.com/lineahq/linea/internal/debugger/platform"
 	"github.com/lineahq/linea/internal/debugger/recommend"
+	"github.com/lineahq/linea/internal/debugger/runresult"
+	"github.com/lineahq/linea/internal/debugger/topology"
 )
 
 // TestWriteGroupingMarksMovedAttributesAndMerges: the text names each output
@@ -114,5 +117,56 @@ func TestWriteFilteringNamesConditionsAndDrops(t *testing.T) {
 				t.Fatalf("text =\n%s\nwant\n%s", b.String(), c.want)
 			}
 		})
+	}
+}
+
+// TestNotShownLinesGroupComponentsByBehavior: one line per behavior a run
+// does not show, naming its components in topology order.
+func TestNotShownLinesGroupComponentsByBehavior(t *testing.T) {
+	export := topology.Gap{Code: "export_outcome", Detail: "Every export succeeds."}
+	memory := topology.Gap{Code: "host_memory", Detail: "Host memory."}
+	g := &platform.Graph{Components: []topology.Component{
+		{Ref: "exporter/otlp/a", NotShown: []topology.Gap{export}},
+		{Ref: "processor/memory_limiter", NotShown: []topology.Gap{memory}},
+		{Ref: "exporter/debug"},
+		{Ref: "exporter/otlp/b", NotShown: []topology.Gap{export}},
+	}}
+	got := notShownLines(g)
+	want := []string{
+		"exporter/otlp/a, exporter/otlp/b: Every export succeeds.",
+		"processor/memory_limiter: Host memory.",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("lines = %q, want %q", got, want)
+	}
+	if notShownLines(nil) != nil {
+		t.Fatal("a report without a topology has lines")
+	}
+}
+
+// TestRunWarningsAndSelfCheckInText: run warnings join the run's warnings,
+// and a runtime's self-check reads as passed, the failed codes, or not
+// checked.
+func TestRunWarningsAndSelfCheckInText(t *testing.T) {
+	rep := &platform.Report{Result: &runresult.Result{}, Warnings: []platform.RunWarning{
+		{Code: platform.WarningSelfCheckFailed, Detail: "connector_routes: routes do not name their pipelines"},
+		{Code: platform.WarningUnattributedStage, Component: "batch", Detail: "one stage for every pipeline"},
+	}}
+	got := runWarnings(rep)
+	want := []string{"runtime self-check failed, connector_routes: routes do not name their pipelines", "batch: one stage for every pipeline"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("warnings = %q", got)
+	}
+	for _, tc := range []struct {
+		checks []platform.SelfCheck
+		want   string
+	}{
+		{nil, "not checked"},
+		{[]platform.SelfCheck{{Code: runresult.SelfCheckLifecycle, OK: true}}, "passed"},
+		{[]platform.SelfCheck{{Code: runresult.SelfCheckLifecycle, OK: true}, {Code: runresult.SelfCheckFanoutClone}}, "failed: fanout_clone"},
+	} {
+		if got := selfCheckSummary(tc.checks); got != tc.want {
+			t.Errorf("selfCheckSummary(%+v) = %q, want %q", tc.checks, got, tc.want)
+		}
 	}
 }

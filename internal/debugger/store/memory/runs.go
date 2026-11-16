@@ -114,6 +114,41 @@ func (s *Store) AdmitRun(ctx context.Context, a artifact.Admission) (*artifact.R
 	return s.saveRun(ctx, a.ID, a.Project, 0, false, a.Index, a.Metadata, nil, a.Bundle, &a)
 }
 
+// AdmitRuns admits every run of as under one lock, so either all of them are
+// admitted or none is. Each member's principal count sees the members before
+// it.
+func (s *Store) AdmitRuns(ctx context.Context, as []artifact.Admission) ([]*artifact.RunRecord, error) {
+	d := s.d
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err := s.ready(ctx.Err()); err != nil {
+		return nil, err
+	}
+	if len(as) == 0 {
+		return nil, nil
+	}
+	// The writes below replace d.runs rather than change it, and add map
+	// entries and blobs; restoring these undoes a partial batch.
+	runs, runsSize := d.runs, d.runsSize
+	blobs, admitted, queue := maps.Clone(d.blobs), maps.Clone(d.admitted), maps.Clone(d.queue)
+	pins, principals := maps.Clone(d.pins), maps.Clone(d.principals)
+	recs := make([]*artifact.RunRecord, len(as))
+	for i := range as {
+		a := &as[i]
+		r, err := s.saveRunLocked(a.ID, a.Project, 0, false, a.Index, a.Metadata, nil, a.Bundle, a)
+		if err != nil {
+			d.runs, d.runsSize = runs, runsSize
+			d.blobs, d.admitted, d.queue, d.pins, d.principals = blobs, admitted, queue, pins, principals
+			return nil, err
+		}
+		recs[i] = r
+	}
+	for _, r := range recs {
+		d.change(artifact.ChangeRun, r.ID)
+	}
+	return recs, nil
+}
+
 func (s *Store) saveRun(ctx context.Context, id, project string, expected uint64, terminal bool, index artifact.RunIndex, metadata, evidence, bundle []byte, admission *artifact.Admission) (*artifact.RunRecord, error) {
 	d := s.d
 	d.mu.Lock()
@@ -121,10 +156,24 @@ func (s *Store) saveRun(ctx context.Context, id, project string, expected uint64
 	if err := s.ready(ctx.Err()); err != nil {
 		return nil, err
 	}
+	r, err := s.saveRunLocked(id, project, expected, terminal, index, metadata, evidence, bundle, admission)
+	if err != nil {
+		return nil, err
+	}
+	d.change(artifact.ChangeRun, id)
+	return r, nil
+}
+
+// saveRunLocked writes a run without recording the change; d.mu is held.
+func (s *Store) saveRunLocked(id, project string, expected uint64, terminal bool, index artifact.RunIndex, metadata, evidence, bundle []byte, admission *artifact.Admission) (*artifact.RunRecord, error) {
+	d := s.d
 	if d.runs == nil || !validRunID(id) || !artifact.ValidProject(project) || !json.Valid(metadata) || len(metadata) > maxRunMetadata || (!terminal && len(evidence) != 0) || !index.Valid() {
 		return nil, invalid("invalid run publication")
 	}
 	var pin *artifact.RunBinary
+	if admission != nil && (len(admission.Principal) > artifact.MaxRunIndexField || admission.PrincipalRuns < 0) {
+		return nil, invalid("invalid run principal")
+	}
 	if admission != nil && admission.Binary != nil {
 		if !admission.Binary.Valid() {
 			return nil, invalid("invalid run binary")
@@ -154,6 +203,17 @@ func (s *Store) saveRun(ctx context.Context, id, project string, expected uint64
 		}
 		if !stored {
 			return nil, artifact.ErrNotFound
+		}
+	}
+	if admission != nil && admission.PrincipalRuns > 0 {
+		held := 0
+		for _, p := range d.principals {
+			if p == admission.Principal {
+				held++
+			}
+		}
+		if held >= admission.PrincipalRuns {
+			return nil, artifact.ErrRunLimit
 		}
 	}
 	if !exists && len(d.runs.Records) >= s.limits.Runs || int64(len(evidence)) > s.limits.RunBytes || int64(len(bundle)) > s.limits.BundleBytes {
@@ -220,6 +280,9 @@ func (s *Store) saveRun(ctx context.Context, id, project string, expected uint64
 		if pin != nil {
 			d.pins[id] = *pin
 		}
+		if admission.Principal != "" {
+			d.principals[id] = admission.Principal
+		}
 	}
 	if e := d.queue[id]; e != nil {
 		e.generation = r.Generation
@@ -227,9 +290,9 @@ func (s *Store) saveRun(ctx context.Context, id, project string, expected uint64
 	if terminal {
 		delete(d.queue, id)
 		delete(d.pins, id)
+		delete(d.principals, id)
 		delete(d.feed.events, id)
 	}
-	d.change(artifact.ChangeRun, id)
 	r = cloneRun(r)
 	return &r, nil
 }

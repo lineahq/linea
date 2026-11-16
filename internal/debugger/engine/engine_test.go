@@ -16,6 +16,7 @@ import (
 	"github.com/lineahq/linea/internal/debugger/instrument"
 	"github.com/lineahq/linea/internal/debugger/ottldebug"
 	"github.com/lineahq/linea/internal/debugger/release"
+	"github.com/lineahq/linea/internal/debugger/runresult"
 )
 
 var tracesFixture = filepath.Join("..", "..", "..", "testdata", "traces", "traces.json")
@@ -152,6 +153,11 @@ func TestExecuteFollowsRecordsThroughARoutingConnector(t *testing.T) {
 	}
 	if !rep.Comparison.Equal {
 		t.Fatalf("comparison: %v", rep.Comparison.Differences)
+	}
+	// The built-in runtime passes its self-check, and every route names
+	// its pipeline: no warnings.
+	if len(rep.Runtime.SelfCheck) == 0 || len(runresult.FailedSelfChecks(rep.Runtime.SelfCheck)) != 0 || rep.Warnings != nil {
+		t.Fatalf("self-check %+v, warnings %+v", rep.Runtime.SelfCheck, rep.Warnings)
 	}
 
 	// Every stage event but the injection is caused by an earlier event.

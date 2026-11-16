@@ -76,7 +76,9 @@ flowchart LR
 | --- | --- |
 | [Installing Linea](install.md) | The CLI, a team server with Docker Compose or Kubernetes, release assets and their signatures, and building from source |
 | [Debugger](debugger/README.md) | Install the CLI, run and test a configuration, set up a team server, and use the web client, HTTP API and MCP |
+| [Operating a team server](debugger/operations.md) | Backup and restore, secret rotation, and upgrade and rollback of a debugger team server |
 | [Fleet](fleet/README.md) | Deploy the OpAMP fleet server with Docker, enroll Collectors, manage groups and the API |
 | [Live-capture plugin](fleet/livecapture.md) | Install the plugin, connect Collectors to it and capture bounded telemetry |
 | [Collector components](collector-components/README.md) | The `capture` processor and `livecapture` extension, and the [build recipe](collector-components/README.md#build-a-collector-with-the-components) for a Collector with them and the contrib `opamp` extension. Needs Collector 0.162.0 or newer. |
+| [Compatibility](compatibility.md) | Which versions and protocols each part must match, schema rules and upgrade order |
 | [Internals](internals/README.md) | Developer notes: package map, build and test commands, and verified Collector behavior |

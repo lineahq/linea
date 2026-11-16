@@ -134,8 +134,8 @@ type BuildPage struct {
 	NextCursor string
 }
 
-// BuildCounts are how many builds are queued and running, for a builder
-// autoscaler.
+// BuildCounts are how many builds are queued and running, for the server's
+// metrics.
 type BuildCounts struct {
 	Queued, Running int
 }

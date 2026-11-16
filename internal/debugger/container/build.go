@@ -328,9 +328,17 @@ var (
 	// requirements into go.mod and go.sum.
 	resolveArgs = resolveArgsFor(workerMain)
 	// genArgs writes the feature gates' owners from the resolved modules.
-	genArgs = []string{"run", "-mod=readonly", "./internal/debugger/registry/gen", "-gates", "internal/debugger/registry/gateowners.go", "-source", "the runtime's manifest"}
+	// The native builder writes the same file in process (nativeRun.gates).
+	genArgs = []string{"run", "-mod=readonly", "./internal/debugger/registry/gen", "-gates", gatesFile, "-source", gatesSource}
 	// missingArgs lists, after a failed step, the packages Go could not load.
 	missingArgs = missingArgsFor(workerMain)
+)
+
+// The feature gates' owners file in the build module and the source its
+// header names.
+const (
+	gatesFile   = "internal/debugger/registry/gateowners.go"
+	gatesSource = "the runtime's manifest"
 )
 
 // workerMain is the main package a runtime build compiles; cliMain is the

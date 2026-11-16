@@ -49,6 +49,22 @@ connector) are `dependency_mocked` ([mocking.md](mocking.md)). All others follow
 A component whose settings use a reference's stand-in string keeps its
 mode; the topology lists those references in its `stand_in_values`.
 
+Each component's `not_shown` (report schema 0.16, `engine/notshown.go`)
+lists, as a code and a sentence, what the real component does in a
+deployment that a run does not show. It follows from the kind, type and mode
+alone:
+
+| Component | Code | Not shown |
+| --- | --- | --- |
+| `simulated` or stand-in receiver | `receiver_intake` | network intake, decoding, authentication, rejections |
+| `memory_limiter` (not a stand-in) | `host_memory` | it measures the debugger process (CLI, worker or server), not the deployed Collector |
+| stand-in processor | `stand_in_processing` | the real processing; data passes through |
+| `captured` or stand-in exporter | `export_outcome` | export errors, retries, sending queue, backpressure, failover |
+| stand-in connector | `stand_in_routing` | the real routing; data of its own signal goes to every pipeline it feeds |
+
+`dependency_mocked` components list nothing: their real code runs, and the
+mock's note describes the dependency.
+
 ## Compatibility diagnostics
 
 The Collector's own unmarshal stops at the first unknown type, with a

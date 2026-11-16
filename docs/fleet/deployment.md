@@ -64,7 +64,8 @@ Secrets:
 | Protection | File-based Compose secrets are plaintext host files. Protect the directory and its backups; never commit or print them |
 | Admin token | Valid until revoked; it does not expire. `admin.json` is an operator copy of the one-time disclosure: store it in your secret manager |
 | Admin expiry | Startup requires an active admin. If all admins are revoked or expired, stop fleet and run offline bootstrap again. Bootstrap refuses while an active admin exists. Admins issued before schema version 11 keep their 90-day expiry |
-| Deployment token | With `LINEA_FLEET_BOOTSTRAP_TOKEN` (or `_FILE`), bootstrap installs a token the deployment generated (`of1_`, 32 and then 64 lowercase hexadecimal characters, joined by `_`) instead of generating one, and prints only `fleet admin created` or `fleet admin is current`. Repeating it changes nothing while that admin is active; it refuses when another admin is active or that token's credential was revoked. The debugger's Compose overlay and Helm chart use it to connect `linea-server` |
+| Deployment token | With `LINEA_FLEET_BOOTSTRAP_TOKEN` (or `_FILE`), bootstrap installs a token the deployment generated (`of1_`, 32 and then 64 lowercase hexadecimal characters, joined by `_`) instead of generating one, and prints only `fleet admin created` or `fleet admin is current`. Repeating it changes nothing while that admin is active; it refuses when another admin is active or that token's credential was revoked |
+| Deployment operator token | With `LINEA_FLEET_OPERATOR_TOKEN` (or `_FILE`) as well, bootstrap installs that token as an operator credential, named by `--operator-name` (default `linea-server`), after the admin, and prints only `fleet operator created` or `fleet operator is current`. The operator credential does not expire. Repeating it changes nothing while that operator is active; it refuses when the token's credential has another role or token, was revoked or has expired. The debugger's Compose overlay and Helm chart keep the admin token for whoever administers fleet and give `linea-server` the operator token |
 | Rotation | Changing secret files does not rotate passwords in an existing database. Coordinate database password changes with connection-file updates |
 
 Storage and roles:
@@ -164,7 +165,7 @@ Optional Compose variables (environment or a protected env file):
   this Compose deployment.
 - Core has no cookie auth or CORS, and rejects browser-origin WebSockets.
 - Agents send bearer auth to `/v1/opamp`; polling is unsupported. API clients
-  use a reader or admin token on the management listener.
+  use a reader, operator or admin token on the management listener.
 - Only process probes are anonymous. Metrics need fleet read access.
 
 ### Container hardening
@@ -349,8 +350,9 @@ docker compose --project-name fleet-restore --env-file restore.env up -d --wait 
 3. Run migrations, start fleet, and check readiness and authenticated
    inventory, groups and credential metadata with an independent HTTP client.
 
-- The current durable schema is version 11 (version 11 lets admin and reader
-  credentials be valid until revoked). Migrations only go forward, and
+- The current durable schema is version 12 (version 12 adds the `operator`
+  credential role; version 11 lets admin and reader credentials be valid
+  until revoked). Migrations only go forward, and
   `docker compose run --rm -T migrate` also re-applies the runtime role's
   grants.
 - The config management tables exist in every installation and stay unused

@@ -63,8 +63,8 @@ func Connect(ctx context.Context, opts ConnectOptions) error {
 	if strings.TrimSpace(opts.Name) == "" {
 		return errors.New("worker: a connecting worker needs a runtime name")
 	}
-	if opts.Capacity < 1 {
-		return errors.New("worker: a connecting worker's capacity is at least 1")
+	if opts.Capacity < 1 || opts.Capacity > maxHelloCapacity {
+		return fmt.Errorf("worker: a connecting worker's capacity is from 1 to %d", maxHelloCapacity)
 	}
 	if _, err := Identity(); err != nil {
 		return err
@@ -167,7 +167,7 @@ func dialOnce(ctx context.Context, t dialTarget, hold func(context.Context, *web
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
 	conn.SetPingHandler(func(data string) error {
-		_ = conn.SetReadDeadline(time.Now().Add(idleTimeout))
+		_ = conn.SetReadDeadline(time.Now().Add(idleTimeout()))
 		return conn.WriteControl(websocket.PongMessage, []byte(data), time.Now().Add(handshakeTimeout))
 	})
 	return hold(ctx, conn)
@@ -192,7 +192,7 @@ func Accept(w http.ResponseWriter, r *http.Request, authorize func(token string)
 	if err != nil {
 		return nil, err
 	}
-	s := newStream(conn)
+	s := newAcceptedStream(conn)
 	c := newClient("worker", s)
 	c.endpoint = r.RemoteAddr
 	c.closeIn = s.closeWrite
@@ -204,6 +204,11 @@ func Accept(w http.ResponseWriter, r *http.Request, authorize func(token string)
 	if _, err := c.handshake(ctx, s); err != nil {
 		return nil, err
 	}
+	if c.hello.Capacity > maxHelloCapacity || len(c.hello.Name) > maxHelloName {
+		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "hello out of bounds"), time.Now().Add(time.Second))
+		_ = c.Close()
+		return nil, fmt.Errorf("%w: a worker announces a capacity of at most %d and a name of at most %d bytes", errFrame, maxHelloCapacity, maxHelloName)
+	}
 	c.name = c.hello.Name
 	return c, nil
 }
@@ -212,10 +217,10 @@ func Accept(w http.ResponseWriter, r *http.Request, authorize func(token string)
 // connection's read deadline.
 func keepAlive(done <-chan struct{}, conn *websocket.Conn) {
 	conn.SetPongHandler(func(string) error {
-		return conn.SetReadDeadline(time.Now().Add(idleTimeout))
+		return conn.SetReadDeadline(time.Now().Add(idleTimeout()))
 	})
 	go func() {
-		t := time.NewTicker(pingInterval)
+		t := time.NewTicker(pingInterval())
 		defer t.Stop()
 		for {
 			select {

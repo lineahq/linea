@@ -130,6 +130,23 @@ var layoutVerified = sync.OnceValue(func() bool {
 })
 
 // pooling reports whether pdata object pooling is enabled.
+// ObjectsSupported says whether Objects can identify records in this
+// process, and why not: the pdata wrapper layout must be the verified one
+// and the pooling gate must exist and be off. A missing gate means the pdata
+// release differs from the one this was verified against, so pooling cannot
+// be ruled out.
+func ObjectsSupported() (bool, string) {
+	switch {
+	case !layoutVerified():
+		return false, "the pdata record wrapper layout is not the verified one (pdata v1.68.0)"
+	case poolingFeature() == nil:
+		return false, "the pdata feature gate " + poolingGate + " is not registered, so object pooling cannot be ruled out"
+	case pooling():
+		return false, "the pdata feature gate " + poolingGate + " is enabled, so objects are reused across records"
+	}
+	return true, ""
+}
+
 func pooling() bool {
 	g := poolingFeature()
 	return g != nil && g.IsEnabled()

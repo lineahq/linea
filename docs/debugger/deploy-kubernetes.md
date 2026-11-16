@@ -27,8 +27,8 @@ and push to your registry.
 | Image | Dockerfile | Runs as | What it is |
 | --- | --- | --- | --- |
 | `linea-server` | `deploy/docker/linea-server.Dockerfile` | 65532 | The server: web client and `linea-server` binary in a distroless image. No Collector, no worker source, no toolchain. |
-| `linea-worker` | `deploy/docker/linea-worker.Dockerfile` | 65534 | The pool worker (`pool.image`). Serves any runtime the server builds, downloading each binary on first use. |
-| `linea-builder` | `deploy/docker/linea-builder.Dockerfile` | 65532 | The builder (`builder.image`): pinned Go toolchain and worker source. Compiles natively, no Docker daemon. |
+| `linea-worker` | `deploy/docker/linea-worker.Dockerfile` | 65534; the chart runs the pool as root (below) | The pool worker (`pool.image`). Serves any runtime the server builds, downloading each binary on first use. |
+| `linea-builder` | `deploy/docker/linea-builder.Dockerfile` | 0, kept to `CAP_SETUID` and `CAP_SETGID` by the chart (below) | The builder (`builder.image`): pinned Go toolchain and worker source. Compiles natively, no Docker daemon. |
 
 ```sh
 docker build -f deploy/docker/linea-server.Dockerfile -t registry.example.com/team/linea-server:1.0 .
@@ -97,7 +97,20 @@ replication, no backups and no TLS inside the cluster.
 - The chart generates their passwords and S3 keys once and keeps them across
   upgrades. Set `postgresql.password` or `seaweedfs.accessKey` and
   `seaweedfs.secretKey` to choose them yourself.
-- A Job per release creates the bucket (`seaweedfs.bucket`, default `linea`).
+- The server creates the bucket (`seaweedfs.bucket`, default `linea`) at startup, and keeps an existing one. With your own store it does that only with `store.objects.createBucket: true`; by default the bucket is yours and must exist.
+- The bundled PostgreSQL password reaches the server as a file, `store.database_password_file`, from the PostgreSQL Secret; the server config holds a URL without it.
+- The server connects to the bundled PostgreSQL as `linea`, a role without
+  superuser rights that owns the database `linea`. It can create databases
+  and roles, which the `fleet.deploy` Job uses to create the fleet and
+  live-capture databases and roles; PostgreSQL 17 lets it change only the
+  roles it created, and never grant superuser. A ConfigMap script (`<release>-linea-postgresql-init`) that the
+  image runs when it first starts on an empty volume creates it, and refuses
+  the superuser `postgres` over TCP with a first line in `pg_hba.conf`; it
+  works only inside the pod (`kubectl exec ... psql -U postgres`). The two
+  share the password in the PostgreSQL Secret.
+- Your own PostgreSQL needs no superuser for the server: ownership of its
+  database is enough (the migrations create tables, views, triggers and one
+  PL/pgSQL function). Create the role and database yourself.
 - Each can be enabled on its own. An enabled store replaces its part of
   `store`, so leave that part empty. Neither can be combined with
   `store.existingSecret`.
@@ -162,6 +175,42 @@ networkPolicy:
       ports: [{port: 443}]
 ```
 
+With OIDC configured as in the example, the admin account stays off. Add
+`admin.enabled: true` to keep it as a way in until a group holds `admin`. The
+bucket is yours; add `store.objects.createBucket: true` to have the server
+create it when missing.
+
+### Signing in
+
+The chart can turn on the server's built-in account, the user `admin` with the
+admin role on everything and no binding to write
+([Signing in](team-server.md#signing-in)). It sets
+`authentication.admin.password_file` from a Secret.
+
+| Value | Meaning |
+| --- | --- |
+| `admin.enabled` | Unset (default): on when `config.authentication` sets neither `oidc` nor `trusted_headers`, so an install with no identity provider can be signed in to. `true` also turns it on beside an identity provider, `false` off. |
+| `admin.password`, `admin.existingSecret` | The password (at least 16 characters, one line), or a Secret holding it under the key `password`. With neither, the chart generates one and keeps it across upgrades. |
+
+Read the generated password, then sign in at `/sign-in` or from the CLI (the
+notes the chart prints show both):
+
+```sh
+kubectl -n <namespace> get secret <release>-linea-admin -o jsonpath='{.data.password}' | base64 -d
+linea login --admin --server https://debugger.example.com
+```
+
+- With the admin account as the only method, `config.bindings` can stay empty.
+- Failed sign-ins are limited per instance and per client address, 5 a minute.
+  The server sees the address of the connection, which behind an ingress is the
+  ingress's, so failed attempts from one client count against everyone behind
+  it.
+- Setting `admin.enabled: false` once a group from your identity provider holds
+  `admin` makes the server refuse the password and end the account's sessions
+  and API tokens.
+- A changed `admin.password` restarts the server, which reads it at startup. A
+  password in your own Secret is read again only when the pods restart.
+
 ### After the install
 
 Nothing needs registering. The pool's image is the server's release, so the
@@ -183,17 +232,17 @@ linea runtime default mine --server https://debugger.example.com
 
 | Resource | Contents |
 | --- | --- |
-| Server ConfigMap | The server config, composed from `config`. The chart sets `store` (from `store`, `config.storageLimit`, `config.runLimit`), `worker_token_file` when the server accepts workers, `client_secret_file` with an OIDC secret, and `builds.token_file` when it accepts builders. `config.limits` and `config.retention` pass through as the server config's keys. No default runtime is set: use `linea runtime default`. A change restarts the server. |
-| Server Deployment | `server.replicas` identical pods (default 2), `RollingUpdate` with `maxSurge` 1 and `maxUnavailable` 0: a new pod starts before an old one stops. Runs `linea-server --config` on port 7070 with `--mcp`. Queue, events, sessions and sign-ins are in PostgreSQL, so any instance serves any request. TCP probes. |
+| Server ConfigMap | The server config, composed from `config`. The chart sets `store` (from `store`, `config.storageLimit`, `config.runLimit`; with the bundled PostgreSQL a `database_url` without a password and its `database_password_file`), `store.objects.create_bucket` (`store.objects.createBucket`, always with the bundled SeaweedFS), `authentication.admin.password_file` with the admin account, `worker_token_file` when the server accepts workers, `client_secret_file` with an OIDC secret, and `builds.token_file` when it accepts builders. `config.limits` and `config.retention` pass through as the server config's keys. No default runtime is set: use `linea runtime default`. A change restarts the server. |
+| Server Deployment | `server.replicas` identical pods (default 2), `RollingUpdate` with `maxSurge` 1 and `maxUnavailable` 0: a new pod starts before an old one stops. Runs `linea-server --config` on port 7070 with `--mcp`. Queue, events, sessions and sign-ins are in PostgreSQL, so any instance serves any request. HTTP probes: liveness `GET /healthz`, readiness `GET /readyz`, which answers 503 until the instance has opened its storage and while it drains (HTTPS with `server.tls.secretName`). |
 | PodDisruptionBudget | `maxUnavailable: 1`, when `server.replicas` is above 1: a node drain keeps one instance serving. |
 | Ingress | For `ingress.host`, TLS from `ingress.tls.secretName`. The server then serves plain HTTP in the cluster (`--allow-http`). With `server.tls.secretName` the server ends TLS itself instead. |
 | Pool Deployment (`pool.enabled`, default on) | `pool.replicas` pods running `linea-worker --connect --pool`, `pool.capacity` requests at once across all runtimes. Downloads each runtime binary through a presigned URL into `/cache` (emptyDir bounded by `pool.cache.size`) and runs it as a child process: idle ones beyond `pool.warm` stop, least recently used first, and an idle one after `pool.idle`. No port, no Service. |
 | Builder Deployment (`builder.enabled`, default on) | `builder.replicas` pods running `linea-builder --connect`: `builder.capacity` builds at once, `builder.cpus` CPUs per build. Compiles with the pinned Go toolchain from a manifest and sources it downloads through presigned URLs, and uploads the binary the same way. Holds no database or bucket credentials. |
 | Dedicated workers (`worker.enabled`, default off) | `worker.replicas` pods running `linea-worker --connect` from a runtime image you built, `worker.capacity` requests at once. |
 | Bundled PostgreSQL (`postgresql.enabled`) | StatefulSet of one pod (PVC from `postgresql.persistence`), a Service on 5432, and a Secret with the generated password (key `password`, kept across upgrades). |
-| Bundled SeaweedFS (`seaweedfs.enabled`) | StatefulSet of one pod (PVC from `seaweedfs.persistence`) serving the S3 gateway on 8333, a Service, a Secret with the generated keys (`access-key`, `secret-key`, kept across upgrades), and a bucket Job per release revision that creates `seaweedfs.bucket` and keeps an existing one. |
+| Bundled SeaweedFS (`seaweedfs.enabled`) | StatefulSet of one pod (PVC from `seaweedfs.persistence`) serving the S3 gateway on 8333, a Service, and a Secret with the generated keys (`access-key`, `secret-key`, kept across upgrades). The server creates `seaweedfs.bucket` at startup. |
 | Fleet and live capture (`fleet.deploy.enabled`) | A Deployment and Service each for fleet and the plugin, a database Job with the bundled PostgreSQL, their Secrets and a ConfigMap (see [Fleet and live capture](#fleet-and-live-capture)). |
-| NetworkPolicies | For the pool, the builder, the dedicated worker, each bundled store, and, with the build metrics, the server's metrics port (see [Egress](#egress)). |
+| NetworkPolicies | For the pool, the builder, the dedicated worker and each bundled store (see [Egress](#egress)). |
 
 Secrets, each from a value or your own Secret:
 
@@ -201,18 +250,30 @@ Secrets, each from a value or your own Secret:
 | --- | --- | --- | --- |
 | Store | `store.databaseURL`, `store.objects.accessKey`, `store.objects.secretKey` (or the bundled stores) | `store.existingSecret` | `database-url`, `access-key`, `secret-key` |
 | Fleet token | `fleet.token`, or generated with `fleet.deploy.enabled` | `fleet.existingSecret` | `token` |
+| Admin password | `admin.password`, or generated | `admin.existingSecret` | `password` |
 | OIDC client secret | `oidc.clientSecret` | `oidc.existingSecret` | `client-secret` |
 | Worker token | `worker.token`, or generated | `worker.existingSecret` | `token` |
 | Builder token | `builder.token`, or generated | `builder.existingSecret` | `token` |
 
-The server reads the Secrets as files. Generated worker and builder tokens are
-kept across upgrades. The chart keeps no volume for the server: everything it
-stores is in PostgreSQL and the bucket.
+The server reads the Secrets as files. The generated admin password and worker
+and builder tokens are kept across upgrades. The chart keeps no volume for the
+server: everything it stores is in PostgreSQL and the bucket.
+
+The server, the pool, the dedicated worker and the builder read their Secrets
+at startup. For each Secret the chart renders (a value, or a generated one)
+the pod template carries a checksum annotation, so `helm upgrade` with a
+changed value restarts the pods that read it: the server for the store, OIDC,
+fleet, admin, worker and builder secrets, the pool and the worker for the
+worker token, and the builders for the builder token. A Secret you supply
+through `existingSecret` is not hashed, since the chart does not render it:
+after changing it, run `kubectl rollout restart` on the deployments that mount
+it.
 
 Install fails, as the server would, without:
 
-- `config.bindings`,
-- `config.authentication` with `oidc` or `trusted_headers`,
+- a sign-in method: `config.authentication` with `oidc` or `trusted_headers`,
+  or the [admin account](#signing-in),
+- `config.bindings`, unless the admin account is on,
 - one of `pool.enabled`, `worker.enabled` or a worker token.
 
 Server shutdown and builder sizing:
@@ -224,7 +285,6 @@ Server shutdown and builder sizing:
 | Builder resources | Limits 5 GiB and 4 CPUs (the build budget), requests 256 MiB and 100m (what an idle builder uses). A build bursts to the limits; on a node without that memory free it can be killed and is retried once. Raise `builder.resources.requests` to the limits to reserve the budget. |
 | Builder stop | Finishes the builds it runs first: grace period `builder.terminationGracePeriodSeconds` (default 2100: the 30-minute build deadline plus a margin). |
 | `builder.replicas: 0` | Builds off: the Deployment scales to zero, the server still takes builders, queued builds wait. |
-| `builder.autoscaling` | An autoscaler sets the replicas (see [Scaling builders](#scaling-builders)). |
 
 Every pod has a read-only root filesystem, no capabilities and no service
 account token.
@@ -264,6 +324,15 @@ guide](remote-workers.md) and its [pool workers](remote-workers.md#pool-workers)
   --server URL`.
 - A runtime binary (about 85 MiB for the default manifest) counts toward
   `config.storageLimit`.
+- The pool and the builder run as root with only `CAP_SETUID` and
+  `CAP_SETGID`, and start what they run as nobody: the pool every runtime
+  (`--child-user 65534:65534`), the builder the worker a build makes, for its
+  hello check (`--check-user 65534:65534`). Both lose the capabilities on
+  exec, so runtime code cannot read the pool's token, its environment or its
+  memory, nor the builder's token, registry and module credentials (mounted
+  mode 0400) or its caches. The release's namespace therefore needs the
+  baseline Pod Security level; restricted refuses root and added
+  capabilities. The builder's hello check still shares the pod's network.
 
 ## Module source
 
@@ -302,8 +371,8 @@ networkPolicy:
   `GONOSUMDB`, `GOINSECURE`, `GOAUTH`).
 - Only these variables and the certificate settings reach a build, so the
   netrc file is the way to give credentials.
-- Narrow `networkPolicy.builderEgress` to the proxy once nothing else is
-  needed.
+- The default `networkPolicy.builderEgress` reaches public addresses only.
+  An internal proxy is opt-in: replace the list with a rule for it, as above.
 
 ## Egress
 
@@ -314,8 +383,8 @@ they may reach:
 | Pods | Egress |
 | --- | --- |
 | Pool and dedicated workers | The server (port `http`), DNS, and the rules in `networkPolicy.objectStorage`. A run's Collector exports nowhere outside the pod, and the pool has no route to the module proxy. |
-| Builders | The same, and `networkPolicy.builderEgress`: the module proxy and the git hosts a manifest names. The default is every address (`0.0.0.0/0`). |
-| Server | No egress policy. With the build metrics on (`server.metrics`), an ingress policy admits the metrics port only from `server.metrics.allowFrom` and leaves port `http` open to every client. |
+| Builders | The same, and `networkPolicy.builderEgress`: the module proxy and the git hosts a manifest names. The default is every public address: `0.0.0.0/0` except the private, shared (`100.64.0.0/10`), loopback and link-local ranges, which hold the cluster, the private network and the cloud metadata endpoint. |
+| Server | No policy. Its own metrics leave over OTLP when configured ([server metrics](team-server.md#readiness-and-server-metrics), set with `server.extraEnv`). |
 | Bundled stores | Ingress only: the server reaches PostgreSQL; chart pods reach SeaweedFS ([Stores](#stores)). |
 
 `networkPolicy.objectStorage` is a list of egress rules (`to` and `ports`)
@@ -339,10 +408,13 @@ networkPolicy:
       ports: [{port: 443}]
 ```
 
-- Narrow `networkPolicy.builderEgress` to the CIDRs your module proxy and git
-  hosts resolve to: a NetworkPolicy matches addresses, not names.
-- The default also matches pod and node addresses; add `except` ranges to its
-  `ipBlock` to exclude the cluster's.
+- To reach an internal module proxy, git host or registry, replace
+  `networkPolicy.builderEgress` with rules for it. A NetworkPolicy matches
+  addresses, not names, so give the CIDRs those hosts resolve to, or a
+  `podSelector` for one in the cluster. Keep the public rule only if builds
+  still need public hosts.
+- If your cluster's pods or nodes use public addresses, add them to the
+  default rule's `except` list.
 - With `worker.serverURL` pointing outside the release, allow that egress
   yourself.
 - Your cluster's network plugin must enforce NetworkPolicy; k3s, and so k3d,
@@ -374,66 +446,17 @@ builder:
 | --- | --- |
 | Where settings go | `repository` goes to the server config (`builds.export.repository`). Credentials stay with the builder (`--registry-auth`). |
 | Credentials | The Docker config is read as Docker does: `credHelpers`, then `credsStore`, then `auths`. A helper must be on the builder's PATH as `docker-credential-<name>`. The `linea-builder` image ships none, so a helper such as `ecr-login` needs an image built from it. They need push, not delete. |
-| Egress | `networkPolicy.builderEgress` must reach the registry. |
+| Egress | `networkPolicy.builderEgress` must reach the registry; an internal one needs its own rule. |
 | Result | A build records the image by digest. A failed push is the build's export error; the build stays done. |
 | Cleanup | Linea never deletes an exported image. Each export moves the runtime's tag and the previous image stays untagged; the registry's retention of untagged images (ECR lifecycle policy, Harbor retention and garbage collection, GHCR or GitLab cleanup) removes it. |
 
-## Scaling builders
+## Builders
 
-A builder is idle between builds. Where the cluster runs an autoscaler, the
-chart can scale builders with the build queue instead of running
-`builder.replicas` around the clock. It is off by default
-(`builder.autoscaling.kind: none`), and the chart installs no autoscaler.
-
-Both kinds target one builder per `builder.capacity` unfinished builds, up to
-`builder.autoscaling.maxReplicas` (default 2). Running builds count, so the
-target never drops below what builds in progress need. A builder that is
-scaled in finishes its builds within the grace period and builds nothing new;
-a build queued meanwhile goes to another builder.
-
-Either kind turns on the server's build metrics (`server.metrics`, also
-available alone with `enabled: true`): `linea-server --metrics-listen` on port
-`server.metrics.port` (9090), behind a Service named after the server's with
-`-metrics` appended, never behind the ingress. `GET /metrics` serves counts
-only, in Prometheus text format, without credentials:
-
-| Metric | Meaning |
-| --- | --- |
-| `linea_runtime_builds{state="queued"}`, `{state="running"}` | Builds of the installation, the same on every instance (read every 10 s) |
-| `linea_runtime_builds_unfinished` | Queued plus running: the builder slots the builds need |
-| `linea_builders_connected`, `linea_builder_slots` | The builders connected to the instance that answered, and their capacity |
-
-With `networkPolicy.enabled`, only `server.metrics.allowFrom` reaches the
-port. The default admits the namespace `keda`; add your Prometheus's
-namespace to scrape it.
-
-| | KEDA (`kind: keda`) | HPA (`kind: hpa`) |
-| --- | --- | --- |
-| Renders | A `ScaledObject` with the `metrics-api` trigger | An `autoscaling/v2` HorizontalPodAutoscaler |
-| Reads | `linea_runtime_builds_unfinished` from the metrics Service directly; no Prometheus needed | The external metric `builder.autoscaling.hpa.metricName` (`linea_runtime_builds_unfinished`), which your external metrics adapter must serve |
-| Scale to zero | `minReplicas` 0 (default): no builder while nothing is built, so the first build after an idle period waits for a pod. `cooldownPeriod` (600 s) keeps the last builder for a follow-up. | No: at least one builder runs |
-| Install fails unless | The cluster serves `keda.sh/v1alpha1` (with `helm template`, pass `--api-versions keda.sh/v1alpha1`) | |
-| Also | | `hpa.selector` when the adapter needs labels to pick the series |
-
-```yaml
-builder:
-  autoscaling:
-    kind: keda
-    maxReplicas: 3
-```
-
-With prometheus-adapter for HPA, scrape the metrics Service and expose the
-series as an external metric:
-
-```yaml
-externalRules:
-  - seriesQuery: 'linea_runtime_builds_unfinished'
-    metricsQuery: 'max(<<.Series>>)'
-    resources: {overrides: {namespace: {resource: namespace}}}
-```
-
-Every instance reports the same queue, so `max` across instances is the
-count; a sum would double it.
+A builder is idle between builds. `builder.replicas` builders run all the
+time; set it to the builds you want at once divided by `builder.capacity`.
+The chart installs no autoscaler. The server's own metrics include the build
+queue (`linea.runtime.builds`, by state) and the connected builders, for
+dashboards ([server metrics](team-server.md#readiness-and-server-metrics)).
 
 ### A persistent cache
 
@@ -443,15 +466,14 @@ claim at `/work` with `builder.cache.persistentVolumeClaim`: `existingClaim`,
 or `create: true` with `size`, `storageClassName` and `accessMode`.
 
 - The chart keeps a claim it created when the release is uninstalled.
-- `ReadWriteOnce` allows one builder (`replicas` or `maxReplicas` at most 1,
-  else the install fails) and replaces the builder on an upgrade instead of
-  rolling it.
+- `ReadWriteOnce` allows one builder (`replicas` at most 1, else the install
+  fails) and replaces the builder on an upgrade instead of rolling it.
 - With more builders use `ReadWriteMany`, or keep the emptyDir and point
   `builder.modules.proxy` at a module proxy.
 
 ```yaml
 builder:
-  autoscaling: {kind: keda, maxReplicas: 1}
+  replicas: 1
   cache:
     persistentVolumeClaim: {create: true, size: 20Gi}
 ```
@@ -477,9 +499,9 @@ fleet:
 | --- | --- |
 | Databases | With `postgresql.enabled` and no `fleet.deploy.database.existingSecret`, a Job per release revision creates the databases `fleet` and `livecapture` in the bundled PostgreSQL, each with its own migration and runtime role, and resets their generated passwords. With your own PostgreSQL, create them yourself and name a Secret with the keys `fleet-migrate-url`, `fleet-runtime-url`, `capture-migrate-url` and `capture-runtime-url` ([roles](../fleet/deployment.md)). |
 | Migrations | An init container in each pod migrates its schema before the pod starts. Each runs one pod, replaced rather than rolled, so a migration never overlaps a running instance. |
-| Server token | Generated once, kept in a Secret across upgrades and never printed. Fleet's `bootstrap` init container installs it as the first admin, without expiry; on later starts it changes nothing. |
+| Fleet tokens | Two, generated once, kept across upgrades in the Secret `<release>-linea-fleet` and never printed. The server gets `operator-token`, a fleet operator credential (admin without the credentials API and plugin lifecycle operations). The key `token` is the fleet admin token, which the server never gets: it stays for whoever administers fleet, to issue credentials and run plugin operations (`kubectl -n <namespace> get secret <release>-linea-fleet -o jsonpath='{.data.token}' | base64 -d`). Fleet's `bootstrap` init container installs both, neither expiring; on later starts it changes nothing. A release that had one token keeps it as the admin token and gets a new operator token. |
 | Config management | Off: fleet only reports. `fleet.deploy.configManagement: true` starts it with `--config-management` for config versions, assignments and rollouts ([config management](../fleet/config-management.md)). |
-| Raw capture | Off: captures select only points a Collector marks redacted. `fleet.deploy.livecapture.rawCapture: true` puts the server's fleet credential into the plugin's `raw_principals`; who may capture raw is still the debugger's `capture.raw` permission ([raw capture](livecapture.md#raw-capture-and-permissions)). |
+| Raw capture | Off: captures select only points a Collector marks redacted. `fleet.deploy.livecapture.rawCapture: true` puts the server's fleet operator credential into the plugin's `raw_principals`; who may capture raw is still the debugger's `capture.raw` permission ([raw capture](livecapture.md#raw-capture-and-permissions)). |
 | Plugin | Registered with fleet with generated host and service tokens. Its control and delivery endpoints serve TLS with `fleet.deploy.livecapture.tls.secretName`, or a self-signed certificate the chart generates once for the Service names and `tls.extraHosts`. |
 
 Install fails with `fleet.url`, `fleet.token` or `fleet.existingSecret` set
@@ -733,3 +755,5 @@ free host port 443.
 
 The bundled PostgreSQL and SeaweedFS are single pods without replication or
 backups. For production, use your own HA PostgreSQL and a durable bucket.
+Backup, restore, secret rotation, upgrade and rollback are in [Operating a
+team server](operations.md).

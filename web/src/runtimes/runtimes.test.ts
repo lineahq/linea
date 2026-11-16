@@ -3,7 +3,7 @@ import { ApiError } from '../api/client';
 import type { CatalogComponent, CollectorCatalog, Runtime } from '../api/types';
 import {
   BUILT_IN, BUILT_IN_NAME, catalogGroups, componentKey, defaultName, effectiveRuntime, makeDefaultQuestion, finished, formatSize, IMAGE_STATES, olderImage, problemOf, pruneQuestion, prunedText, pruneSummary, referenceProblem,
-  mergeLog, nameProblem, nextLogFrom, reportRuntime, runtimeField, runtimeOptions, runtimeProviders,
+  mergeLog, nameProblem, nextLogFrom, reportRuntime, runtimeField, runtimeOptions, runtimeProviders, selfCheckFact,
 } from './runtimes';
 
 const runtime = (name: string, version: string, verified: boolean): Runtime => ({
@@ -259,5 +259,15 @@ describe('catalogGroups', () => {
 
   it('names a component as the manifest request does', () => {
     expect(componentKey({ kind: 'receivers', type: 'otlp' })).toBe('receivers/otlp');
+  });
+});
+
+describe('selfCheckFact', () => {
+  it('says whether a runtime passed its self-check, which checks failed, or that none was reported', () => {
+    expect(selfCheckFact(undefined)).toBe('Not checked: no worker of this runtime has reported one');
+    expect(selfCheckFact([{ code: 'lifecycle', ok: true }])).toContain('Passed');
+    expect(selfCheckFact([{ code: 'lifecycle', ok: true }, { code: 'connector_routes', ok: false, detail: 'routes name no pipeline' }])).toBe(
+      'Failed, runs warn that their evidence may be wrong: connector_routes (routes name no pipeline)',
+    );
   });
 });

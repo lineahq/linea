@@ -13,6 +13,8 @@ import (
 	"slices"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/lineahq/linea/internal/debugger/runresult"
 
 	"github.com/lineahq/linea/internal/debugger/analysis"
@@ -44,6 +46,8 @@ type runMetadata struct {
 	Interrupted bool               `json:"interrupted,omitempty"`
 	Attempt     int                `json:"attempt,omitempty"`
 	Bundle      *engine.BundleInfo `json:"bundle,omitempty"`
+	// Submitted is the span of the request that submitted the run.
+	Submitted *storedSpan `json:"submitted,omitempty"`
 }
 
 type evidenceArchive struct {
@@ -57,20 +61,222 @@ type evidenceArchive struct {
 	LogTruncated bool   `json:"log_truncated,omitempty"`
 }
 
-func (s *Service) persistRun(r *Handle, includeEvidence bool) error {
-	m := runMetadata{Schema: 2, ID: r.id, Mode: r.mode, State: r.state, Created: r.created, Started: r.started, Finished: r.finished, Interrupted: r.interrupted, Attempt: r.attempt}
-	if r.caller != (Actor{}) {
-		caller := r.caller
+// runPublication is what savePublication writes of a run: the handle's fields,
+// copied under its mu so they can be written without holding it.
+type runPublication struct {
+	id           string
+	project      string
+	mode         InputMode
+	caller       Actor
+	state        State
+	err          error
+	created      time.Time
+	started      time.Time
+	finished     time.Time
+	interrupted  bool
+	attempt      int
+	bundleInfo   *engine.BundleInfo
+	events       []instrument.Event
+	report       *engine.Report
+	log          string
+	logTruncated bool
+	generation   uint64
+	submitted    trace.SpanContext
+	// weight is the decoded size of the evidence savePublication wrote.
+	weight int64
+	// Admission only.
+	bundle        []byte
+	runtimeKey    string
+	binary        *artifact.RunBinary
+	principalRuns int
+}
+
+func (r *Handle) publicationLocked() runPublication {
+	return runPublication{id: r.id, project: r.project, mode: r.mode, caller: r.caller, state: r.state, err: r.err,
+		created: r.created, started: r.started, finished: r.finished, interrupted: r.interrupted, attempt: r.attempt,
+		bundleInfo: r.bundleInfo, events: r.events, report: r.report, log: r.log, logTruncated: r.logTruncated,
+		generation: r.generation, submitted: r.submitted, bundle: r.bundle, runtimeKey: r.runtimeKey, binary: r.binary,
+		principalRuns: r.principalRuns}
+}
+
+// storedLocked records that the repository holds record. Once it holds the
+// terminal state, the raw bundle leaves the handle: only a repository's runs
+// are stored, and RunBundle reads theirs from it.
+func (r *Handle) storedLocked(record *artifact.RunRecord) {
+	r.generation, r.ordinal = record.Generation, record.Ordinal
+	r.stored = r.terminalLocked()
+	if r.stored {
+		r.bundle = nil
+	}
+}
+
+// writeRun writes p, with its evidence when evidence is set. Without a
+// repository the run lives in this service only, and p is accepted at the
+// next generation: endRun's generation check then decides between two
+// transitions of the run.
+func (s *Service) writeRun(ctx context.Context, p *runPublication, evidence bool) (*artifact.RunRecord, error) {
+	if s.repository == nil {
+		return &artifact.RunRecord{ID: p.id, Project: p.project, Generation: p.generation + 1, Terminal: p.state.Terminal()}, nil
+	}
+	return s.savePublication(ctx, p, evidence)
+}
+
+// recordedLocked takes the generation of the record the repository, or the
+// local writer, accepted for r. r.mu is held.
+func (s *Service) recordedLocked(r *Handle, record *artifact.RunRecord) {
+	if s.repository == nil {
+		r.generation = record.Generation
+		return
+	}
+	r.storedLocked(record)
+}
+
+// transitionTimeout bounds a write of a run's metadata: a third of the lease,
+// so a stalled write ends before the lease does.
+func (s *Service) transitionTimeout() time.Duration { return s.lease / 3 }
+
+// endRun writes the end p of run r, decided under r.mu (endingLocked), and
+// ends the handle as p records it once the repository accepts it. When the
+// write fails for another reason than a conflict, p is written again as a
+// persistence error without its evidence. It reports whether the run ended
+// as p records it: false without an error when another transition moved the
+// run first, here or on another instance, and false with a persistence error
+// when the repository accepted neither write, which leaves the handle as the
+// repository holds the run. With evidence the writes are published under a
+// publish span below span. Neither s.mu nor r.mu is held.
+func (s *Service) endRun(span context.Context, r *Handle, p runPublication, evidence bool) (bool, error) {
+	return s.endRunSettled(span, r, p, evidence, nil)
+}
+
+// endRunSettled is endRun that, when the run ends, calls settle under s.mu
+// in the same critical section, so whoever sees the run ended also sees
+// what settle changed.
+func (s *Service) endRunSettled(span context.Context, r *Handle, p runPublication, evidence bool, settle func()) (bool, error) {
+	ctx := context.Background()
+	var publish trace.Span
+	if evidence {
+		// The writes carry the publish span, so the store's spans nest under it.
+		publish = s.startPublishSpan(span)
+		ctx = trace.ContextWithSpan(ctx, publish)
+	}
+	save := func(evidence bool) (*artifact.RunRecord, error) {
+		timeout := s.transitionTimeout()
+		if evidence {
+			timeout = publishTimeout
+		}
+		ctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		return s.writeRun(ctx, &p, evidence)
+	}
+	record, err := save(evidence)
+	written := evidence && err == nil
+	if err != nil && !errors.Is(err, artifact.ErrConflict) {
+		p.state, p.report, p.err = StateError, nil, persistenceError(err)
+		record, err = save(false)
+	}
+	if publish != nil {
+		endPublishSpan(publish, written, err != nil && !errors.Is(err, artifact.ErrConflict))
+	}
+	if errors.Is(err, artifact.ErrConflict) {
+		return false, nil
+	}
+	if err != nil {
+		return false, persistenceError(err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r.mu.Lock()
+	var ended bool
+	switch {
+	case r.terminalLocked():
+		// The change feed may have brought this record first.
+		ended = r.generation == record.Generation
+	case record.Generation <= r.generation:
+		// Another transition applied first (without a repository, where
+		// both writes are accepted).
+	default:
+		r.endLocked(p)
+		r.weight = p.weight
+		s.recordedLocked(r, record)
+		ended = true
+	}
+	r.mu.Unlock()
+	if ended && settle != nil {
+		settle()
+	}
+	return ended, nil
+}
+
+// savePublication writes p: its admission when p has no generation yet,
+// otherwise its record, with its evidence when includeEvidence is set. When
+// the report's analysis outgrows the evidence budget, p.report becomes the
+// reduced report that was written.
+func (s *Service) savePublication(ctx context.Context, p *runPublication, includeEvidence bool) (*artifact.RunRecord, error) {
+	if p.generation == 0 {
+		a, err := admissionOf(p)
+		if err != nil {
+			return nil, err
+		}
+		record, err := s.repository.AdmitRun(ctx, a)
+		if err == nil {
+			s.nudgeRetention()
+		}
+		return record, err
+	}
+	metadata, err := publicationMetadata(p)
+	if err != nil {
+		return nil, err
+	}
+	var evidence []byte
+	p.weight = 0
+	if includeEvidence && (p.report != nil || len(p.events) != 0 || p.log != "") {
+		limit := s.repository.Limits().RunBytes
+		var decoded int64
+		if evidence, decoded, err = encodeEvidence(p.events, p.report, p.log, p.logTruncated); err != nil {
+			return nil, err
+		}
+		p.weight = decoded
+		// The evidence budget leaves headroom for the report's analysis; when
+		// the analysis outgrows it, keep the run without its derived sections
+		// rather than losing it. The handle keeps the same reduced report, so
+		// answers agree before and after a restart.
+		if !archiveFits(int64(len(evidence)), decoded, limit) && p.report != nil && p.report.Result != nil {
+			reduced := withoutAnalysis(p.report)
+			if smaller, size, err := encodeEvidence(p.events, reduced, p.log, p.logTruncated); err == nil && archiveFits(int64(len(smaller)), size, limit) {
+				p.report, evidence, p.weight = reduced, smaller, size
+			}
+		}
+	}
+	return s.repository.SaveRun(ctx, p.id, p.project, p.generation, p.state.Terminal(), runIndex(p.state, p.report), metadata, evidence)
+}
+
+// admissionOf is the admission of p, a publication without a generation.
+func admissionOf(p *runPublication) (artifact.Admission, error) {
+	metadata, err := publicationMetadata(p)
+	if err != nil {
+		return artifact.Admission{}, err
+	}
+	return artifact.Admission{
+		ID: p.id, Project: p.project, Metadata: metadata, Bundle: p.bundle, Runtime: p.runtimeKey, Binary: p.binary, Index: runIndex(p.state, p.report),
+		Principal: p.caller.Principal, PrincipalRuns: p.principalRuns}, nil
+}
+
+// publicationMetadata is the run metadata p publishes.
+func publicationMetadata(p *runPublication) ([]byte, error) {
+	m := runMetadata{Schema: 2, ID: p.id, Mode: p.mode, State: p.state, Created: p.created, Started: p.started, Finished: p.finished, Interrupted: p.interrupted, Attempt: p.attempt}
+	if p.caller != (Actor{}) {
+		caller := p.caller
 		m.Caller = &caller
 	}
-	m.Bundle = r.bundleInfo
-	if r.err != nil {
-		m.Error = r.err.Error()
-		if errors.Is(r.err, ErrPersistence) {
+	m.Bundle = p.bundleInfo
+	m.Submitted = storeSpan(p.submitted)
+	if p.err != nil {
+		m.Error = p.err.Error()
+		if errors.Is(p.err, ErrPersistence) {
 			m.Failure = "persistence"
-		} else if errors.Is(r.err, ErrInterrupted) {
+		} else if errors.Is(p.err, ErrInterrupted) {
 			m.Failure = "interrupted"
-		} else if errors.Is(r.err, ErrLost) {
+		} else if errors.Is(p.err, ErrLost) {
 			m.Failure = "lost"
 		}
 		if len(m.Error) > 4096 {
@@ -79,49 +285,17 @@ func (s *Service) persistRun(r *Handle, includeEvidence bool) error {
 	}
 	metadata, err := json.Marshal(m)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// Escaped control characters can use six JSON bytes per input byte.
 	for len(metadata) > 8192 && len(m.Error) > 128 {
 		m.Error = m.Error[:len(m.Error)/2] + " (truncated)"
 		metadata, err = json.Marshal(m)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
-	var evidence []byte
-	if includeEvidence && (r.report != nil || len(r.events) != 0 || r.log != "") {
-		limit := s.repository.Limits().RunBytes
-		var decoded int64
-		if evidence, decoded, err = encodeEvidence(r.events, r.report, r.log, r.logTruncated); err != nil {
-			return err
-		}
-		// The evidence budget leaves headroom for the report's analysis; when
-		// the analysis outgrows it, keep the run without its derived sections
-		// rather than losing it. The handle keeps the same reduced report, so
-		// answers agree before and after a restart.
-		if !archiveFits(int64(len(evidence)), decoded, limit) && r.report != nil && r.report.Result != nil {
-			reduced := withoutAnalysis(r.report)
-			if smaller, size, err := encodeEvidence(r.events, reduced, r.log, r.logTruncated); err == nil && archiveFits(int64(len(smaller)), size, limit) {
-				r.report, evidence = reduced, smaller
-			}
-		}
-	}
-	var record *artifact.RunRecord
-	if r.generation == 0 {
-		record, err = s.repository.AdmitRun(context.Background(), artifact.Admission{
-			ID: r.id, Project: r.project, Metadata: metadata, Bundle: r.bundle, Runtime: r.runtimeKey, Binary: r.binary, Index: runIndex(r.state, r.report)})
-	} else {
-		record, err = s.repository.SaveRun(context.Background(), r.id, r.project, r.generation, r.terminalLocked(), runIndex(r.state, r.report), metadata, evidence)
-	}
-	if err == nil {
-		if r.generation == 0 {
-			s.nudgeRetention()
-		}
-		r.generation, r.ordinal = record.Generation, record.Ordinal
-		r.stored = r.terminalLocked()
-	}
-	return err
+	return metadata, nil
 }
 
 // Evidence archives are schema 2: the archive JSON, gzip-compressed, with its
@@ -187,41 +361,41 @@ func encodeEvidence(events []instrument.Event, report *engine.Report, log string
 // decodeEvidence reads a stored archive of either schema. A compressed
 // archive must decode to exactly its declared length, in one gzip member, so
 // it can never expand without bound.
-func decodeEvidence(stored []byte) (*evidenceArchive, error) {
+func decodeEvidence(stored []byte) (*evidenceArchive, int64, error) {
 	raw, schema := stored, 1
 	if len(stored) >= 2 && stored[0] == 0x1f && stored[1] == 0x8b {
 		in := bytes.NewReader(stored)
 		z, err := gzip.NewReader(in)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		z.Multistream(false)
 		size, ok := declaredArchiveSize(z.Header.Extra)
 		if !ok {
-			return nil, errors.New("missing decoded length")
+			return nil, 0, errors.New("missing decoded length")
 		}
 		if size > int64(len(stored))*maxDeflateRatio {
-			return nil, errors.New("declared length exceeds what the archive can hold")
+			return nil, 0, errors.New("declared length exceeds what the archive can hold")
 		}
 		if raw, err = io.ReadAll(io.LimitReader(z, size+1)); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if int64(len(raw)) != size {
-			return nil, errors.New("decoded length differs from the declared length")
+			return nil, 0, errors.New("decoded length differs from the declared length")
 		}
 		if in.Len() != 0 {
-			return nil, errors.New("trailing data after the archive")
+			return nil, 0, errors.New("trailing data after the archive")
 		}
 		schema = archiveSchema
 	}
 	var a evidenceArchive
 	if err := decodeStored(raw, &a); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if a.Schema != schema {
-		return nil, artifact.ErrUnsupportedSchema
+		return nil, 0, artifact.ErrUnsupportedSchema
 	}
-	return &a, nil
+	return &a, int64(len(raw)), nil
 }
 
 // declaredArchiveSize finds the decoded length among gzip extra subfields.
@@ -322,7 +496,7 @@ func (s *Service) handleFromRecord(ctx context.Context, record artifact.RunRecor
 		}
 		caller = *m.Caller
 	}
-	r := &Handle{id: m.ID, project: record.Project, mode: m.Mode, caller: caller, state: m.State, created: m.Created, started: m.Started, finished: m.Finished, interrupted: m.Interrupted, attempt: m.Attempt, kept: record.Kept, generation: record.Generation, ordinal: record.Ordinal, stored: record.Terminal, changed: make(chan struct{}), done: make(chan struct{}), cancel: func(error) {}}
+	r := &Handle{id: m.ID, project: record.Project, mode: m.Mode, caller: caller, state: m.State, created: m.Created, started: m.Started, finished: m.Finished, interrupted: m.Interrupted, attempt: m.Attempt, kept: record.Kept, generation: record.Generation, ordinal: record.Ordinal, stored: record.Terminal, submitted: m.Submitted.spanContext(), changed: make(chan struct{}), done: make(chan struct{}), cancel: func(error) {}}
 	if (m.Bundle == nil) != (record.BundleDigest == "") {
 		return nil, fmt.Errorf("%w: bundle binding", artifact.ErrCorrupt)
 	}
@@ -366,14 +540,14 @@ func (s *Service) handleFromRecord(ctx context.Context, record artifact.RunRecor
 		if err != nil {
 			return nil, err
 		}
-		a, err := decodeEvidence(raw)
+		a, decoded, err := decodeEvidence(raw)
 		if errors.Is(err, artifact.ErrUnsupportedSchema) {
 			return nil, err
 		}
 		if err != nil {
 			return nil, fmt.Errorf("%w: evidence archive: %w", artifact.ErrCorrupt, err)
 		}
-		r.events, r.recording = a.Events, r.attempt
+		r.events, r.recording, r.weight = a.Events, r.attempt, decoded
 		r.log, r.logTruncated = a.Log, a.LogTruncated
 		if len(a.Report) != 0 {
 			if err := decodeStored(a.Report, &r.report); err != nil {
@@ -402,7 +576,6 @@ func (s *Service) handleFromRecord(ctx context.Context, record artifact.RunRecor
 			return nil, fmt.Errorf("%w: event identity", artifact.ErrCorrupt)
 		}
 	}
-	r.persist = func(evidence bool) error { return s.persistRun(r, evidence) }
 	if record.Terminal {
 		close(r.done)
 	}
@@ -419,8 +592,10 @@ func (s *Service) recoverUnfinished(r *Handle) error {
 		return err
 	}
 	if err != nil || r.bundleInfo == nil {
-		r.interrupted = true
-		return r.finishLocked(StateError, nil, ErrInterrupted)
+		p := r.endingLocked(StateError, nil, ErrInterrupted)
+		p.interrupted = true
+		_, err := s.endRun(nil, r, p, false)
+		return err
 	}
 	r.runtimeKey = a.Runtime
 	if a.State == artifact.QueueQueued {

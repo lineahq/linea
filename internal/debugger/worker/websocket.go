@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -27,14 +28,20 @@ const (
 	handshakeTimeout = 30 * time.Second
 )
 
-var (
-	// pingInterval is how often the server pings, so a gateway's idle
-	// timeout never closes a connection it holds; idleTimeout is how long
-	// either side waits without a message or ping before it gives up.
-	// Tests shorten them.
-	pingInterval = 30 * time.Second
-	idleTimeout  = 3 * pingInterval
-)
+// keepAliveTimes are how often the server pings, so a gateway's idle
+// timeout never closes a connection it holds, and how long either side
+// waits without a message or ping before it gives up. Tests shorten them
+// while other tests' connections still read them, hence atomic.
+type keepAliveTimes struct {
+	ping, idle time.Duration
+}
+
+var keepAliveConfig atomic.Pointer[keepAliveTimes]
+
+func init() { keepAliveConfig.Store(&keepAliveTimes{ping: 30 * time.Second, idle: 90 * time.Second}) }
+
+func pingInterval() time.Duration { return keepAliveConfig.Load().ping }
+func idleTimeout() time.Duration  { return keepAliveConfig.Load().idle }
 
 var upgrader = websocket.Upgrader{
 	HandshakeTimeout: handshakeTimeout,
@@ -50,17 +57,36 @@ type stream struct {
 	conn    *websocket.Conn
 	r       io.Reader
 	writeMu sync.Mutex
+	// helloOnly is set until the accepted peer's first message, its hello,
+	// has been read; until then a message may be at most maxHelloFrame.
+	helloOnly bool
 }
+
+// The hello limits: a peer's first frame, its capacity and its name. A
+// hello holds a runtime's description, far below maxHelloFrame; a peer
+// that announces more is refused before the server keeps anything of it.
+const (
+	maxHelloFrame    = 4 << 20
+	maxHelloCapacity = 1024
+	maxHelloName     = 128
+)
 
 func newStream(conn *websocket.Conn) *stream {
 	conn.SetReadLimit(maxFrame + 4)
 	return &stream{conn: conn}
 }
 
+// newAcceptedStream is the stream of a peer the server accepted: its first
+// message, the hello, is held to maxHelloFrame, and later ones to maxFrame.
+func newAcceptedStream(conn *websocket.Conn) *stream {
+	conn.SetReadLimit(maxHelloFrame + 4)
+	return &stream{conn: conn, helloOnly: true}
+}
+
 func (s *stream) Read(p []byte) (int, error) {
 	for {
 		if s.r == nil {
-			_ = s.conn.SetReadDeadline(time.Now().Add(idleTimeout))
+			_ = s.conn.SetReadDeadline(time.Now().Add(idleTimeout()))
 			typ, r, err := s.conn.NextReader()
 			if err != nil {
 				if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
@@ -76,6 +102,12 @@ func (s *stream) Read(p []byte) (int, error) {
 		n, err := s.r.Read(p)
 		if errors.Is(err, io.EOF) {
 			s.r = nil
+			if s.helloOnly {
+				// Raised by the reading goroutine, the only one that reads
+				// the connection.
+				s.helloOnly = false
+				s.conn.SetReadLimit(maxFrame + 4)
+			}
 			if n > 0 {
 				return n, nil
 			}

@@ -202,7 +202,7 @@ func (s *Service) buildManifest(ctx context.Context, info *RuntimeInfo, e artifa
 	if !ok {
 		return
 	}
-	if m, err := builds.BuildManifest(ctx, e.Build); err == nil {
+	if m, err := s.manifests.get(ctx, builds, e.Build); err == nil {
 		info.Manifest = string(m)
 	}
 }
@@ -212,7 +212,7 @@ func (s *Service) buildManifest(ctx context.Context, info *RuntimeInfo, e artifa
 func catalogInfo(e artifact.RuntimeEntry, h worker.Hello, c artifact.WorkerCount) *RuntimeInfo {
 	return &RuntimeInfo{
 		Name: e.Name, CollectorVersion: h.CollectorVersion, ProductVersion: h.ProductVersion, Protocol: h.Protocol,
-		Verified: h.Verified, Providers: slices.Clone(h.Providers), Manifest: string(e.Manifest),
+		Verified: h.Verified, Providers: slices.Clone(h.Providers), SelfCheck: slices.Clone(h.SelfCheck), Manifest: string(e.Manifest),
 		Catalog: &CatalogRuntime{Identity: e.Identity, Image: e.Image, Digest: e.Digest, Binary: runtimeBinary(e.Binary), Build: e.Build, Suspect: suspicion(e.Suspect), RegisteredBy: e.RegisteredBy,
 			Registered: e.Registered, Confirmed: e.Confirmed, Workers: c.Workers, Slots: c.Slots},
 	}
@@ -276,7 +276,7 @@ func pooledRuntime(s *Service, name string, h worker.Hello, stored *artifact.Run
 	}
 	return &boundRuntime{
 		info: RuntimeInfo{Name: name, CollectorVersion: h.CollectorVersion, ProductVersion: h.ProductVersion,
-			Protocol: h.Protocol, Verified: h.Verified},
+			Protocol: h.Protocol, Verified: h.Verified, SelfCheck: slices.Clone(h.SelfCheck)},
 		worker: &poolWorker{s: s, target: target, binary: binary, gates: h.Gates},
 		target: target,
 		pooled: true,

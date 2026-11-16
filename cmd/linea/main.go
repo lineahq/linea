@@ -101,7 +101,7 @@ func init() {
 		{"access", "list a team server's role bindings, and grant or revoke the ones it manages", accessCmd},
 		{"project", "list a team server's projects, and create, update, archive or unarchive one", projectCmd},
 		{"library", "list the library, publish an artifact to it, share an item with projects, or copy one into a project", libraryCmd},
-		{"login", "sign in to a team server's identity provider; later --server commands present the sign-in", loginCmd},
+		{"login", "sign in to a team server with its identity provider or the admin password; later --server commands present the sign-in", loginCmd},
 		{"logout", "forget the sign-in to a team server", logoutCmd},
 		{"build", "compile this CLI with an OCB manifest's Collector release and components, on this machine", buildCmd},
 		{"version", "show debugger, Collector and schema versions", versionCmd},

@@ -47,6 +47,8 @@ func Run(t *testing.T, fresh func(t *testing.T) Backend) {
 		{"cancellation dequeues or flags", queueCancel},
 		{"expired leases requeue once per lease", queueLeases},
 		{"released runs return to the queue without spending an attempt", queueRelease},
+		{"admission refuses a principal at its unfinished-run limit", principalRunLimit},
+		{"a batch admission admits every run or none", admitRunsAllOrNothing},
 		{"runtime catalog keeps names and confirmations", runtimeCatalog},
 		{"runtime catalog keeps the binary of a server build", runtimeBinaries},
 		{"runtime catalog records a suspect binary until the entry is saved again", suspectBinaries},
@@ -58,6 +60,7 @@ func Run(t *testing.T, fresh func(t *testing.T) Backend) {
 		{"worker records count until they expire", workerPresence},
 		{"change feed records writes for other repositories", changeFeed},
 		{"live events keep the latest attempt", liveEvents},
+		{"revoked tokens do not count toward the token limit", tokenLimit},
 		{"interactive jobs are claimed once and answered", interactiveJobs},
 		{"builds queue with their inputs within limits", buildAdmission},
 		{"builders hold builds under leases and reuse done ones", buildLeases},
@@ -77,6 +80,7 @@ func Run(t *testing.T, fresh func(t *testing.T) Backend) {
 		{"concurrent project writes at one revision serialize", projectRace},
 		{"project retention replaces the installation's for its runs", projectRetention},
 		{"sessions are found by hash and ended", sessions},
+		{"a principal's sessions end together", sessionsOfPrincipal},
 		{"sign-ins in progress are taken once", logins},
 		{"closed repositories refuse", closed},
 	}
@@ -863,6 +867,27 @@ func tokens(t *testing.T, b Backend) {
 	}
 }
 
+// tokenLimit: the token limit counts the tokens that still authenticate,
+// so revoked ones never block new tokens.
+func tokenLimit(t *testing.T, b Backend) {
+	r := open(t, b, artifact.Limits{})
+	const limit = 1000
+	for i := range limit {
+		if err := r.SaveToken(ctx, token(i+1, "user:alice")); err != nil {
+			t.Fatalf("token %d: %v", i+1, err)
+		}
+	}
+	if err := r.SaveToken(ctx, token(limit+1, "user:alice")); !errors.Is(err, artifact.ErrLimit) {
+		t.Fatalf("token over the limit = %v", err)
+	}
+	if _, err := r.RevokeToken(ctx, token(1, "").ID, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.SaveToken(ctx, token(limit+1, "user:alice")); err != nil {
+		t.Errorf("token after a revocation = %v", err)
+	}
+}
+
 // sessions: a session is found by its hash after reopening until it is
 // ended; an expired session is dropped, and duplicates and invalid records
 // are refused.
@@ -903,6 +928,49 @@ func sessions(t *testing.T, b Backend) {
 	}
 	if _, err := r.SessionByHash(ctx, session(2, now).Hash); !errors.Is(err, artifact.ErrNotFound) {
 		t.Errorf("expired session kept = %v", err)
+	}
+}
+
+// sessionsOfPrincipal: ending a principal's sessions ends every unexpired one
+// of that principal and counts it, leaves other principals' sessions, and
+// changes nothing the second time.
+func sessionsOfPrincipal(t *testing.T, b Backend) {
+	r := open(t, b, artifact.Limits{})
+	now := time.Now().UTC().Truncate(time.Second)
+	session := func(n int, principal string, expires time.Time) artifact.SessionRecord {
+		return artifact.SessionRecord{Hash: fmt.Sprintf("%064x", n), Principal: principal, Name: principal,
+			Created: expires.Add(-time.Hour), Expires: expires}
+	}
+	for _, s := range []artifact.SessionRecord{
+		session(1, "user:linea:admin", now.Add(time.Hour)),
+		session(2, "user:linea:admin", now.Add(2*time.Hour)),
+		session(3, "user:linea:admin", now.Add(-time.Second)),
+		session(4, "user:alice", now.Add(time.Hour)),
+	} {
+		if err := r.SaveSession(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := r.DeleteSessionsOf(ctx, "user:linea:admin"); err != nil || n != 2 {
+		t.Fatalf("ending the admin's sessions = %d, %v, want 2", n, err)
+	}
+	for _, n := range []int{1, 2, 3} {
+		if _, err := r.SessionByHash(ctx, session(n, "", now).Hash); !errors.Is(err, artifact.ErrNotFound) {
+			t.Errorf("session %d after its principal's were ended = %v", n, err)
+		}
+	}
+	if got, err := r.SessionByHash(ctx, session(4, "", now).Hash); err != nil || got.Principal != "user:alice" {
+		t.Errorf("another principal's session = %+v, %v", got, err)
+	}
+	if n, err := r.DeleteSessionsOf(ctx, "user:linea:admin"); err != nil || n != 0 {
+		t.Errorf("ending them again = %d, %v, want 0", n, err)
+	}
+	if n, err := r.DeleteSessionsOf(ctx, "user:nobody"); err != nil || n != 0 {
+		t.Errorf("ending an unknown principal's sessions = %d, %v, want 0", n, err)
+	}
+	r.Close()
+	if _, err := r.DeleteSessionsOf(ctx, "user:alice"); !errors.Is(err, artifact.ErrClosed) {
+		t.Errorf("after close = %v", err)
 	}
 }
 
@@ -1107,6 +1175,116 @@ func queueOrder(t *testing.T, b Backend) {
 	held, err := r.Renew(ctx, "w1", epoch.Add(2*time.Minute))
 	if err != nil || !slices.Equal(claimed(held), []string{runID(1), runID(4)}) || !held[0].Expires.Equal(epoch.Add(2*time.Minute)) {
 		t.Errorf("renew = %+v, %v", held, err)
+	}
+}
+
+func principalRunLimit(t *testing.T, b Backend) {
+	r := openRuns(t, b)
+	submit := func(n int, principal string, limit int) error {
+		a := admission(runID(n), artifact.DefaultProject, fmt.Appendf(nil, "bundle %d", n))
+		a.Principal, a.PrincipalRuns = principal, limit
+		_, err := r.AdmitRun(ctx, a)
+		return err
+	}
+	for n := 1; n <= 2; n++ {
+		if err := submit(n, "user:alice", 2); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := submit(3, "user:alice", 2); !errors.Is(err, artifact.ErrRunLimit) || !errors.Is(err, artifact.ErrLimit) {
+		t.Errorf("admission over the limit = %v", err)
+	}
+	if err := submit(4, "user:bob", 2); err != nil {
+		t.Errorf("another principal's admission = %v", err)
+	}
+	// A run admitted without a limit still counts.
+	if err := submit(5, "user:alice", 0); err != nil {
+		t.Errorf("admission without a limit = %v", err)
+	}
+	if err := submit(6, "user:alice", 3); !errors.Is(err, artifact.ErrRunLimit) {
+		t.Errorf("admission with the unlimited run counted = %v", err)
+	}
+	// A refused admission leaves nothing behind.
+	if _, err := r.Assignment(ctx, runID(3)); !errors.Is(err, artifact.ErrNotFound) {
+		t.Errorf("refused run's assignment = %v", err)
+	}
+	// A finished run frees its place.
+	got, err := r.Claim(ctx, "w1", "builtin", 1, epoch.Add(time.Minute))
+	if err != nil || len(got) != 1 {
+		t.Fatalf("claim = %v, %v", claimed(got), err)
+	}
+	if _, err := r.SaveRun(ctx, got[0].RunID, artifact.DefaultProject, got[0].Generation, true, artifact.RunIndex{}, []byte(`{}`), []byte("evidence")); err != nil {
+		t.Fatal(err)
+	}
+	if err := submit(7, "user:alice", 3); err != nil {
+		t.Errorf("admission after a run finished = %v", err)
+	}
+	long := admission(runID(8), artifact.DefaultProject, []byte("bundle 8"))
+	long.Principal = strings.Repeat("p", artifact.MaxRunIndexField+1)
+	if _, err := r.AdmitRun(ctx, long); !errors.Is(err, artifact.ErrInvalidRequest) {
+		t.Errorf("admission with an oversized principal = %v", err)
+	}
+}
+
+func admitRunsAllOrNothing(t *testing.T, b Backend) {
+	r := openRuns(t, b)
+	batch := func(principal string, limit int, ns ...int) []artifact.Admission {
+		as := []artifact.Admission{}
+		for _, n := range ns {
+			a := admission(runID(n), artifact.DefaultProject, fmt.Appendf(nil, "bundle %d", n))
+			a.Principal, a.PrincipalRuns = principal, limit
+			as = append(as, a)
+		}
+		return as
+	}
+	if got, err := r.AdmitRuns(ctx, nil); err != nil || len(got) != 0 {
+		t.Errorf("empty batch = %v, %v", got, err)
+	}
+	head, err := r.ChangeHead(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.AdmitRuns(ctx, batch("user:alice", 3, 1, 2))
+	if err != nil || len(got) != 2 || got[0].ID != runID(1) || got[1].ID != runID(2) || got[0].Generation != 1 || got[1].Ordinal <= got[0].Ordinal {
+		t.Fatalf("batch = %+v, %v", got, err)
+	}
+	changes, _, err := r.Changes(ctx, head, 10)
+	if err != nil || len(changes) != 2 {
+		t.Errorf("changes after a batch = %+v, %v", changes, err)
+	}
+	// The principal's two runs and the batch's first two fill the limit of
+	// three at the batch's second member, so nothing of it is admitted.
+	if _, err := r.AdmitRuns(ctx, batch("user:alice", 3, 3, 4)); !errors.Is(err, artifact.ErrRunLimit) {
+		t.Errorf("batch over the principal's limit = %v", err)
+	}
+	// A member that conflicts refuses the batch, including members before it.
+	if _, err := r.AdmitRuns(ctx, batch("user:bob", 0, 5, 1)); !errors.Is(err, artifact.ErrConflict) {
+		t.Errorf("batch with an admitted run = %v", err)
+	}
+	if _, err := r.AdmitRuns(ctx, batch("user:bob", 0, 6, 6)); !errors.Is(err, artifact.ErrConflict) {
+		t.Errorf("batch admitting a run twice = %v", err)
+	}
+	bad := batch("user:bob", 0, 7, 8)
+	bad[1].Metadata = []byte("{")
+	if _, err := r.AdmitRuns(ctx, bad); !errors.Is(err, artifact.ErrInvalidRequest) {
+		t.Errorf("batch with an invalid member = %v", err)
+	}
+	for _, n := range []int{3, 4, 5, 6, 7, 8} {
+		if _, err := r.Run(ctx, runID(n)); !errors.Is(err, artifact.ErrNotFound) {
+			t.Errorf("run %d of a refused batch = %v", n, err)
+		}
+	}
+	claims, err := r.Claim(ctx, "w1", "builtin", 10, epoch.Add(time.Minute))
+	if err != nil || !slices.Equal(claimed(claims), []string{runID(1), runID(2)}) {
+		t.Errorf("claim after refused batches = %v, %v", claimed(claims), err)
+	}
+	// A refused batch leaves the principal's places free.
+	if _, err := r.AdmitRuns(ctx, batch("user:alice", 3, 9)); err != nil {
+		t.Errorf("admission within the limit after a refused batch = %v", err)
+	}
+	all, err := r.Runs(ctx)
+	if err != nil || len(all) != 3 {
+		t.Errorf("runs = %d, %v", len(all), err)
 	}
 }
 

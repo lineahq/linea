@@ -30,6 +30,34 @@ the [runtime build notes](../internals/runtime-builds.md).
 | A verified release | Builds with the release's dependency set: every module is pinned to the versions the debugger was verified with. |
 | Newer than every verified release | Builds **unverified**: modules resolve through your module source at the manifest's versions. The build, the runtime and every report say so. |
 
+### Self-check
+
+"Verified" means the release's dependency set is pinned and the samples pass.
+On top of that, every runtime checks itself when it starts: it runs one log
+record through a small built-in configuration and confirms that the Collector
+internals the debugger's instrumentation relies on still behave as they did
+in the release it was verified against. Those internals can change without
+any error, and the run would still finish with wrong evidence.
+
+| Check | What it confirms | When it fails |
+| --- | --- | --- |
+| `pipeline_attribution` | A processor used in several pipelines can tell them apart | Its pipelines are reported as one stage |
+| `connector_routes` | A connector's deliveries name the pipeline they go to | Routes do not show their pipelines |
+| `emission_context` | Outputs link to the input that caused them | Stages read as deferred; lineage matches by content |
+| `object_identity` | Records keep their identity between stages | "The same record" claims are not made |
+| `fanout_clone` | A fan-out copies data only for consumers that change it | Evidence can differ from your Collector |
+| `extension_status` | Extensions' start and stop are recorded | Extension lifecycles are missing |
+| `lifecycle` | The Collector starts, shuts down in order and flushes | Buffered output can be lost |
+| `probe` | The check itself could run | Nothing was checked |
+
+A failed check never refuses a runtime or a run, and it does not change the
+verified flag. `linea runtime list` shows a self-check column
+(`passed`, `failed: <codes>` or `not checked` when no worker reported one),
+`linea version` shows the CLI's own, the web client's runtime detail shows a
+Self-check fact, and the API's runtime has `self_check`. Every report records
+its runtime's checks (`runtime.self_check`). A run on a runtime with a failed
+check carries a `self_check_failed` warning for each failed check.
+
 | Command | HTTP | MCP |
 | --- | --- | --- |
 | `linea runtime versions`: the oldest release, the verified releases and the built-in runtime's release | `GET /api/v1/collector-versions` | `linea_get_collector_support` |
@@ -282,7 +310,7 @@ returns the binary through presigned URLs.
 
 | Topic | Behavior |
 | --- | --- |
-| Permissions | Queueing needs `runtime.build` (engineers and admins). You see and cancel your own builds; `runtime.manage` sees and cancels all. |
+| Permissions | Queueing needs `runtime.build` (engineers and admins). A name already registered by someone else needs `runtime.manage` too; the replacement is audited as `ReplaceRuntime`. A build whose name another principal registers while it runs fails instead of replacing it. You see and cancel your own builds; `runtime.manage` sees and cancels all. |
 | Web client | The Runtimes page queues, lists, follows and cancels builds with the same API. The server returns no manifest, so Rebuild starts from what that browser remembered. |
 | Limits | At most 2 unfinished builds per principal and 20 on the server. The last 100 finished builds keep their logs. |
 | Storage | A built binary counts toward `store.storage_limit`. Each queued or running build reserves an eighth of it, at most 128 MiB, so a build is refused at queueing (`limit`) rather than after compiling. |
@@ -299,8 +327,13 @@ A builder (`linea-builder`) compiles queued builds and registers each runtime,
 which the server's pool runs. On SIGTERM or Ctrl-C it lets its builds finish, up
 to their 30-minute deadline, and claims nothing new; builds still queued wait
 for another builder. A second signal cancels the builds, and each is retried
-once by the next builder. The server serves the build queue's counts for
-autoscaling ([scaling builders](deploy-kubernetes.md#scaling-builders)).
+once by the next builder. The server's metrics report the build queue and
+the connected builders ([server metrics](team-server.md#readiness-and-server-metrics)).
+A builder runs on Linux as root with only `CAP_SETUID` and `CAP_SETGID`, as
+its image, the Compose stack and the chart run it. It runs no code of a build
+except the worker it built, which it starts once for its hello check as
+another user (`--check-user`, required), so that code cannot read the build
+token, the module credentials or other builds' sources.
 
 A builder downloads modules from the module source in its own environment,
 which the operator sets and no request can change:

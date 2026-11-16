@@ -16,6 +16,7 @@ import (
 
 	"github.com/lineahq/linea/internal/debugger/engine"
 	"github.com/lineahq/linea/internal/debugger/release"
+	"github.com/lineahq/linea/internal/debugger/runresult"
 )
 
 // ProtocolVersion is the worker protocol this build speaks. A debugger and
@@ -79,6 +80,10 @@ type Hello struct {
 	// Providers are the debugger providers of component modules the
 	// worker has; absent from older workers.
 	Providers []engine.ReportProvider `json:"providers,omitempty"`
+	// SelfCheck is the worker's runtime self-check: whether the Collector
+	// internals the instrumentation relies on behave as verified. It is not
+	// part of the runtime identity; absent from older workers.
+	SelfCheck []runresult.SelfCheck `json:"self_check,omitempty"`
 	// Name is the runtime name a worker that dials a server serves under
 	// (--name); empty over standard streams.
 	Name string `json:"name,omitempty"`
@@ -155,6 +160,9 @@ type message struct {
 	// LogTruncated says it dropped earlier lines; older workers send none.
 	Log          string `json:"log,omitempty"`
 	LogTruncated bool   `json:"log_truncated,omitempty"`
+	// Phases time an execute result's parts, offset from the moment the
+	// worker received the request; older workers send none.
+	Phases []engine.Phase `json:"phases,omitempty"`
 
 	// Builder link (builder.go): a builder's hello, a build it is given,
 	// its log lines and its result.

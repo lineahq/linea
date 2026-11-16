@@ -75,13 +75,16 @@ type writer struct {
 	overflowMu sync.Mutex
 	overflow   map[string]*op
 	wake       chan struct{}
-	backoff    time.Duration
-	inflight   atomic.Int64
-	lastBatch  atomic.Int64
+	// refusedAt is when each refused (agent, credential) pair last wrote an
+	// event; only the writer goroutine touches it.
+	refusedAt map[string]time.Time
+	backoff   time.Duration
+	inflight  atomic.Int64
+	lastBatch atomic.Int64
 }
 
 func newWriter(s *Store) *writer {
-	return &writer{s: s, queue: make(chan *op, queueSize), retry: map[string]*op{}, overflow: map[string]*op{}, wake: make(chan struct{}, 1)}
+	return &writer{s: s, queue: make(chan *op, queueSize), retry: map[string]*op{}, overflow: map[string]*op{}, wake: make(chan struct{}, 1), refusedAt: map[string]time.Time{}}
 }
 
 // submit enqueues without blocking and waits for the commit. A caller that
@@ -271,7 +274,47 @@ type batchState struct {
 	agents      int
 	counted     bool
 	events      bool
+	// refused lists connects the binding refused; their savepoints roll back,
+	// so the events are written afterwards in the batch transaction.
+	refused []refusal
 }
+
+type refusal struct{ agent, credential string }
+
+// refusalEventEvery bounds how often one refused (agent, credential) pair
+// writes an event: a client that retries cannot fill the event stream.
+const refusalEventEvery = time.Minute
+
+// recordRefusals writes agent.credential_refused events outside the rolled
+// back savepoints. They run in their own savepoint, so a failing insert never
+// fails the batch.
+func (w *writer) recordRefusals(ctx context.Context, tx pgx.Tx, state *batchState, now time.Time) {
+	for _, r := range state.refused {
+		key := r.agent + ":" + r.credential
+		if last, ok := w.refusedAt[key]; ok && now.Sub(last) < refusalEventEvery {
+			continue
+		}
+		sp, err := tx.Begin(ctx)
+		if err != nil {
+			return
+		}
+		if err := w.s.event(ctx, sp, "agent.credential_refused", r.agent, r.credential, nil); err != nil {
+			_ = sp.Rollback(ctx)
+			continue
+		}
+		if err := sp.Commit(ctx); err != nil {
+			return
+		}
+		if len(w.refusedAt) >= maxRefusalKeys {
+			clear(w.refusedAt)
+		}
+		w.refusedAt[key] = now
+		state.events = true
+	}
+}
+
+// maxRefusalKeys bounds the writer's refusal memory.
+const maxRefusalKeys = 4096
 
 // execute writes one transaction in UID order so concurrent replicas never
 // deadlock. Each op runs in a savepoint; a failing op does not abort others.
@@ -310,6 +353,7 @@ func (w *writer) execute(batch []*op) {
 			}
 			results[i] = r
 		}
+		w.recordRefusals(ctx, tx, state, started)
 		if state.events {
 			if _, err := tx.Exec(ctx, "SELECT pg_notify('fleet_events','')"); err != nil {
 				return err
@@ -432,10 +476,11 @@ func (w *writer) connect(ctx context.Context, tx pgx.Tx, o *op, state *batchStat
 		// orphaned: the owner replica is dead, so its session ended with the
 		// replica, not because of this connection.
 		var orphaned bool
+		var holder *string
 		err := tx.QueryRow(ctx, `SELECT a.owner_replica,a.generation,a.takeover_count,a.takeover_at,a.identity_conflict,
-				a.owner_replica IS NOT NULL AND (o.id IS NULL OR o.heartbeat_at < now() - $2 * interval '1 millisecond')
+				a.owner_replica IS NOT NULL AND (o.id IS NULL OR o.heartbeat_at < now() - $2 * interval '1 millisecond'),a.credential_id
 			FROM fleet.agents a LEFT JOIN fleet.replicas o ON o.id=a.owner_replica WHERE a.id=$1 FOR UPDATE OF a`,
-			o.id, s.aliveMillis()).Scan(&owner, &generation, &takeovers, &takeoverAt, &conflict, &orphaned)
+			o.id, s.aliveMillis()).Scan(&owner, &generation, &takeovers, &takeoverAt, &conflict, &orphaned, &holder)
 		if errors.Is(err, pgx.ErrNoRows) {
 			if !state.counted {
 				if err := tx.QueryRow(ctx, "SELECT count(*) FROM fleet.agents").Scan(&state.agents); err != nil {
@@ -482,6 +527,13 @@ func (w *writer) connect(ctx context.Context, tx pgx.Tx, o *op, state *batchStat
 		}
 		if err != nil {
 			return 0, fleet.Report{}, err
+		}
+		// The UID is bound to the credential that holds it while connected.
+		// Nothing in the row changes; the caller records the refusal.
+		changed := holder != nil && *holder != o.credential
+		if changed && owner != nil && !orphaned {
+			state.refused = append(state.refused, refusal{agent: o.id, credential: o.credential})
+			return 0, fleet.Report{}, fleet.ErrUIDHeld
 		}
 		stored := fleet.Report{Capabilities: o.report.Capabilities}
 		var status, healthError, hash *string
@@ -532,6 +584,16 @@ func (w *writer) connect(ctx context.Context, tx pgx.Tx, o *op, state *batchStat
 		}
 		if err := s.event(ctx, tx, "agent.connected", o.id, o.credential, detail); err != nil {
 			return 0, fleet.Report{}, err
+		}
+		if changed {
+			// A disconnected UID changes hands; credential IDs only.
+			previous, err := json.Marshal(map[string]string{"previous_credential": *holder})
+			if err != nil {
+				return 0, fleet.Report{}, err
+			}
+			if err := s.event(ctx, tx, "agent.credential_changed", o.id, o.credential, previous); err != nil {
+				return 0, fleet.Report{}, err
+			}
 		}
 		if flagged {
 			if err := s.event(ctx, tx, "agent.identity_conflict", o.id, "server", nil); err != nil {

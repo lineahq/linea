@@ -321,7 +321,6 @@ func (s *Service) checkCancel(ctx context.Context, r *Handle) error {
 // it; claimed adopts a run this service's executor just claimed whatever
 // its queue state. s.mu is held.
 func (s *Service) adoptLocked(fresh *Handle, a *artifact.Assignment, claimed bool) *Handle {
-	fresh.shared = true
 	if a != nil {
 		fresh.runtimeKey = a.Runtime
 	}
@@ -387,7 +386,10 @@ func (s *Service) updateLocked(r *Handle, fresh *Handle) *Handle {
 	r.state, r.err, r.started, r.finished = fresh.state, fresh.err, fresh.started, fresh.finished
 	r.interrupted, r.attempt, r.generation, r.ordinal, r.stored = fresh.interrupted, fresh.attempt, fresh.generation, fresh.ordinal, fresh.stored
 	r.report, r.log, r.logTruncated, r.bundleInfo = fresh.report, fresh.log, fresh.logTruncated, fresh.bundleInfo
-	r.shared = true
+	r.weight, r.submitted = fresh.weight, fresh.submitted
+	if r.stored {
+		r.bundle = nil
+	}
 	if fresh.terminalLocked() {
 		r.events, r.recording = fresh.events, fresh.recording
 		r.runLog = nil
@@ -427,17 +429,24 @@ func (s *Service) adoptClaimed(a artifact.Assignment, e *executor) *pendingRun {
 		fresh, err = s.handleFromRecord(s.ctx, record)
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	e.busy--
 	if err != nil {
+		s.mu.Unlock()
 		s.logError("adopting run "+a.RunID, err)
 		return nil
 	}
 	if s.closed || s.deletedRuns.has(a.RunID) {
+		s.mu.Unlock()
 		return nil
 	}
 	s.adoptLocked(fresh, &a, true)
-	return s.takeLocked(a, e)
+	job, end := s.takeLocked(a, e)
+	s.mu.Unlock()
+	if end != nil {
+		s.failStart(job, *end)
+		return nil
+	}
+	return job
 }
 
 // applyEvents reads the live events another instance published for a run

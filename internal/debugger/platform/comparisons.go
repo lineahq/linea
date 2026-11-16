@@ -73,6 +73,8 @@ type CompareRequest struct {
 // the self-contained scenario its inputs derive to (inputIdentity).
 func (s *Service) CompareRuns(ctx context.Context, caller Caller, req CompareRequest) (_ *Comparison, err error) {
 	defer s.audit(&caller, "CompareRuns", &err)()
+	// Both lookups share one catch-up.
+	ctx = withRequestScope(ctx)
 	var sides [2]comparison.Side
 	var parts [2]*engine.BundleParts
 	for i, id := range []string{req.Before, req.After} {
@@ -165,6 +167,8 @@ type ComparisonRuns struct {
 // two once they are terminal.
 func (s *Service) SubmitComparison(ctx context.Context, caller Caller, req ComparisonRequest) (_ *ComparisonRuns, err error) {
 	defer s.audit(&caller, "SubmitComparison", &err)()
+	// Both sides share one binding of a runtime they both name.
+	ctx = withRequestScope(ctx)
 	if err := s.begin(ctx, caller, authz.RunSubmit); err != nil {
 		return nil, err
 	}
@@ -240,7 +244,7 @@ func (s *Service) submitPair(ctx context.Context, caller Caller, mode InputMode,
 		entered++
 		preparing++
 	}
-	p1, err := s.prepareRun(ctx, caller.Project, first)
+	p1, err := s.prepareRun(ctx, caller.Project, first, nil)
 	if err != nil {
 		return handles, err
 	}
@@ -249,7 +253,7 @@ func (s *Service) submitPair(ctx context.Context, caller Caller, mode InputMode,
 			return handles, err
 		}
 	}
-	p2, err := s.prepareRun(ctx, caller.Project, second)
+	p2, err := s.prepareRun(ctx, caller.Project, second, nil)
 	if err != nil {
 		return handles, err
 	}
@@ -263,20 +267,23 @@ func (s *Service) submitPair(ctx context.Context, caller Caller, mode InputMode,
 	case ctx.Err() != nil:
 		err = ctx.Err()
 	}
+	var as [2]admission
 	if err == nil {
-		handles[0], err = s.admitLocked(caller, mode, p1, time.Time{}, nil)
+		as[0], err = s.queueLocked(caller, mode, p1, time.Time{}, nil)
 	}
 	if err == nil {
-		handles[1], err = s.admitLocked(caller, mode, p2, time.Time{}, nil)
+		if as[1], err = s.queueLocked(caller, mode, p2, time.Time{}, nil); err != nil {
+			s.withdrawLocked(as[0])
+		}
 	}
 	s.mu.Unlock()
 	if err != nil {
-		// Only a failed journal publication of the second run can leave the
-		// first admitted; it is cancelled before it reports anything.
-		if handles[0] != nil {
-			_ = handles[0].cancelWithCause(err)
-		}
 		return [2]*Handle{}, err
 	}
-	return handles, nil
+	// One write admits both runs or neither.
+	admitted, err := s.admitAll(ctx, caller, as[:])
+	if err != nil {
+		return [2]*Handle{}, err
+	}
+	return [2]*Handle(admitted), nil
 }

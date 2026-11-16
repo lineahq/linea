@@ -57,6 +57,31 @@ func scanBuild(row pgx.Row) (buildRow, error) {
 	return b, nil
 }
 
+// leasesFromDB moves the builds' leases from the database's clock back onto
+// the caller's (clock.go).
+func (s *Store) leasesFromDB(ctx context.Context, builds ...*artifact.BuildRecord) error {
+	_, fromDB, err := s.leaseClock(ctx)
+	if err != nil {
+		return err
+	}
+	for _, b := range builds {
+		if !b.Expires.IsZero() {
+			b.Expires = fromDB(b.Expires)
+		}
+	}
+	return nil
+}
+
+// buildLeasesFromDB is leasesFromDB for collected rows.
+func (s *Store) buildLeasesFromDB(ctx context.Context, rows []buildRow) error {
+	for i := range rows {
+		if err := s.leasesFromDB(ctx, &rows[i].BuildRecord); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func collectBuilds(rows pgx.Rows, op string) ([]buildRow, error) {
 	defer rows.Close()
 	var out []buildRow
@@ -214,6 +239,9 @@ func (s *Store) Build(ctx context.Context, id string) (artifact.BuildRecord, err
 	if err != nil {
 		return artifact.BuildRecord{}, storageErr("build", err)
 	}
+	if err := s.leasesFromDB(ctx, &b.BuildRecord); err != nil {
+		return artifact.BuildRecord{}, err
+	}
 	return b.BuildRecord, nil
 }
 
@@ -253,6 +281,9 @@ func (s *Store) ListBuilds(ctx context.Context, q artifact.BuildQuery) (*artifac
 	}
 	// collectBuilds sorts oldest first; a page is newest first.
 	found, err := collectBuilds(rows, "build list")
+	if err == nil {
+		err = s.buildLeasesFromDB(ctx, found)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -320,14 +351,21 @@ func (s *Store) ClaimBuilds(ctx context.Context, builder string, n int, now, exp
 	if n == 0 {
 		return []artifact.BuildRecord{}, nil
 	}
+	toDB, _, err := s.leaseClock(ctx)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.pool.Query(ctx, `WITH picked AS (
 			SELECT id FROM builds WHERE state = 'queued' ORDER BY ordinal FOR UPDATE SKIP LOCKED LIMIT $1)
 		UPDATE builds b SET state = 'running', builder = $2, attempt = b.attempt + 1, lease_expires_at = $3, started_at = $4
-		FROM picked WHERE b.id = picked.id RETURNING `+buildColumns("b"), n, builder, expires.UTC(), now.UTC())
+		FROM picked WHERE b.id = picked.id RETURNING `+buildColumns("b"), n, builder, toDB(expires), now.UTC())
 	if err != nil {
 		return nil, storageErr("claim builds", err)
 	}
 	claimed, err := collectBuilds(rows, "claim builds")
+	if err == nil {
+		err = s.buildLeasesFromDB(ctx, claimed)
+	}
 	return records(claimed), err
 }
 
@@ -340,12 +378,19 @@ func (s *Store) RenewBuilds(ctx context.Context, builder string, expires time.Ti
 	if !validWorker(builder) || !validText(builder) || expires.IsZero() {
 		return nil, invalid("invalid build renewal")
 	}
+	toDB, _, err := s.leaseClock(ctx)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.pool.Query(ctx, `UPDATE builds b SET lease_expires_at = greatest(b.lease_expires_at, $2)
-		WHERE b.builder = $1 AND b.state = 'running' RETURNING `+buildColumns("b"), builder, expires.UTC())
+		WHERE b.builder = $1 AND b.state = 'running' RETURNING `+buildColumns("b"), builder, toDB(expires))
 	if err != nil {
 		return nil, storageErr("renew builds", err)
 	}
 	renewed, err := collectBuilds(rows, "renew builds")
+	if err == nil {
+		err = s.buildLeasesFromDB(ctx, renewed)
+	}
 	return records(renewed), err
 }
 
@@ -440,6 +485,9 @@ func (s *Store) CancelBuild(ctx context.Context, id string, now time.Time) (arti
 		out = b.BuildRecord
 		return err
 	})
+	if err == nil {
+		err = s.leasesFromDB(ctx, &out)
+	}
 	if err != nil {
 		return artifact.BuildRecord{}, err
 	}
@@ -457,14 +505,20 @@ func (s *Store) ExpireBuilds(ctx context.Context, now time.Time, maxAttempts int
 	if maxAttempts < 1 || len(failed) > artifact.MaxBuildResult {
 		return nil, invalid("invalid build expiry")
 	}
+	// Leases are judged on the database's clock (clock.go); finished_at
+	// keeps the caller's.
+	toDB, _, err := s.leaseClock(ctx)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.pool.Query(ctx, `WITH due AS (
-			SELECT id FROM builds WHERE state = 'running' AND lease_expires_at < $1 ORDER BY ordinal FOR UPDATE SKIP LOCKED)
+			SELECT id FROM builds WHERE state = 'running' AND lease_expires_at < $4 ORDER BY ordinal FOR UPDATE SKIP LOCKED)
 		UPDATE builds b SET
 			state = CASE WHEN b.cancel_requested THEN 'cancelled' WHEN b.attempt >= $2 THEN 'failed' ELSE 'queued' END,
 			result = CASE WHEN NOT b.cancel_requested AND b.attempt >= $2 THEN $3::bytea ELSE b.result END,
-			finished_at = CASE WHEN b.cancel_requested OR b.attempt >= $2 THEN $1 ELSE NULL END,
+			finished_at = CASE WHEN b.cancel_requested OR b.attempt >= $2 THEN $1::timestamptz ELSE NULL END,
 			staged_binary_digest = '', staged_binary_bytes = 0, builder = '', lease_expires_at = NULL
-		FROM due WHERE b.id = due.id AND b.state = 'running' RETURNING `+buildColumns("b"), now.UTC(), maxAttempts, failed)
+		FROM due WHERE b.id = due.id AND b.state = 'running' RETURNING `+buildColumns("b"), now.UTC(), maxAttempts, failed, toDB(now))
 	if err != nil {
 		return nil, storageErr("expire builds", err)
 	}

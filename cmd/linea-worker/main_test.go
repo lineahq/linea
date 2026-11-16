@@ -48,6 +48,12 @@ func TestConnectFlagsAreChecked(t *testing.T) {
 
 func TestPoolFlagsAreChecked(t *testing.T) {
 	t.Setenv(tokenEnv, "")
+	defer func(was string) { hostOS = was }(hostOS)
+	hostOS = "darwin"
+	if err := run(context.Background(), []string{"--connect", "https://linea.example", "--pool", "--child-user", "65534:65534"}); err == nil || !strings.Contains(err.Error(), "Linux only") {
+		t.Errorf("a pool off Linux = %v", err)
+	}
+	hostOS = "linux"
 	for _, tc := range []struct {
 		args []string
 		want string
@@ -59,15 +65,16 @@ func TestPoolFlagsAreChecked(t *testing.T) {
 		{[]string{"--connect", "https://linea.example", "--cache", "1GiB"}, "--pool"},
 		{[]string{"--connect", "https://linea.example", "--pool", "--cache", "0"}, "invalid size"},
 		{[]string{"--connect", "https://linea.example", "--pool", "--cache", "lots"}, "invalid size"},
+		{[]string{"--connect", "https://linea.example", "--pool"}, "--child-user"},
 		// A pool needs no --name, only the token.
-		{[]string{"--connect", "https://linea.example", "--pool"}, tokenEnv},
+		{[]string{"--connect", "https://linea.example", "--pool", "--child-user", "65534:65534"}, tokenEnv},
 	} {
 		if err := run(context.Background(), tc.args); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("run %v = %v, want an error naming %s", tc.args, err, tc.want)
 		}
 	}
 	t.Setenv(tokenEnv, "secret")
-	args := []string{"--connect", "https://linea.example", "--pool", "--ca-file", "missing.pem"}
+	args := []string{"--connect", "https://linea.example", "--pool", "--child-user", "65534:65534", "--ca-file", "missing.pem"}
 	if err := run(context.Background(), args); err == nil || !strings.Contains(err.Error(), "--ca-file") {
 		t.Errorf("a pool with a missing CA file = %v", err)
 	}

@@ -38,6 +38,10 @@ type Runtime struct {
 	CustomModules []platform.CustomModule `json:"custom_modules"`
 	// Providers are the debugger providers the custom modules export.
 	Providers []platform.RuntimeProvider `json:"providers,omitempty"`
+	// SelfCheck is the runtime's self-check, reported by its workers:
+	// whether the Collector internals the instrumentation relies on behave
+	// as verified. Absent when no worker reported one.
+	SelfCheck []platform.SelfCheck `json:"self_check,omitempty"`
 	// Size is the image's size in bytes, 0 when unknown.
 	Size int64 `json:"size"`
 	// Catalog is set for a runtime of the catalog, which
@@ -123,7 +127,7 @@ func runtimeOf(v *platform.RuntimeInfo) *Runtime {
 		custom = []platform.CustomModule{}
 	}
 	out := &Runtime{Name: v.Name, ImageID: v.ImageID, Tags: tags, CollectorVersion: v.CollectorVersion, ProductVersion: v.ProductVersion,
-		Protocol: v.Protocol, Verified: v.Verified, Default: v.Default, Manifest: v.Manifest, ModuleSet: v.ModuleSet, GoImage: v.GoImage, CustomModules: custom, Size: v.Size, Providers: v.Providers, Projects: v.Projects}
+		Protocol: v.Protocol, Verified: v.Verified, Default: v.Default, Manifest: v.Manifest, ModuleSet: v.ModuleSet, GoImage: v.GoImage, CustomModules: custom, Size: v.Size, Providers: v.Providers, SelfCheck: v.SelfCheck, Projects: v.Projects}
 	if c := v.Catalog; c != nil {
 		out.Catalog = &RuntimeCatalogEntry{Identity: c.Identity, Image: c.Image, Digest: c.Digest, Build: c.Build, RegisteredBy: c.RegisteredBy,
 			RegisteredAt: c.Registered, ConfirmedAt: timeOrNil(c.Confirmed), Workers: c.Workers, Slots: c.Slots}

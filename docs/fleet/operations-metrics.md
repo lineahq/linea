@@ -10,7 +10,7 @@ capacity harness lives in `tools/fleet-capacity/`.
 
 ## Core metrics
 
-`GET /metrics` uses a fleet reader or admin bearer and Prometheus text format.
+`GET /metrics` uses a fleet reader, operator or admin bearer and Prometheus text format.
 No agent or plugin credential grants it. Series use only fixed
 listener, state, read-write and bucket dimensions: never agent IDs, plugin
 IDs, principals, paths, SQL, errors, secrets or payloads.
@@ -37,6 +37,7 @@ All names start with `linea_fleet_`.
 | `agent_admission_held_total` | Handshakes that waited for a slot |
 | `agent_handshakes_pending`, `agent_handshake_limit` | Handshakes between admission and first commit, and `--max-pending-sessions`. Pending at the limit during a storm means admission is the bound |
 | `tcp_connections`, `tcp_connection_limit`, `tcp_refused_total` | Agent and management TCP budgets, including incomplete handshakes |
+| `agent_credential_refused_total` | Connections refused because another credential holds the instance UID (see [identity](README.md#register-collectors-with-a-deployment-token)) |
 | `agent_takeovers_total`, `agents_reaped_total` | Sessions this replica took over from another connection, and agents the leader released from crashed replicas |
 | `replica_leader`, `replica_heartbeat_age_seconds` | 1 while this replica holds the leader lease, and the age of its last successful heartbeat |
 
@@ -99,7 +100,7 @@ The plugin publishes two forms of one aggregate snapshot.
 
 | Form | Access | Notes |
 | --- | --- | --- |
-| Public `GET /api/v1/plugins/livecapture/api/v1/metrics` | Fleet reader or admin | JSON with `gauges`, `counters`, `durations` and `limits`. Needs no capture-owner privilege and exposes no owner or source IDs |
+| Public `GET /api/v1/plugins/livecapture/api/v1/metrics` | Fleet reader, operator or admin | JSON with `gauges`, `counters`, `durations` and `limits`. Needs no capture-owner privilege and exposes no owner or source IDs |
 | Private `GET http://livecapture-plugin:8090/metrics` | Separate `metrics_token` bearer on the protected plugin network | Prometheus text. The token grants only this route. Host, service, management and agent credentials do not grant scrapes. Without `metrics_token_file` the route refuses access |
 
 Prometheus names start `linea_fleet_livecapture_`. The JSON uses the

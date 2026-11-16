@@ -54,6 +54,11 @@ type Runs interface {
 	// AdmitRun records a run's first publication and queues it, in one
 	// transaction.
 	AdmitRun(ctx context.Context, a Admission) (*RunRecord, error)
+	// AdmitRuns admits every run of as in one transaction: all of them, with
+	// their records in the order of as, or none, with the error of the first
+	// member refused. Each member's PrincipalRuns counts the members before
+	// it. An empty batch admits nothing.
+	AdmitRuns(ctx context.Context, as []Admission) ([]*RunRecord, error)
 	SaveRun(ctx context.Context, id, project string, expected uint64, terminal bool, index RunIndex, metadata, evidence []byte) (*RunRecord, error)
 	Runs(ctx context.Context) ([]RunRecord, error)
 	// ListRuns returns a page of runs, newest first, that q selects. A
@@ -129,4 +134,7 @@ type Sessions interface {
 	SessionByHash(ctx context.Context, hash string) (SessionRecord, error)
 	// DeleteSession ends a session; an unknown one is not an error.
 	DeleteSession(ctx context.Context, hash string) error
+	// DeleteSessionsOf ends every session of a principal and drops expired
+	// ones. It returns how many unexpired sessions of the principal it ended.
+	DeleteSessionsOf(ctx context.Context, principal string) (int, error)
 }

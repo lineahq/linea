@@ -120,7 +120,7 @@ runtime startup/execution errors after admission remain retained run errors.
 4. Assertion evaluation, when the scenario declares assertions.
 5. With `compare`, the reference run and the comparison.
 
-It returns `engine.Report` (`report_schema` 0.14, `engine.ReportSchemaVersion`).
+It returns `engine.Report` (`report_schema` 0.16, `engine.ReportSchemaVersion`).
 `engine.Test` runs several scenarios for the `test` command. `engine.Encode` is
 the only serializer, so CLI JSON output and API responses are byte-identical
 (`TestAPIMatchesCLIOutput`). The report is deterministic for deterministic
@@ -245,12 +245,12 @@ storage.
 
 The API must not be usable from web pages the browser visits:
 
-- Every request to `linea-server` is authenticated (API token, OIDC session or trusted
+- Every request to `linea-server` is authenticated (API token, OIDC or admin-password session, or trusted
   headers from a configured proxy) and authorized by the server config's bindings.
   `linea-server` accepts any `Host` (`Options.RemoteAccess`); authentication, not a
-  loopback Host check, keeps the API private. With `LINEA_AUTH=local` the
-  Compose stack's proxy signs every request in as one local admin, so it
-  refuses other `Host` names (`docs/debugger/deploy-compose.md`, Sign-in). Requests name no host
+  loopback Host check, keeps the API private. The Compose stack has no
+  header-based local sign-in: its built-in admin account needs a password
+  (`docs/debugger/deploy-compose.md`, Signing in). Requests name no host
   file.
 - An API handler built without `RemoteAccess` (tests, in-process adapters)
   answers 403 for a `Host` that is not `localhost` or a loopback IP.

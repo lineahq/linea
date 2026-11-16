@@ -17,10 +17,14 @@ import (
 // Tokens and sessions are outside StorageBytes, like the audit log: a full
 // installation must not lock people out. Their counts bound them instead.
 const (
-	maxTokens      = 1000
-	maxSessions    = 10000
-	maxTokenField  = 256
-	maxTokenGroups = 64
+	// maxTokens bounds the tokens that still authenticate; maxStoredTokens
+	// all rows, revoked and expired ones kept for listing included, whose
+	// oldest make room for a new token.
+	maxTokens       = 1000
+	maxStoredTokens = 10 * maxTokens
+	maxSessions     = 10000
+	maxTokenField   = 256
+	maxTokenGroups  = 64
 	// tokenRetention is how long an expired token is kept for listing.
 	tokenRetention = 30 * 24 * time.Hour
 )
@@ -123,12 +127,18 @@ func (s *Store) SaveToken(ctx context.Context, t artifact.TokenRecord) error {
 		if taken {
 			return fmt.Errorf("%w: token exists", artifact.ErrConflict)
 		}
-		var live int64
-		if err := tx.QueryRow(ctx, "SELECT count(*) FROM tokens").Scan(&live); err != nil {
+		var live, stored int64
+		if err := tx.QueryRow(ctx, "SELECT count(*) FILTER (WHERE revoked_at IS NULL AND expires_at > $1), count(*) FROM tokens", at).Scan(&live, &stored); err != nil {
 			return err
 		}
 		if live >= maxTokens {
 			return fmt.Errorf("%w: at most %d tokens", artifact.ErrLimit, maxTokens)
+		}
+		if stored >= maxStoredTokens {
+			if _, err := tx.Exec(ctx, `DELETE FROM tokens WHERE id IN (SELECT id FROM tokens
+				WHERE revoked_at IS NOT NULL OR expires_at <= $1 ORDER BY LEAST(revoked_at, expires_at) LIMIT $2)`, at, stored-maxStoredTokens+1); err != nil {
+				return err
+			}
 		}
 		_, err := tx.Exec(ctx, `INSERT INTO tokens (id, hash, principal, kind, name, groups, label, created_by, created_at, expires_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`, t.ID, t.Hash, t.Principal, t.Kind, t.Name, groups, t.Label, t.CreatedBy, t.Created.UTC(), t.Expires.UTC())
@@ -268,4 +278,18 @@ func (s *Store) DeleteSession(ctx context.Context, hash string) error {
 	}
 	_, err := s.pool.Exec(ctx, "DELETE FROM sessions WHERE hash = $1 OR expires_at <= $2", hash, time.Now())
 	return storageErr("session", err)
+}
+
+// DeleteSessionsOf ends every session of the principal and drops expired
+// ones; it counts the unexpired sessions of the principal it ended.
+func (s *Store) DeleteSessionsOf(ctx context.Context, principal string) (int, error) {
+	if err := s.ready(ctx); err != nil {
+		return 0, err
+	}
+	at := time.Now()
+	var ended int
+	err := s.pool.QueryRow(ctx, `WITH gone AS (
+    DELETE FROM sessions WHERE principal = $1 OR expires_at <= $2 RETURNING principal, expires_at
+) SELECT count(*) FROM gone WHERE principal = $1 AND expires_at > $2`, principal, at).Scan(&ended)
+	return ended, storageErr("session", err)
 }

@@ -8,17 +8,16 @@ import (
 	"github.com/lineahq/linea/internal/debugger/artifact"
 )
 
-// Build metrics let an autoscaler size the builders to the
-// build queue. They are counts only: no build, runtime, builder or
-// principal is named.
+// Build metrics are the build queue's counts and this instance's
+// builders, which the server's metrics report (server_metrics.go). They are
+// counts only: no build, runtime, builder or principal is named.
 
-// buildCountsFor is how long the queue's counts are reused, so a scraper
-// polling every instance does not query the store each time. Tests
-// shorten it.
+// buildCountsFor is how long the queue's counts are reused, so frequent
+// metric collections do not query the store each time. Tests shorten it.
 var buildCountsFor = 10 * time.Second
 
-// BuildMetrics are the build queue's counts and this instance's builders.
-type BuildMetrics struct {
+// buildMetrics are the build queue's counts and this instance's builders.
+type buildMetrics struct {
 	// Queued and Running are the installation's builds, the same on every
 	// instance.
 	Queued, Running int
@@ -54,12 +53,10 @@ type buildCountCache struct {
 	at     time.Time
 }
 
-// BuildMetrics reports the build queue and this instance's builders. It
-// is served without a caller, on a listener of its own (linea-server
-// --metrics-listen), so it reveals counts only. A service that takes no
-// builds reports zeros.
-func (s *Service) BuildMetrics(ctx context.Context) (BuildMetrics, error) {
-	var m BuildMetrics
+// readBuildMetrics reports the build queue and this instance's builders.
+// It takes no caller. A service that takes no builds reports zeros.
+func (s *Service) readBuildMetrics(ctx context.Context) (buildMetrics, error) {
+	var m buildMetrics
 	s.builders.mu.Lock()
 	m.Builders, m.BuilderSlots = s.builders.links, s.builders.slots
 	s.builders.mu.Unlock()
@@ -75,9 +72,9 @@ func (s *Service) BuildMetrics(ctx context.Context) (BuildMetrics, error) {
 		counts, err := builds.CountBuilds(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
-				return BuildMetrics{}, classify(ctx.Err(), CodeCancelled)
+				return buildMetrics{}, classify(ctx.Err(), CodeCancelled)
 			}
-			return BuildMetrics{}, artifactError(err)
+			return buildMetrics{}, artifactError(err)
 		}
 		c.counts, c.at = counts, now
 	}

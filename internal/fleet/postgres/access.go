@@ -92,6 +92,44 @@ func bootstrap(ctx context.Context, url, serverID string, c auth.Credential) (cr
 	return created, err
 }
 
+// InstallOperatorToken installs an operator credential with a token the
+// deployment generated, so the deployment can hand that token to linea-server
+// while it keeps the admin token. The credential has no expiry. It is safe to
+// repeat: when that token's operator is already active it changes nothing and
+// reports created false. It conflicts when the token's credential exists with
+// another role or token, was revoked or has expired.
+func InstallOperatorToken(ctx context.Context, url, serverID, name, token string) (created bool, err error) {
+	issued, err := auth.Install(auth.CredentialRequest{Name: name, Role: "operator"}, token, time.Now())
+	if err != nil {
+		return false, err
+	}
+	c := issued.Credential
+	if !auth.SafeName(serverID) {
+		return false, fleet.ErrInvalid
+	}
+	err = adminTx(ctx, url, func(ctx context.Context, tx pgx.Tx) error {
+		if err := identity(ctx, tx, serverID); err != nil {
+			return err
+		}
+		var current bool
+		err := tx.QueryRow(ctx, "SELECT token_hash=$2 AND role='operator' AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>clock_timestamp()) FROM fleet.credentials WHERE id=$1", c.ID, c.Hash).Scan(&current)
+		switch {
+		case err == nil && current:
+			return nil
+		case err == nil:
+			return fleet.ErrConflict
+		case !errors.Is(err, pgx.ErrNoRows):
+			return err
+		}
+		if err := insertCredential(ctx, tx, c); err != nil {
+			return err
+		}
+		created = true
+		return appendEvent(ctx, tx, "credential.created", c.ID, "bootstrap", nil)
+	})
+	return created, err
+}
+
 const credentialColumns = "id,name,role,labels,remote_config,created_at,expires_at,revoked_at"
 
 func scanCredential(row scanner, withHash bool) (auth.Credential, error) {

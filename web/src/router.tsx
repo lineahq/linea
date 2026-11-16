@@ -32,6 +32,8 @@ import { ProjectsPage } from './access/ProjectsPage';
 import { LibraryPage } from './saved/LibraryPage';
 import { SuiteResultPage } from './saved/SuiteResultPage';
 import { PlaygroundPage } from './playground/PlaygroundPage';
+import { SignInPage } from './ui/SignInPage';
+import { parseSignInSearch } from './ui/signin';
 
 /**
  * Selection lives in the URL so a view can be reloaded or shared locally:
@@ -147,6 +149,8 @@ export const suiteResultRoute = createRoute({ getParentRoute: () => rootRoute, p
 export const sourceDetailRoute = createRoute({ getParentRoute: () => rootRoute, path: '/saved/$artifactId', component: SourceDetailPage });
 export const auditRoute = createRoute({ getParentRoute: () => rootRoute, path: '/audit', component: AuditPage });
 export const accessRoute = createRoute({ getParentRoute: () => rootRoute, path: '/access', component: AccessPage, validateSearch: parseAccessSearch });
+/** The admin account's sign-in page: rendered by AppShell without a session or the rail. */
+export const signInRoute = createRoute({ getParentRoute: () => rootRoute, path: '/sign-in', component: SignInPage, validateSearch: parseSignInSearch });
 export const projectsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/access/projects', component: ProjectsPage });
 
 export const router = createRouter({
@@ -158,6 +162,7 @@ export const router = createRouter({
     runtimesRoute, buildRoute, upgradeRoute, storageRoute,
     savedRoute, libraryRoute, suiteListRoute, suiteResultRoute, sourceDetailRoute,
     auditRoute, accessRoute, projectsRoute,
+    signInRoute,
   ]),
 });
 

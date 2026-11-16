@@ -32,7 +32,7 @@ import (
 )
 
 // ReportSchemaVersion versions the Report JSON shape.
-const ReportSchemaVersion = "0.15"
+const ReportSchemaVersion = "0.16"
 
 // Request selects a configuration and its inputs. The configuration is a
 // path (Config) or text (ConfigYAML); the inputs are exactly one of a fixture
@@ -87,6 +87,8 @@ type Request struct {
 	// Observer, if set, receives every event of the instrumented run as it
 	// is recorded. It must return quickly.
 	Observer func(instrument.Event) `json:"-"`
+	// Phases, if set, records where the execution's time went (phases.go).
+	Phases *Phases `json:"-"`
 	// ConfigSnapshot is an internal prepared provider source. It is never client
 	// JSON; Prepare captures one when absent, before platform admission.
 	ConfigSnapshot *config.Snapshot `json:"-"`
@@ -256,6 +258,10 @@ type Report struct {
 	Comparison *runresult.Comparison `json:"comparison,omitempty"`
 	// Assertions is present when the request declares assertions.
 	Assertions *assertion.Report `json:"assertions,omitempty"`
+	// Warnings say where this run's evidence may be wrong: a failed
+	// self-check of its runtime, a stage or connector route the Collector
+	// did not attribute to a pipeline (report schema 0.16).
+	Warnings []RunWarning `json:"warnings,omitempty"`
 }
 
 // ErrInvalidRequest marks errors caused by the request itself rather than by
@@ -265,6 +271,15 @@ var ErrInvalidRequest = errors.New("invalid request")
 // Execute runs the request. Errors wrapping ErrInvalidRequest describe a
 // malformed request; other errors come from configuration or execution.
 func Execute(ctx context.Context, req Request) (*Report, error) {
+	t := req.Phases.Track()
+	rep, err := execute(ctx, req, t)
+	t.Done(err)
+	return rep, err
+}
+
+// execute is Execute, timing its phases on t.
+func execute(ctx context.Context, req Request, t *PhaseTracker) (*Report, error) {
+	t.Next(PhaseConfigResolve)
 	var err error
 	req, err = Prepare(ctx, req)
 	if err != nil {
@@ -315,12 +330,14 @@ func Execute(ctx context.Context, req Request) (*Report, error) {
 	rep.References = resolved.References
 	rep.Timestamps = timestamps(opts.Inputs, rebase, c.WallClockReads(resolved.Config), time.Now())
 
+	t.Next(PhaseCollectorRun)
 	if rep.Result, err = c.Run(ctx, opts); err != nil {
 		return nil, err
 	}
 	if req.Normalize {
 		rep.Result.Canonicalize()
 	}
+	t.Next(PhaseAnalysis)
 	// Missing output is final only when the run completed: a clean Collector
 	// shutdown flushes buffering processors.
 	if rep.Stages, err = analysis.Analyze(rep.Result.Events, rep.Result.Snapshots, rep.Result.Completed()); err != nil {
@@ -335,6 +352,7 @@ func Execute(ctx context.Context, req Request) (*Report, error) {
 	if rep.Lineage, err = analysis.Lineage(rep.Result.Events, rep.Result.Snapshots, rep.Stages, rep.Aggregations, rep.Result.Completed()); err != nil {
 		return nil, err
 	}
+	noteStandInConnectors(rep.Lineage, rep.Topology)
 	if rep.Sampling, err = explainSampling(ctx, resolved, rep.Stages, rep.Result); err != nil {
 		return nil, err
 	}
@@ -358,6 +376,7 @@ func Execute(ctx context.Context, req Request) (*Report, error) {
 	if err != nil {
 		return nil, err
 	}
+	rep.Warnings = runWarnings(rep.Runtime, rep.Topology, rep.Stages, rep.Result)
 	rep.Recommendations = recommend.Recommend(recommend.Input{Topology: rep.Topology, Stages: rep.Stages, Filtering: rep.Filtering,
 		OTTL: rep.OTTL, Batching: rep.Batching, Grouping: rep.Grouping, Sampling: rep.Sampling, Placements: placements, DeadWrites: dead,
 		ContextLosses: contextLosses(resolved, rep.Topology), ExporterBatches: exporterBatches(resolved)})
@@ -367,6 +386,7 @@ func Execute(ctx context.Context, req Request) (*Report, error) {
 		}
 	}
 	if req.Compare {
+		t.Next(PhaseCollectorReference)
 		if rep.Reference, err = c.RunReference(ctx, opts); err != nil {
 			return nil, fmt.Errorf("reference run: %w", err)
 		}

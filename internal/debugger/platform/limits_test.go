@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/lineahq/linea/internal/debugger/artifact"
 	"github.com/lineahq/linea/internal/debugger/authz"
 	"github.com/lineahq/linea/internal/debugger/engine"
+	"github.com/lineahq/linea/internal/debugger/store/memory"
 )
 
 // limitedUsers binds alice and bob as engineers in the default project.
@@ -93,6 +95,90 @@ func TestRunsPerPrincipalCountsEveryHeldSlot(t *testing.T) {
 	s.mu.Unlock()
 	if holds != 0 {
 		t.Fatalf("slots still held after admission: %v", s.holds)
+	}
+}
+
+// TestRunsPerPrincipalHoldsAcrossInstances: instances sharing a store count
+// a principal's runs together, so a second instance refuses the run that
+// would exceed the limit even though it holds none of them.
+func TestRunsPerPrincipalHoldsAcrossInstances(t *testing.T) {
+	access, alice, bob := limitedUsers(t)
+	data := memory.NewData()
+	block := func(ctx context.Context, req engine.Request) (*engine.Report, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	open := func() *Service {
+		return openPlatform(t, data, Options{Shared: true, Access: access, Limits: PrincipalLimits{Runs: 2},
+			QueueCapacity: 10, Prepare: unprepared, Execute: block})
+	}
+	a, b := open(), open()
+	run := func(s *Service, c Caller) (*Handle, error) {
+		return s.submit(s.ctx, c, ModeQuick, request(c.Principal.ID), time.Time{})
+	}
+	first, err := run(a, alice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run(a, alice); err != nil {
+		t.Fatal(err)
+	}
+	_, err = run(b, alice)
+	wantPrincipalLimit(t, err, "limits.runs_per_principal")
+	if _, err := run(b, bob); err != nil {
+		t.Fatalf("another principal = %v", err)
+	}
+	_ = first.cancelWithCause(nil)
+	waitRun(t, first)
+	if _, err := run(b, alice); err != nil {
+		t.Fatalf("after a finished run = %v", err)
+	}
+}
+
+// TestASuiteHoldsThePrincipalLimitAcrossInstances: a suite's members are
+// admitted in one write that counts the principal's runs on every
+// instance, so a suite that would exceed the limit is refused whole rather
+// than admitted in part, and a suite within it is admitted.
+func TestASuiteHoldsThePrincipalLimitAcrossInstances(t *testing.T) {
+	access, alice, _ := limitedUsers(t)
+	data := memory.NewData()
+	block := func(ctx context.Context, req engine.Request) (*engine.Report, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	open := func() *Service {
+		return openPlatform(t, data, Options{Shared: true, Access: access, Limits: PrincipalLimits{Runs: 3},
+			QueueCapacity: 10, Prepare: unprepared, Execute: block})
+	}
+	a, b := open(), open()
+	for range 2 {
+		if _, err := a.submit(a.ctx, alice, ModeQuick, request("held"), time.Time{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// b holds none of alice's runs, so only the store sees the overshoot.
+	_, err := b.SubmitSuite(context.Background(), alice, suiteRequest("first", "second"))
+	wantPrincipalLimit(t, err, "limits.runs_per_principal")
+	stored, err := b.repository.Runs(context.Background())
+	if err != nil || len(stored) != 2 {
+		t.Fatalf("stored runs = %d, %v; want the 2 held", len(stored), err)
+	}
+	// b may follow a's runs through the change feed, but keeps none of the
+	// suite's.
+	b.mu.Lock()
+	var left []string
+	for id := range b.runs {
+		if !slices.ContainsFunc(stored, func(r artifact.RunRecord) bool { return r.ID == id }) {
+			left = append(left, id)
+		}
+	}
+	jobs, reserved, preparing, suiteRuns := len(b.jobs), b.reserved, b.preparing, len(b.suiteRuns)
+	b.mu.Unlock()
+	if len(left) != 0 || jobs != 0 || reserved != 0 || preparing != 0 || suiteRuns != 0 {
+		t.Fatalf("a refused suite left runs %v, %d jobs, %d reserved, %d preparing and %d suite runs", left, jobs, reserved, preparing, suiteRuns)
+	}
+	if _, err := b.SubmitSuite(context.Background(), alice, suiteRequest("within")); err != nil {
+		t.Fatalf("a suite within the limit = %v", err)
 	}
 }
 

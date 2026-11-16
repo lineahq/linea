@@ -37,6 +37,11 @@ spec:
     metadata:
       labels:
         {{- include "linea.poolSelector" . | nindent 8 }}
+      {{- if include "linea.workerTokenRendered" . }}
+      annotations:
+        # The token is read at startup (an environment variable); a change restarts the pool.
+        checksum/worker-token: {{ include "linea.workerToken" . | sha256sum }}
+      {{- end }}
     spec:
       serviceAccountName: {{ $fullname }}-pool
       automountServiceAccountToken: false
@@ -44,10 +49,14 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      # Root with only CAP_SETUID and CAP_SETGID (below), to start every
+      # runtime as nobody (--child-user), which loses them on exec: a
+      # runtime's code cannot read the token in the pool's environment or
+      # its memory. The namespace needs the baseline Pod Security level.
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 65534
-        runAsGroup: 65534
+        runAsNonRoot: false
+        runAsUser: 0
+        runAsGroup: 0
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -64,6 +73,7 @@ spec:
             - --idle={{ .Values.pool.idle }}
             - --cache={{ .Values.pool.cache.size }}
             - --cache-dir=/cache
+            - --child-user=65534:65534
             {{- if .Values.pool.caSecret }}
             - --ca-file=/etc/linea/ca/ca.crt
             {{- end }}
@@ -82,6 +92,7 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+              add: ["SETUID", "SETGID"]
           volumeMounts:
             - name: cache
               mountPath: /cache

@@ -157,17 +157,22 @@ func startTeamAt(t *testing.T, path, addr string) string {
 			t.Error("serve did not stop")
 		}
 	})
-	select {
-	case notice := <-notices:
-		const prefix = "serving API on "
-		if !strings.HasPrefix(notice, prefix) {
-			t.Fatalf("unexpected startup: %s", notice)
+	// The server says it listens and opens storage before it serves.
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case notice := <-notices:
+			if rest, ok := strings.CutPrefix(notice, "serving API on "); ok {
+				return strings.TrimSuffix(strings.Fields(rest)[0], "/api/v1")
+			}
+			if !strings.HasPrefix(notice, "listening on ") {
+				t.Fatalf("unexpected startup: %s", notice)
+			}
+		case <-deadline:
+			t.Fatal("serve did not start")
+			return ""
 		}
-		return strings.TrimSuffix(strings.Fields(strings.TrimPrefix(notice, prefix))[0], "/api/v1")
-	case <-time.After(10 * time.Second):
-		t.Fatal("serve did not start")
 	}
-	return ""
 }
 
 // teamRequests sends requests to a team server under another Host name,

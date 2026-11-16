@@ -3,8 +3,11 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
+
+	"go.uber.org/zap"
 )
 
 // serveStartup runs serve with a context that is already over and returns
@@ -54,5 +57,31 @@ func TestServeRefusesTheRemovedWorkspaceFlag(t *testing.T) {
 	code, _, stderr := runServer(t, "--addr", "127.0.0.1:0", "--workspace", t.TempDir())
 	if code != exitError || !strings.Contains(stderr, "flag provided but not defined: -workspace") {
 		t.Fatalf("exit %d: %s", code, stderr)
+	}
+}
+
+// TestServerLogsJSONAtInfoByDefault: without --verbose the server still
+// writes warnings and info as JSON lines; debug needs --verbose.
+func TestServerLogsJSONAtInfoByDefault(t *testing.T) {
+	for _, verbose := range []bool{false, true} {
+		var out strings.Builder
+		logger := newLogger(&out, verbose)
+		logger.Debug("debug line")
+		logger.Warn("authentication refused", zap.String("reason", "unknown token"))
+		lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+		want := 1
+		if verbose {
+			want = 2
+		}
+		if len(lines) != want {
+			t.Fatalf("verbose=%v: %d lines %q, want %d", verbose, len(lines), out.String(), want)
+		}
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(lines[len(lines)-1]), &entry); err != nil {
+			t.Fatalf("verbose=%v: not JSON: %v", verbose, err)
+		}
+		if entry["msg"] != "authentication refused" || entry["level"] != "warn" || entry["reason"] != "unknown token" {
+			t.Errorf("verbose=%v: entry %v", verbose, entry)
+		}
 	}
 }

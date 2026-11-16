@@ -20,7 +20,7 @@ configuration safely.
 
 ```mermaid
 flowchart LR
-  admin["Admin API calls<br/>configs, assignments, rollouts,<br/>groups, credential opt-in"]
+  admin["Admin or operator API calls<br/>configs, assignments, rollouts,<br/>groups, credential opt-in"]
   leader["Rollout controller<br/>leader replica only"]
   db[("PostgreSQL<br/>desired state, failure holds")]
   subgraph replica["Each fleet replica, config management on"]
@@ -132,6 +132,12 @@ curl -s -H "$ADMIN" -H 'Content-Type: application/json' -X POST $API/credentials
 - Labels are optional, set by admins and verified by the server. Agent
   attributes are self-reported, so assignments that matter should also
   require `credential_labels`, not attributes alone.
+- A Collector's instance UID is also self-reported, but fleet binds it to the
+  credential that holds it: another credential cannot take over a connected
+  UID, so a credential outside the label match cannot displace a managed
+  Collector. A disconnected UID can change credentials, which
+  `agent.credential_changed` records. Labels still decide who receives a
+  configuration.
 
 ## Connect supervised Collectors
 
@@ -208,7 +214,7 @@ curl -s -H "$ADMIN" -H 'Content-Type: application/json' -X POST $API/configs/$CO
 | Body | Collector YAML up to 128 KiB with only the top-level keys `receivers`, `processors`, `exporters`, `connectors`, `extensions`, `service`. The server does not merge or render YAML; the supervisor validates against the real Collector |
 | Secrets | Must be `${env:...}` or `${file:...}` references resolved on the host. Literal values under secret-looking keys, header values and URL passwords are rejected with 422 `inline_secret` |
 | Component allowlist | `--config-allowed-components receiver:otlp,processor:batch,...` restricts the component types versions may use (422 `invalid_config`). Unset allows any |
-| Visibility | Bodies are readable only with `admin` and never appear in events, logs or metrics |
+| Visibility | Bodies are readable only with `admin` or `operator` and never appear in events, logs or metrics |
 | Retention | Each config keeps its newest 100 versions plus every version an assignment references |
 | Count | At most 1,000 configs |
 

@@ -21,27 +21,37 @@ import (
 
 	"github.com/lineahq/linea/build/versions"
 	"github.com/lineahq/linea/internal/debugger/container"
+	"github.com/lineahq/linea/internal/debugger/engine"
 	"github.com/lineahq/linea/internal/debugger/worker"
 )
 
 func TestFlagsAreChecked(t *testing.T) {
+	defer func(was string) { hostOS = was }(hostOS)
+	hostOS = "darwin"
+	if _, err := parseOptions([]string{"--connect", "https://linea.example", "--token-file", "t", "--check-user", "65534:65534"}); err == nil || !strings.Contains(err.Error(), "Linux only") {
+		t.Errorf("a builder off Linux = %v", err)
+	}
+	hostOS = "linux"
 	for _, tc := range []struct {
 		args []string
 		want string
 	}{
-		{nil, "--connect"},
-		{[]string{"--connect", "https://linea.example"}, "--token-file"},
-		{[]string{"--connect", "https://linea.example", "--token-file", "t", "--capacity", "0"}, "--capacity"},
-		{[]string{"--connect", "https://linea.example", "--token-file", "t", "--cpus", "0"}, "--cpus"},
-		{[]string{"--connect", "https://linea.example", "--token-file", "t", "--name", " "}, "--name"},
-		{[]string{"--connect", "https://linea.example", "--token-file", "t", "extra"}, "unexpected argument"},
+		{nil, "--check-user"},
+		{[]string{"--check-user", "65534:65534"}, "--connect"},
+		{[]string{"--check-user", "0:0"}, "root"},
+		{[]string{"--check-user", "65534:65534", "--connect", "https://linea.example"}, "--token-file"},
+		{[]string{"--check-user", "65534:65534", "--connect", "https://linea.example", "--token-file", "t", "--capacity", "0"}, "--capacity"},
+		{[]string{"--check-user", "65534:65534", "--connect", "https://linea.example", "--token-file", "t", "--capacity", "1025"}, "--capacity"},
+		{[]string{"--check-user", "65534:65534", "--connect", "https://linea.example", "--token-file", "t", "--cpus", "0"}, "--cpus"},
+		{[]string{"--check-user", "65534:65534", "--connect", "https://linea.example", "--token-file", "t", "--name", " "}, "--name"},
+		{[]string{"--check-user", "65534:65534", "--connect", "https://linea.example", "--token-file", "t", "extra"}, "unexpected argument"},
 		{[]string{"--listen", "127.0.0.1:0"}, "not defined"},
 	} {
 		if _, err := parseOptions(tc.args); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("parseOptions %v = %v, want an error naming %s", tc.args, err, tc.want)
 		}
 	}
-	o, err := parseOptions([]string{"--connect", "https://linea.example", "--token-file", "t", "--name", "b1"})
+	o, err := parseOptions([]string{"--check-user", "65534:65534", "--connect", "https://linea.example", "--token-file", "t", "--name", "b1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +66,9 @@ func TestRunReadsTheTokenAndCAFirst(t *testing.T) {
 	if err := os.WriteFile(empty, []byte("\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	base := []string{"--connect", "https://linea.example", "--work-dir", dir}
+	defer func(was string) { hostOS = was }(hostOS)
+	hostOS = "linux"
+	base := []string{"--check-user", "65534:65534", "--connect", "https://linea.example", "--work-dir", dir}
 	if err := run(context.Background(), nil, append(base, "--token-file", filepath.Join(dir, "missing"))); err == nil || !strings.Contains(err.Error(), "--token-file") {
 		t.Errorf("a missing token file = %v", err)
 	}
@@ -242,6 +254,7 @@ func TestABuildDownloadsBuildsAndUploads(t *testing.T) {
 	if r.BinaryDigest != digestOf([]byte("worker binary")) || r.BinarySize != int64(len("worker binary")) || r.OS != "linux" || r.Arch == "" || r.Hello == nil || r.Hello.Runtime != "sha256:rt" {
 		t.Fatalf("result %+v", r)
 	}
+	checkBuildPhases(t, r.Phases, []string{worker.BuildPhaseInputsDownload, worker.BuildPhaseRuntimeBuild, worker.BuildPhaseBinaryUpload}, "")
 	if got := fx.store.objects["/out/worker"]; string(got) != "worker binary" || fx.store.puts["/out/worker"] != int64(len(got)) {
 		t.Fatalf("uploaded %q", got)
 	}
@@ -327,6 +340,12 @@ func TestABuildRefusesWhatItCannotTrust(t *testing.T) {
 		}
 		if r.BinaryDigest != "" || r.Hello != nil {
 			t.Errorf("%s: a failed build returned a binary: %+v", name, r)
+		}
+		if n := len(r.Phases); n == 0 || !r.Phases[n-1].Failed {
+			t.Errorf("%s: phases %+v end without a failed one", name, r.Phases)
+		}
+		if name == "a missing object" && (len(r.Phases) != 1 || r.Phases[0].Name != worker.BuildPhaseInputsDownload) {
+			t.Errorf("%s: phases %+v, want only a failed download", name, r.Phases)
 		}
 		for _, secret := range []string{"secretsignature", "u:p@"} {
 			if strings.Contains(r.Error, secret) || strings.Contains(log.text(), secret) {
@@ -441,12 +460,15 @@ func TestABuildExportsItsImageWhenAsked(t *testing.T) {
 			if r.Error != "" || r.BinaryDigest == "" {
 				t.Fatalf("result %+v\n%s", r, log.text())
 			}
+			all := []string{worker.BuildPhaseInputsDownload, worker.BuildPhaseRuntimeBuild, worker.BuildPhaseBinaryUpload, worker.BuildPhaseImageExport}
 			if tc.refuse {
 				if r.Image != "" || r.ExportError == "" || !strings.Contains(log.text(), "exporting the image failed") {
 					t.Fatalf("result %+v\n%s", r, log.text())
 				}
+				checkBuildPhases(t, r.Phases, all, worker.BuildPhaseImageExport)
 				return
 			}
+			checkBuildPhases(t, r.Phases, all, "")
 			if !strings.HasPrefix(r.Image, host+"/team/runtimes@sha256:") || r.ExportError != "" || manifests != 1 {
 				t.Fatalf("result %+v, %d manifests\n%s", r, manifests, log.text())
 			}
@@ -477,5 +499,22 @@ func TestStoppingDrainsThenCancels(t *testing.T) {
 	case <-ctx.Done():
 	case <-time.After(time.Minute):
 		t.Fatal("the second signal did not cancel")
+	}
+}
+
+// checkBuildPhases checks a build's phases: want in order, without overlap,
+// none failed but the one named failed.
+func checkBuildPhases(t *testing.T, got []engine.Phase, want []string, failed string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("phases %+v, want %v", got, want)
+	}
+	for i, p := range got {
+		if p.Name != want[i] || p.Offset < 0 || p.Duration < 0 || p.Failed != (p.Name == failed) {
+			t.Fatalf("phase %d %+v, want %s (failed %v)", i, p, want[i], want[i] == failed)
+		}
+		if i > 0 && p.Offset < got[i-1].Offset+got[i-1].Duration {
+			t.Fatalf("phases overlap: %+v", got)
+		}
 	}
 }

@@ -1092,8 +1092,23 @@ On a team server (`linea-server --config`, the only server mode,
   changes something (the playground evaluates on load) carries the CSRF token.
 - A 401 replaces the whole page with a sign-in page. It links to
   `/auth/login?return_to=<location>` (`signInHref` in `ui/access.ts`, tested).
-  It does so whatever the server's sign-in methods are; `/auth/login` exists
-  only with `oidc`.
+  The server's `/auth/login` then sends the browser to `/sign-in` when the
+  built-in admin account is on, or on to the provider when OIDC is the only
+  method.
+- `/sign-in` (`ui/SignInPage.tsx`, logic `ui/signin.ts`, tested) is the one route
+  that renders without a session. `AppShell` checks the path first
+  (`isSignInPath`) and renders the page alone, with no rail and no
+  `GET /api/v1/session`, whose 401 would otherwise replace it with the prompt
+  above. It reads `GET /auth/methods` (`api.signInMethods`) and shows a user name
+  (prefilled `admin`) and password form when `password` is true, which posts
+  `{user, password}` as JSON to `/auth/password` (`api.signInWithPassword`;
+  401, 429 and the rest are worded by `signInMessage` in an inline alert), and
+  "Sign in with <issuer host>" when `oidc` is offered, a plain link to
+  `/auth/login?method=oidc&return_to=…` (`oidcHref`). A successful sign-in loads
+  `return_to` as a new page (`window.location.assign`); `safeReturnTo` keeps
+  only paths that start with `/` but not `//` or `/\`, else `/`. The `/auth`
+  endpoints are not in the OpenAPI contract, so `signInMethods` and
+  `SignInMethods` are written by hand.
 - The session's CSRF token is kept in `api/client.ts` (`setCSRFToken`). Every
   request other than GET sends it as `X-CSRF-Token`; only a web session has a
   token.

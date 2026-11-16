@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lineahq/linea/internal/debugger/gatescan"
 	"github.com/lineahq/linea/internal/debugger/worker"
 )
 
@@ -27,14 +28,15 @@ import (
 // the steps of Docker.Build, run as host processes instead of in the Go image.
 // Given the pinned toolchain (GoVersion) it produces the binary Docker.Build
 // produces from the same manifest and sources: the Go commands are shared
-// (resolveArgs, genArgs, compileArgs), and the build environment is the
+// (resolveArgs, compileArgs; the feature gates' owners are written in
+// process, see nativeRun.gates), and the build environment is the
 // container's, CGO_ENABLED=0 GOOS=linux GOTOOLCHAIN=local and the module
 // source, with nothing else of the host's passed on.
 type Native struct {
 	// WorkDir holds everything a build writes: its module and built binary,
 	// and the module and build caches unless set below. The directory must
-	// allow executing files, because go run starts the gate generator from
-	// it. Required.
+	// allow executing files, because a build's worker is started from it for
+	// its hello check. Required.
 	WorkDir string
 	// CPUs limits the go command's parallelism (GOMAXPROCS); zero means
 	// the default build CPUs or the host's, whichever is fewer.
@@ -44,6 +46,10 @@ type Native struct {
 	GoCache, ModCache string
 	// Go is the go executable; empty means "go" on PATH.
 	Go string
+	// CheckUser, when set, starts the built worker for its hello check as
+	// that user (Linux only), so the built code cannot read the builder's
+	// token or environment.
+	CheckUser *worker.ChildUser
 
 	// Seams for tests.
 	command func(ctx context.Context, args ...string) *exec.Cmd
@@ -100,6 +106,22 @@ func (n *Native) dirs() (nativeDirs, error) {
 	for _, dir := range []string{d.builds, d.bin, d.tmp, d.modCache, d.goCache, d.gopath} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nativeDirs{}, err
+		}
+	}
+	if n.CheckUser != nil {
+		// The check user reaches a built binary and its own directory under
+		// tmp by path, and reads no build's sources or caches.
+		modes := map[string]os.FileMode{root: 0o711, d.bin: 0o711, d.tmp: 0o711, d.builds: 0o700, d.gopath: 0o700}
+		if n.ModCache == "" {
+			modes[d.modCache] = 0o700
+		}
+		if n.GoCache == "" {
+			modes[d.goCache] = 0o700
+		}
+		for dir, mode := range modes {
+			if err := os.Chmod(dir, mode); err != nil {
+				return nativeDirs{}, err
+			}
 		}
 	}
 	return d, nil
@@ -248,6 +270,21 @@ func (n *Native) Build(ctx context.Context, req BuildRequest) (*NativeRuntime, e
 		start = func(ctx context.Context, name, binary string) (worker.Hello, error) {
 			cmd := exec.Command(binary)
 			cmd.Dir, cmd.Env = d.tmp, []string{"TMPDIR=" + d.tmp}
+			if u := n.CheckUser; u != nil {
+				// A directory the check user may write, removed after.
+				tmp, err := os.MkdirTemp(d.tmp, "check-")
+				if err != nil {
+					return worker.Hello{}, err
+				}
+				defer os.RemoveAll(tmp)
+				if err := os.Chmod(tmp, 0o777); err != nil {
+					return worker.Hello{}, err
+				}
+				cmd.Dir, cmd.Env = tmp, []string{"TMPDIR=" + tmp}
+				if err := u.Apply(cmd); err != nil {
+					return worker.Hello{}, err
+				}
+			}
 			w, err := worker.Start(ctx, name, cmd)
 			if err != nil {
 				return worker.Hello{}, err
@@ -317,7 +354,39 @@ func (r *nativeRun) compile(ctx context.Context, archive, goMod []byte, out stri
 		return &BuildError{Stage: stage, Err: err}
 	}
 	defer os.RemoveAll(dir)
-	return r.step(ctx, stage, dir, goMod, false, genArgs, compileArgs(out, verified))
+	if err := r.gates(ctx, stage, dir); err != nil {
+		return err
+	}
+	return r.step(ctx, stage, dir, goMod, false, compileArgs(out, verified))
+}
+
+// gates writes the feature gates' owners into the build module in dir, the
+// file genArgs writes in the Go image. It scans the source in this process
+// with go list and go/parser: running the generator would run code resolved
+// from the build module, whose versions and replaces a manifest chooses, as
+// the builder's user.
+func (r *nativeRun) gates(ctx context.Context, stage, dir string) error {
+	logs := &lineLog{log: r.log}
+	src, err := gatescan.Generate(func(env []string, args ...string) ([]byte, error) {
+		cmd := r.n.goCommand(ctx, args...)
+		cmd.Dir = dir
+		cmd.Env = append(r.n.env(r.d, r.req.ModuleProxy, r.req.Offline, r.goos, r.goarch), env...)
+		cmd.Stderr = logs
+		ownGroup(cmd)
+		cmd.WaitDelay = 10 * time.Second
+		return cmd.Output()
+	}, gatesSource)
+	if err == nil {
+		err = os.WriteFile(filepath.Join(dir, filepath.FromSlash(gatesFile)), src, 0o644)
+	}
+	logs.flush()
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
+		err = context.Cause(ctx)
+	}
+	return &BuildError{Stage: stage, Output: logs.tail(), Err: err}
 }
 
 // extract unpacks a build module into a new directory. The files get the

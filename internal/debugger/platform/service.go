@@ -9,6 +9,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
 	"github.com/lineahq/linea/build/versions"
@@ -57,13 +60,21 @@ type Runtime interface {
 // Options configure one shared service and worker. Nonpositive capacities use
 // the finite defaults. Prepare and Execute default to the real engine boundaries.
 type Options struct {
-	Logger        *zap.Logger
-	QueueCapacity int
+	Logger *zap.Logger
+	// MeterProvider records the server's own metrics (server_metrics.go);
+	// nil records none.
+	MeterProvider metric.MeterProvider
+	// TracerProvider records the server's own spans (server_traces.go);
+	// nil records none.
+	TracerProvider trace.TracerProvider
+	QueueCapacity  int
 	// HistoryLimit is how many terminal runs a service without a
 	// repository keeps; RunCache how many a service with one keeps in
-	// memory after reading them (DefaultRunCache).
-	HistoryLimit int
-	RunCache     int
+	// memory after reading them (DefaultRunCache), and RunCacheBytes how
+	// much decoded evidence they may hold (DefaultRunCacheBytes).
+	HistoryLimit  int
+	RunCache      int
+	RunCacheBytes int64
 	// Retention, when set, evicts the runs a repository no longer keeps; zero
 	// keeps every run.
 	Retention RetentionPolicy
@@ -101,6 +112,11 @@ type Options struct {
 	// Access decides what each principal may do; nil is local
 	// mode's policy, where the local owner is admin everywhere.
 	Access *Policy
+	// AdminPassword turns on the built-in admin account (admin.go): its
+	// password, at least MinAdminPassword characters; empty turns the account
+	// off and refuses its sessions and tokens. It needs a workspace (Open)
+	// and Access, which gains the account's admin binding on scope *.
+	AdminPassword string
 	// Limits bound what one principal holds at once (team mode);
 	// zero fields are unlimited.
 	Limits PrincipalLimits
@@ -213,6 +229,15 @@ type pendingRun struct {
 	exec       *executor
 	// pooled is set for a run bound to connected workers.
 	pooled bool
+	// unreleased is set while the run's start could not be recorded and
+	// handing it back failed too: its executor's renewal tries again.
+	unreleased bool
+	// span is the context of the running attempt's span.
+	span context.Context
+	// returned is set, under the service's mu, once the execution returned
+	// and finish writes its outcome. It says nothing about the run's state:
+	// the repository decides that (finish).
+	returned bool
 }
 
 // Service owns scheduling and run history for all attached adapters.
@@ -222,7 +247,9 @@ type Service struct {
 	logger *zap.Logger
 	// listings caches list entries of terminal runs read for a run list.
 	listings listingCache
-	executor ExecuteFunc
+	// manifests caches the manifests of server builds.
+	manifests manifestCache
+	executor  ExecuteFunc
 	// defaultRuntime is Options.DefaultRuntime.
 	defaultRuntime string
 	// chosenDefault is the default runtime the team chose, as the
@@ -238,6 +265,7 @@ type Service struct {
 	queueCapacity    int
 	historyLimit     int
 	runCache         int
+	runCacheBytes    int64
 	ctx              context.Context
 	stop             context.CancelFunc
 	wake             chan struct{}
@@ -261,10 +289,16 @@ type Service struct {
 	// slots; buildCounts caches the queue's counts (build_metrics.go).
 	builders    builderCount
 	buildCounts buildCountCache
-	lease       time.Duration
-	now         func() time.Time
-	// beating is closed when the heartbeat loop stops.
+	// metrics are the server's own instruments (server_metrics.go).
+	metrics serverMetrics
+	// tracer starts the server's own spans (server_traces.go).
+	tracer trace.Tracer
+	lease  time.Duration
+	now    func() time.Time
+	// beating is closed when the heartbeat loops stop.
 	beating chan struct{}
+	// leased is a copy of executors that lease renewal reads without mu.
+	leased atomic.Pointer[[]*executor]
 	// auditLog is the repository's audit log, or an in-memory one.
 	auditLog artifact.Audit
 	// policy is Options.Environment and Options.Paths for operations that
@@ -275,6 +309,8 @@ type Service struct {
 	// extended by the managed role bindings, managed (role_bindings.go).
 	access    *authz.Policy
 	effective atomic.Pointer[authz.Policy]
+	// admin is the built-in admin account, nil when it is off.
+	admin     *adminAccount
 	bindingMu sync.Mutex
 	managed   artifact.RoleBindingSet
 	// projectSet is the repository's project set (projects.go); projectMu
@@ -376,7 +412,7 @@ func New(opts Options) *Service {
 
 // startWorker starts the scheduler and its heartbeat.
 func (s *Service) startWorker() {
-	s.executors[0].renewed = s.now()
+	s.executors[0].lease.renewed = s.now()
 	go s.work()
 	go s.heartbeats()
 	if s.shared {
@@ -402,6 +438,9 @@ func newService(opts Options, repository artifact.Repository) *Service {
 	if opts.RunCache <= 0 {
 		opts.RunCache = DefaultRunCache
 	}
+	if opts.RunCacheBytes <= 0 {
+		opts.RunCacheBytes = DefaultRunCacheBytes
+	}
 	if opts.Execute == nil {
 		opts.Execute = engine.Execute
 	}
@@ -409,6 +448,12 @@ func newService(opts Options, repository artifact.Repository) *Service {
 	access := opts.Access
 	if access == nil {
 		access = authz.Local(LocalOwner)
+	}
+	var admin *adminAccount
+	if opts.AdminPassword != "" && opts.Access != nil {
+		// Open has checked the password and that the binding extends Access.
+		admin = newAdminAccount(opts.AdminPassword)
+		access, _ = access.Extend([]authz.Binding{adminBinding})
 	}
 	var runBytes int64
 	if repository != nil {
@@ -437,7 +482,7 @@ func newService(opts Options, repository artifact.Repository) *Service {
 	s := &Service{
 		logger: opts.Logger, executor: opts.Execute, prepare: opts.Prepare,
 		prepareGate:   make(chan struct{}, 1),
-		queueCapacity: opts.QueueCapacity, historyLimit: opts.HistoryLimit, runCache: opts.RunCache, listings: listingCache{max: listingCacheSize},
+		queueCapacity: opts.QueueCapacity, historyLimit: opts.HistoryLimit, runCache: opts.RunCache, runCacheBytes: opts.RunCacheBytes, listings: listingCache{max: listingCacheSize},
 		ctx: ctx, stop: stop, wake: make(chan struct{}, 1), done: make(chan struct{}),
 		runs:             make(map[string]*Handle),
 		jobs:             make(map[string]*pendingRun),
@@ -468,6 +513,7 @@ func newService(opts Options, repository artifact.Repository) *Service {
 		policy:           policy,
 		remotePolicy:     remotePolicy,
 		access:           access,
+		admin:            admin,
 		prepareRemote:    prepareRemote,
 		budgets:          budgets,
 		runtimes:         opts.Runtimes,
@@ -479,6 +525,7 @@ func newService(opts Options, repository artifact.Repository) *Service {
 	}
 	s.effective.Store(access)
 	s.executors = []*executor{{id: s.instanceID, capacity: 1}}
+	s.leasedLocked()
 	s.collectors.repository = repository
 	s.collectors.perPrincipal = opts.Limits.Captures
 	s.auditLog = &memoryAudit{}
@@ -490,6 +537,9 @@ func newService(opts Options, repository artifact.Repository) *Service {
 		s.runQueue = s.localQueue
 	}
 	s.builds = newBuildQueue(s)
+	s.metrics.storageAnswered(s.now())
+	s.newServerMetrics(opts.MeterProvider)
+	s.newServerTraces(opts.TracerProvider)
 	return s
 }
 
@@ -503,25 +553,63 @@ func (s *Service) submit(prepare context.Context, caller Caller, mode InputMode,
 // submitReserved shares all validation, preparation and admission with submit.
 // A suite slot transfers atomically from reserved to preparing under s.mu.
 func (s *Service) submitReserved(prepare context.Context, caller Caller, mode InputMode, req engine.Request, deadline time.Time, reservation *suiteAdmission) (*Handle, error) {
-	if err := s.enterPreparation(&caller, req, reservation); err != nil {
-		return nil, err
-	}
-	defer s.preparations.Done()
-	p, err := s.prepareRun(prepare, caller.Project, req)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.preparing--
-	s.holdLocked(caller, -1)
-	if s.closed {
-		return nil, ErrClosed
-	}
+	p, err := s.prepareReserved(prepare, &caller, req, reservation)
 	if err != nil {
 		return nil, err
 	}
-	if err := prepare.Err(); err != nil {
+	// Close waits for the admission's write too, so the repository stays
+	// open until it ends.
+	defer s.preparations.Done()
+	s.mu.Lock()
+	a, err := s.queuePreparedLocked(prepare, caller, mode, p, deadline, reservation)
+	s.mu.Unlock()
+	if err != nil {
 		return nil, err
 	}
-	return s.admitLocked(caller, mode, p, deadline, reservation)
+	handles, err := s.admitAll(prepare, caller, []admission{a})
+	if err != nil {
+		return nil, err
+	}
+	return handles[0], nil
+}
+
+// prepareReserved takes a preparation slot and prepares a run. A prepared
+// run keeps its slot and its principal's hold until queuePreparedLocked;
+// the caller then calls s.preparations.Done. On error nothing is kept.
+func (s *Service) prepareReserved(prepare context.Context, caller *Caller, req engine.Request, reservation *suiteAdmission) (preparedRun, error) {
+	if err := s.enterPreparation(caller, req, reservation); err != nil {
+		return preparedRun{}, err
+	}
+	p, err := s.prepareRun(prepare, caller.Project, req, reservation)
+	if err == nil {
+		err = prepare.Err()
+	}
+	if err != nil {
+		s.mu.Lock()
+		s.preparing--
+		s.holdLocked(*caller, -1)
+		if s.closed {
+			err = ErrClosed
+		}
+		s.mu.Unlock()
+		s.preparations.Done()
+		return preparedRun{}, err
+	}
+	return p, nil
+}
+
+// queuePreparedLocked gives up a prepared run's preparation slot and hold
+// and queues it, unless the service closed or prepare ended. s.mu is held.
+func (s *Service) queuePreparedLocked(prepare context.Context, caller Caller, mode InputMode, p preparedRun, deadline time.Time, reservation *suiteAdmission) (admission, error) {
+	s.preparing--
+	s.holdLocked(caller, -1)
+	if s.closed {
+		return admission{}, ErrClosed
+	}
+	if err := prepare.Err(); err != nil {
+		return admission{}, err
+	}
+	return s.queueLocked(caller, mode, p, deadline, reservation)
 }
 
 // enterPreparation validates a request and takes a preparation slot: one of
@@ -581,10 +669,16 @@ func (s *Service) admitsLocked(caller Caller, n int) error {
 		}
 	}
 	if held+n > s.limits.Runs {
-		return &Error{Code: CodeResourceExhausted, Retryable: true, Message: fmt.Sprintf(
-			"%s already has %d runs reserved, queued or running; at most %d are allowed (limits.runs_per_principal); wait for one to finish", id, held, s.limits.Runs)}
+		return s.runLimitError(id, fmt.Sprintf("%d runs reserved, queued or running", held))
 	}
 	return nil
+}
+
+// runLimitError refuses a run of principal id, which already holds what
+// held describes.
+func (s *Service) runLimitError(id, held string) error {
+	return &Error{Code: CodeResourceExhausted, Retryable: true, Message: fmt.Sprintf(
+		"%s already has %s; at most %d are allowed (limits.runs_per_principal); wait for one to finish", id, held, s.limits.Runs)}
 }
 
 // holdLocked changes the preparing or reserved slots caller holds by n.
@@ -601,17 +695,20 @@ type preparedRun struct {
 	bundle  []byte
 	info    *engine.BundleInfo
 	runtime *boundRuntime
+	// submitted is the span of the request that submitted the run.
+	submitted trace.SpanContext
 }
 
 // prepareRun captures and validates the request's sources, one preparation at
-// a time, cancelled by prepare or by closing the service.
-func (s *Service) prepareRun(prepare context.Context, project string, req engine.Request) (preparedRun, error) {
+// a time, cancelled by prepare or by closing the service. A suite's runs use
+// the runtime it bound (reservation may be nil).
+func (s *Service) prepareRun(prepare context.Context, project string, req engine.Request, reservation *suiteAdmission) (preparedRun, error) {
 	prepareCtx, releasePreparation := context.WithCancel(prepare)
 	stop := context.AfterFunc(s.ctx, releasePreparation)
 	defer stop()
 	defer releasePreparation()
 	var err error
-	out := preparedRun{}
+	out := preparedRun{submitted: trace.SpanContextFromContext(prepare)}
 	// The policy is the run's limits whatever the request says; the bundle
 	// records them at admission.
 	req.Limits = s.budgets.limits()
@@ -631,13 +728,18 @@ func (s *Service) prepareRun(prepare context.Context, project string, req engine
 	if req.Runtime != nil && req.Runtime.ID == "" {
 		// A selected built runtime (runtimeSelection): start its worker and
 		// record its identity in the bundle.
-		b, err := s.bind(prepareCtx, req.Runtime.Name)
-		if err != nil {
-			return out, err
+		b := reservation.bound(req.Runtime.Name)
+		if b == nil {
+			if b, err = s.bind(prepareCtx, req.Runtime.Name); err != nil {
+				return out, err
+			}
 		}
 		target := b.target
 		req.Runtime, out.runtime = &target, b
 	}
+	// The span includes the wait for a preparation slot (prepareGate).
+	prepareCtx, span := s.startSpan(prepareCtx, spanRunPrepare, attribute.Bool(attrRemote, out.runtime != nil && out.runtime.pooled))
+	defer span.End()
 	select {
 	case s.prepareGate <- struct{}{}:
 		if err = prepareCtx.Err(); err == nil {
@@ -661,15 +763,26 @@ func (s *Service) prepareRun(prepare context.Context, project string, req engine
 	return out, err
 }
 
-// admitLocked journals a prepared run and queues it. s.mu is held.
-func (s *Service) admitLocked(caller Caller, mode InputMode, p preparedRun, deadline time.Time, reservation *suiteAdmission) (*Handle, error) {
+// admission is a prepared run that queueLocked installed and admit writes.
+type admission struct {
+	r           *Handle
+	job         *pendingRun
+	reservation *suiteAdmission
+}
+
+// queueLocked installs a prepared run's handle and job, which hold its
+// queue slot and its principal's hold from here on. Without a repository
+// the run is queued at once; with one, admit writes it first, and until
+// then a claim, the change feed or a load that meets the run finds this
+// handle. s.mu is held.
+func (s *Service) queueLocked(caller Caller, mode InputMode, p preparedRun, deadline time.Time, reservation *suiteAdmission) (admission, error) {
 	req := p.req
 	base := s.ctx
 	releaseDeadline := func() {}
 	if !deadline.IsZero() {
 		base, releaseDeadline = context.WithDeadline(base, deadline)
 	}
-	ctx, cancelCause := context.WithCancelCause(base)
+	runCtx, cancelCause := context.WithCancelCause(base)
 	cancel := func(cause error) {
 		cancelCause(cause)
 		releaseDeadline()
@@ -677,39 +790,148 @@ func (s *Service) admitLocked(caller Caller, mode InputMode, p preparedRun, dead
 	r := &Handle{
 		id: instrument.NewRunID(), project: caller.Project, mode: mode, caller: caller.Actor(), state: StateQueued,
 		created: time.Now().UTC(), changed: make(chan struct{}), done: make(chan struct{}), cancel: cancel,
-		bundle: p.bundle, bundleInfo: p.info, runtimeKey: runtimeKey(req),
+		bundle: p.bundle, bundleInfo: p.info, runtimeKey: runtimeKey(req), submitted: p.submitted,
 	}
 	if p.runtime != nil {
 		r.binary = p.runtime.binary
 	}
+	if s.limits.Runs > 0 {
+		r.principalRuns = s.limits.Runs
+	}
 	caller.touch(r.id)
 	s.queueing(r)
-	if s.repository != nil {
-		r.persist = func(evidence bool) error { return s.persistRun(r, evidence) }
-		if err := r.persist(false); err != nil {
+	if s.repository == nil {
+		if err := s.localQueue.Admit(r.id, r.runtimeKey, 0); err != nil {
 			cancel(nil)
-			return nil, persistenceError(err)
+			return admission{}, err
 		}
-	} else if err := s.localQueue.Admit(r.id, r.runtimeKey, 0); err != nil {
-		cancel(nil)
-		return nil, err
 	}
 	s.observeLocked(r, &req)
 	s.runs[r.id] = r
+	s.touchLocked(r)
 	if reservation != nil {
 		reservation.handles = append(reservation.handles, r)
 		s.suiteRuns[r.id] = true
 	}
-	s.order = append(s.order, r.id)
-	s.jobs[r.id] = &pendingRun{handle: r, ctx: ctx, request: req, runtime: p.runtime, pooled: p.runtime != nil && p.runtime.pooled}
+	job := &pendingRun{handle: r, ctx: runCtx, request: req, runtime: p.runtime, pooled: p.runtime != nil && p.runtime.pooled}
+	s.jobs[r.id] = job
+	if s.repository == nil {
+		s.order = append(s.order, r.id)
+		s.evictLocked()
+		s.wakeLocked()
+	}
+	return admission{r: r, job: job, reservation: reservation}, nil
+}
+
+// admitAll writes the runs queueLocked installed, without s.mu, so a slow
+// repository or a large bundle does not hold up other runs. Several runs
+// are admitted in one write, so either all of them are queued or none is,
+// and the repository checks the principal's limit against all of them. The
+// write joins the span of the request in ctx but not its cancellation: a
+// write cancelled while it commits could leave a stored run its caller was
+// told failed. Runs the repository refuses are withdrawn; runs admitted
+// while a service that is not shared closed are cancelled, as Close cancels
+// every other run.
+func (s *Service) admitAll(ctx context.Context, caller Caller, as []admission) ([]*Handle, error) {
+	handles := make([]*Handle, len(as))
+	for i, a := range as {
+		handles[i] = a.r
+	}
+	if s.repository == nil || len(as) == 0 {
+		return handles, nil
+	}
+	batch := make([]artifact.Admission, len(as))
+	var err error
+	for i, a := range as {
+		a.r.mu.Lock()
+		p := a.r.publicationLocked()
+		a.r.mu.Unlock()
+		if batch[i], err = admissionOf(&p); err != nil {
+			break
+		}
+	}
+	var records []*artifact.RunRecord
+	if err == nil {
+		ctx = context.WithoutCancel(ctx)
+		if len(batch) == 1 {
+			var record *artifact.RunRecord
+			record, err = s.repository.AdmitRun(ctx, batch[0])
+			records = []*artifact.RunRecord{record}
+		} else {
+			records, err = s.repository.AdmitRuns(ctx, batch)
+		}
+		if err == nil {
+			s.nudgeRetention()
+		}
+	}
+	s.mu.Lock()
+	if err != nil {
+		for _, a := range as {
+			s.withdrawLocked(a)
+		}
+		s.mu.Unlock()
+		if errors.Is(err, artifact.ErrRunLimit) {
+			// Runs other instances admitted fill the limit.
+			return nil, s.runLimitError(caller.Principal.ID, fmt.Sprintf("at least %d unfinished runs on the server", s.limits.Runs))
+		}
+		return nil, persistenceError(err)
+	}
+	for i, r := range handles {
+		r.mu.Lock()
+		// A claim or the change feed may have brought the record first.
+		if records[i].Generation > r.generation {
+			r.storedLocked(records[i])
+		}
+		r.mu.Unlock()
+		s.order = append(s.order, r.id)
+	}
+	cancel := s.closed && !s.shared
 	s.evictLocked()
 	s.wakeLocked()
-	return r, nil
+	s.mu.Unlock()
+	if cancel {
+		for _, r := range handles {
+			_ = r.Cancel()
+		}
+	}
+	return handles, nil
+}
+
+// withdrawLocked removes a run queueLocked installed that will not be
+// admitted. s.mu is held.
+func (s *Service) withdrawLocked(a admission) {
+	r := a.r
+	r.mu.Lock()
+	r.cancel(nil)
+	r.mu.Unlock()
+	if s.runs[r.id] == r {
+		delete(s.runs, r.id)
+	}
+	s.dropJobLocked(a.job)
+	if s.localQueue != nil {
+		s.localQueue.Remove(r.id)
+		if i := slices.Index(s.order, r.id); i >= 0 {
+			s.order = slices.Delete(s.order, i, i+1)
+		}
+	}
+	if a.reservation != nil {
+		delete(s.suiteRuns, r.id)
+		a.reservation.handles = slices.DeleteFunc(a.reservation.handles, func(h *Handle) bool { return h == r })
+	}
 }
 
 // queueing connects a run's cancellation and end to the run queue.
 func (s *Service) queueing(r *Handle) {
 	r.requestCancel = s.requestCancelHook(r)
+	r.endRun = func(p runPublication) (bool, error) {
+		ended, err := s.endRun(nil, r, p, false)
+		if err != nil {
+			// The queue no longer holds the run (RequestCancel), so nothing
+			// else ends it.
+			s.endLater(r, p, StateQueued)
+		}
+		return ended, err
+	}
 	if s.localQueue != nil {
 		r.ended = func() { s.localQueue.Remove(r.id) }
 	}
@@ -740,7 +962,7 @@ func (s *Service) execute(ctx context.Context, caller Caller, mode InputMode, re
 	if err != nil {
 		return nil, err
 	}
-	if err := r.Wait(ctx); err != nil {
+	if err := s.waitRun(ctx, r); err != nil {
 		r.cancelWithCause(context.Cause(ctx))
 		_ = r.Wait(context.Background())
 	}
@@ -776,15 +998,25 @@ func (s *Service) work() {
 // run executes a job on the connected worker that claimed it, on its built
 // runtime, or with the service's executor.
 func (s *Service) run(job *pendingRun) (*engine.Report, error) {
+	span, phases := s.startExecuteSpan(job.span)
+	report, err := s.runOn(job, phases)
+	s.endExecuteSpan(span, phases, err)
+	return report, err
+}
+
+// runOn is run, recording the execution's phases on phases.
+func (s *Service) runOn(job *pendingRun, phases *engine.Phases) (*engine.Report, error) {
+	req := job.request
+	req.Phases = phases
 	b := job.runtime
 	if b == nil {
-		return s.executor(job.ctx, job.request)
+		return s.executor(job.ctx, req)
 	}
 	var report *engine.Report
 	var err error
 	if job.pooled {
-		report, err = s.runPooled(job)
-	} else if report, err = b.worker.Execute(job.ctx, job.request); errors.Is(err, engine.ErrRuntimeUnavailable) {
+		report, err = s.runPooled(job, phases)
+	} else if report, err = b.worker.Execute(job.ctx, req); errors.Is(err, engine.ErrRuntimeUnavailable) {
 		s.unbind(b)
 	}
 	if report != nil {
@@ -933,7 +1165,13 @@ func listed(r *Handle) Run {
 // Close atomically stops admission, cancels all unfinished work and waits for
 // every executor's Collector shutdown. It is safe to call concurrently or repeatedly.
 func (s *Service) Close() {
+	// Before s.mu: a collection in progress holds the SDK's lock and waits
+	// for s.mu in observe.
+	if s.metrics.observed != nil {
+		_ = s.metrics.observed.Unregister()
+	}
 	var held []artifact.Assignment
+	var cancel []*Handle
 	s.mu.Lock()
 	if !s.closed {
 		s.closed = true
@@ -943,29 +1181,45 @@ func (s *Service) Close() {
 			// The runs belong to every instance: stop only what this service
 			// executes, publish nothing (finish) and hand the runs back.
 			for id, job := range s.jobs {
-				if job.exec != nil {
-					held = append(held, job.assignment)
-					r := s.runs[id]
-					r.mu.Lock()
-					r.cancel(context.Canceled)
-					r.mu.Unlock()
+				// A run whose outcome finish is writing is left to that
+				// write: handing it back would make the write a conflict.
+				if job.exec == nil || job.returned {
+					continue
 				}
+				r := s.runs[id]
+				r.mu.Lock()
+				held = append(held, job.assignment)
+				r.cancel(context.Canceled)
+				r.mu.Unlock()
 			}
 		} else {
 			for _, r := range s.runs {
-				r.Cancel()
+				r.mu.Lock()
+				// A run whose admission is being written: admit cancels it
+				// once the repository holds it.
+				admitting := s.repository != nil && r.generation == 0 && !r.terminalLocked()
+				r.mu.Unlock()
+				if !admitting {
+					cancel = append(cancel, r)
+				}
 			}
 		}
 		clear(s.jobs)
 	}
 	s.mu.Unlock()
+	// Not under s.mu: a queued run's end is written, then applied under it.
+	for _, r := range cancel {
+		_ = r.Cancel()
+	}
+	// Handed back first, the runs wait for another instance only as long as
+	// their executions take to stop, not for a lease to end.
+	s.releaseHeld(held)
 	s.collectors.wait()
 	<-s.done
 	s.executing.Wait()
 	<-s.beating
 	<-s.following
 	<-s.retaining
-	s.releaseHeld(held)
 	s.closeConnections()
 	s.withdrawWorkers()
 	s.preparations.Wait()

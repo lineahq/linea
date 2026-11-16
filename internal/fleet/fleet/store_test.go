@@ -77,3 +77,45 @@ func TestInventoryPagination(t *testing.T) {
 		t.Fatal("connected filter failed")
 	}
 }
+
+func TestConnectBindsUIDToCredential(t *testing.T) {
+	const id = "00000000000000000000000000000001"
+	now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name       string
+		credential string
+		disconnect bool
+		err        error
+		wantCred   string
+		wantGen    uint64
+	}{
+		{name: "same credential takes over while connected", credential: "alpha", wantCred: "alpha", wantGen: 2},
+		{name: "another credential is refused while connected", credential: "bravo", err: ErrUIDHeld, wantCred: "alpha", wantGen: 1},
+		{name: "same credential reconnects after a disconnect", credential: "alpha", disconnect: true, wantCred: "alpha", wantGen: 2},
+		{name: "another credential takes over after a disconnect", credential: "bravo", disconnect: true, wantCred: "bravo", wantGen: 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewStore(4)
+			h := true
+			gen, _, err := s.ConnectAgent(t.Context(), id, "alpha", Report{Capabilities: 7, Healthy: &h}, now)
+			if err != nil || gen != 1 {
+				t.Fatal(gen, err)
+			}
+			if tc.disconnect {
+				s.Disconnect(id, gen, now.Add(time.Second))
+			}
+			gen, _, err = s.ConnectAgent(t.Context(), id, tc.credential, Report{Capabilities: 1}, now.Add(2*time.Second))
+			if !errors.Is(err, tc.err) {
+				t.Fatalf("error = %v, want %v", err, tc.err)
+			}
+			a, _ := s.Get(id)
+			if a.CredentialID != tc.wantCred || a.Generation != tc.wantGen || !a.Connected {
+				t.Fatalf("agent = %+v", a)
+			}
+			if tc.err != nil && (gen != 0 || a.Capabilities != 7 || a.IdentityConflict) {
+				t.Fatalf("refused connect changed state: gen %d, %+v", gen, a)
+			}
+		})
+	}
+}

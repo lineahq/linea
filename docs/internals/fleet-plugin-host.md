@@ -32,7 +32,11 @@ How core decides plugin state and fences work. The wire contract is
 - Each registration has its own host and service token; the host token alone
   identifies the plugin on the host listener.
 - Public ingress has two read and two write slots per plugin, independent of
-  manifest and status polling (two concurrent calls). Host services allow two
+  manifest and status polling. Fleet reads the request body (64 KiB, 2 s
+  deadline) before it takes a slot, so a slow client cannot hold one.
+- Status polling has its own two slots and refuses a third call. The manifest
+  probe has a dedicated slot and connection pool, so status calls cannot
+  starve it and drop the plugin out of `ready`. Host services allow two
   concurrent requests per plugin; a third gets 503.
 - Introspection takes a token SHA-256, so Collector tokens never reach fleet
   over the host channel. Only agent credentials introspect as active.

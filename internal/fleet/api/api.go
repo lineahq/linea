@@ -193,6 +193,16 @@ func admin(w http.ResponseWriter, p auth.Principal) bool {
 	failure(w, auth.ErrForbidden)
 	return false
 }
+
+// manager admits the admin and operator roles: everything but credentials and
+// plugin lifecycle.
+func manager(w http.ResponseWriter, p auth.Principal) bool {
+	if p.Role == "admin" || p.Role == "operator" {
+		return true
+	}
+	failure(w, auth.ErrForbidden)
+	return false
+}
 func (h *Handler) ServeHTTP(raw http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	w := &responseStatus{ResponseWriter: raw, status: 200}
@@ -230,7 +240,7 @@ func (h *Handler) ServeHTTP(raw http.ResponseWriter, r *http.Request) {
 		failure(w, err)
 		return
 	}
-	if p.Role != "admin" && p.Role != "reader" {
+	if p.Role != "admin" && p.Role != "operator" && p.Role != "reader" {
 		failure(w, auth.ErrUnauthorized)
 		return
 	}
@@ -560,7 +570,7 @@ func (h *Handler) resource(w http.ResponseWriter, r *http.Request, p auth.Princi
 				writeJSON(w, 200, g)
 				return
 			}
-			if !admin(w, p) {
+			if !manager(w, p) {
 				return
 			}
 			revision, ok := precondition(w, r)

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/lineahq/linea/internal/debugger/engine"
 	"github.com/lineahq/linea/internal/debugger/release"
 )
 
@@ -32,8 +33,8 @@ const BuilderPath = "/v1/builders/connect"
 // talk only when theirs are equal.
 const BuilderProtocol = 1
 
-// cancelGrace is how long the server waits for a cancelled build's result
-// before it gives up on the builder.
+// cancelGrace is how long the server waits for the answer to a cancelled
+// build or worker request before it gives up on the builder or worker.
 var cancelGrace = 30 * time.Second
 
 // ErrBuilderVersion means a builder of another product version dialed: it
@@ -109,6 +110,26 @@ type BuildResult struct {
 	// done, with its binary.
 	Image       string `json:"image,omitempty"`
 	ExportError string `json:"export_error,omitempty"`
+	// Phases are the build's timed phases, counted from the builder's
+	// receipt of the job (BuildPhase*).
+	Phases []engine.Phase `json:"phases,omitempty"`
+}
+
+// The phases a builder times. The server keeps these names only.
+const (
+	BuildPhaseInputsDownload = "inputs.download"
+	BuildPhaseRuntimeBuild   = "runtime.build"
+	BuildPhaseBinaryUpload   = "binary.upload"
+	BuildPhaseImageExport    = "image.export"
+)
+
+// KnownBuildPhase reports whether name is one of the BuildPhase names.
+func KnownBuildPhase(name string) bool {
+	switch name {
+	case BuildPhaseInputsDownload, BuildPhaseRuntimeBuild, BuildPhaseBinaryUpload, BuildPhaseImageExport:
+		return true
+	}
+	return false
 }
 
 // BuilderConn is a connected builder, as the server holds it. It is safe
@@ -153,7 +174,7 @@ func AcceptBuilder(w http.ResponseWriter, r *http.Request, authorize func(token 
 	if err != nil {
 		return nil, err
 	}
-	b := &BuilderConn{s: newStream(conn), conn: conn, endpoint: r.RemoteAddr, calls: map[uint64]*buildCall{}, done: make(chan struct{}),
+	b := &BuilderConn{s: newAcceptedStream(conn), conn: conn, endpoint: r.RemoteAddr, calls: map[uint64]*buildCall{}, done: make(chan struct{}),
 		draining: make(chan struct{})}
 	refuse := func(err error) (*BuilderConn, error) {
 		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, clip(err.Error(), 120)), time.Now().Add(time.Second))
@@ -171,8 +192,9 @@ func AcceptBuilder(w http.ResponseWriter, r *http.Request, authorize func(token 
 		return refuse(fmt.Errorf("%w: the builder speaks protocol %d, this server speaks %d", ErrProtocol, m.BuilderHello.Protocol, BuilderProtocol))
 	case m.BuilderHello.ProductVersion != release.ProductVersion:
 		return refuse(fmt.Errorf("%w: the builder is %s, this server is %s", ErrBuilderVersion, m.BuilderHello.ProductVersion, release.ProductVersion))
-	case strings.TrimSpace(m.BuilderHello.Name) == "" || len(m.BuilderHello.Name) > 128 || m.BuilderHello.Capacity < 1:
-		return refuse(fmt.Errorf("%w: a builder needs a name of at most 128 bytes and a capacity of at least 1", errFrame))
+	case strings.TrimSpace(m.BuilderHello.Name) == "" || len(m.BuilderHello.Name) > maxHelloName ||
+		m.BuilderHello.Capacity < 1 || m.BuilderHello.Capacity > maxHelloCapacity:
+		return refuse(fmt.Errorf("%w: a builder needs a name of at most %d bytes and a capacity from 1 to %d", errFrame, maxHelloName, maxHelloCapacity))
 	}
 	b.hello = *m.BuilderHello
 	keepAlive(b.done, conn)
@@ -355,8 +377,8 @@ func ServeBuilds(ctx context.Context, opts BuilderOptions, build BuildFunc) erro
 	if strings.TrimSpace(opts.Hello.Name) == "" {
 		return errors.New("builder: a builder needs a name")
 	}
-	if opts.Hello.Capacity < 1 {
-		return errors.New("builder: a builder's capacity is at least 1")
+	if opts.Hello.Capacity < 1 || opts.Hello.Capacity > maxHelloCapacity {
+		return fmt.Errorf("builder: a builder's capacity is from 1 to %d", maxHelloCapacity)
 	}
 	hello := opts.Hello
 	hello.Protocol, hello.ProductVersion = BuilderProtocol, release.ProductVersion

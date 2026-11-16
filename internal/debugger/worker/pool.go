@@ -79,8 +79,8 @@ var poolStopGrace = 10 * time.Second
 // is bounded by its context, not a client timeout.
 var binaryClient = &http.Client{}
 
-// binarySuffix ends the name of a cached binary, which a Windows host needs
-// to execute it.
+// binarySuffix ends the name of a cached binary. linea-worker runs a pool on
+// Linux only; the suffix lets this package's tests run on Windows too.
 var binarySuffix = func() string {
 	if goruntime.GOOS == "windows" {
 		return ".exe"
@@ -113,6 +113,10 @@ type PoolOptions struct {
 	// Log receives a line per connection and each child's log lines; nil
 	// discards them.
 	Log io.Writer
+	// ChildUser, when set, starts every child as that user (Linux only),
+	// makes the pool non-dumpable and lets the child user traverse, not
+	// list, the cache. A pool running as root needs it.
+	ChildUser *ChildUser
 }
 
 // ServePool dials the server and serves it as a pool worker, reconnecting
@@ -173,8 +177,8 @@ func newPool(opts PoolOptions) (*pool, error) {
 	if strings.TrimSpace(opts.Name) == "" {
 		opts.Name = "pool"
 	}
-	if opts.Capacity < 1 {
-		return nil, errors.New("worker: a pool worker's capacity is at least 1")
+	if opts.Capacity < 1 || opts.Capacity > maxHelloCapacity {
+		return nil, fmt.Errorf("worker: a pool worker's capacity is from 1 to %d", maxHelloCapacity)
 	}
 	if opts.Warm < 0 || opts.Idle < 0 || opts.CacheBytes < 0 {
 		return nil, errors.New("worker: a pool worker's warm, idle and cache bounds are not negative")
@@ -186,7 +190,20 @@ func newPool(opts PoolOptions) (*pool, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(opts.CacheDir, 0o700); err != nil {
+	cacheMode := os.FileMode(0o700)
+	if u := opts.ChildUser; u != nil {
+		// Children run binaries from the cache by path.
+		cacheMode = 0o711
+		if err := protectProcess(); err != nil {
+			return nil, fmt.Errorf("worker: pool child user %s: %w", u, err)
+		}
+	} else if runningAsRoot() {
+		return nil, errors.New("worker: a pool running as root starts its children as another user: set the child user (--child-user UID:GID)")
+	}
+	if err := os.MkdirAll(opts.CacheDir, cacheMode); err != nil {
+		return nil, fmt.Errorf("worker: pool cache: %w", err)
+	}
+	if err := os.Chmod(opts.CacheDir, cacheMode); err != nil {
 		return nil, fmt.Errorf("worker: pool cache: %w", err)
 	}
 	p := &pool{
@@ -479,8 +496,10 @@ func (p *pool) download(ctx context.Context, bin *PoolBinary, h string) (string,
 	return path, false, nil
 }
 
-// childEnv is the pool's environment without the product's own variables:
-// the worker token never reaches a child.
+// childEnv is the pool's environment without the product's own variables,
+// so the token is not in a child's environment. It does not stop a child of
+// the pool's own uid from reading the pool's /proc/<pid>/environ or the
+// token file: only a child user (PoolOptions.ChildUser) does.
 func childEnv(environ []string) []string {
 	out := make([]string, 0, len(environ))
 	for _, kv := range environ {
@@ -506,6 +525,11 @@ func (p *pool) spawn(ctx context.Context, bin *PoolBinary, h string) (*Client, b
 	}
 	cmd := exec.Command(path)
 	cmd.Env = childEnv(os.Environ())
+	if u := p.opts.ChildUser; u != nil {
+		if err := u.Apply(cmd); err != nil {
+			return nil, false, fmt.Errorf("%w: %w", engine.ErrRuntimeUnavailable, err)
+		}
+	}
 	cmd.WaitDelay = 5 * time.Second
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -808,12 +832,14 @@ func (s *poolSession) cancel(m *message) {
 // a fresh child-side ID, relays the child's events and its result under the
 // server's ID, and, when ctx ends, has the child cancel the request.
 func (s *poolSession) relay(ctx context.Context, m *message) {
+	received := time.Now()
 	if m.Deadline != nil {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithDeadline(ctx, *m.Deadline)
 		defer cancel()
 	}
 	ch, err := s.acquire(ctx, m.Binary)
+	acquired := time.Now()
 	if err != nil {
 		s.fail(m.ID, err)
 		return
@@ -830,7 +856,7 @@ func (s *poolSession) relay(ctx context.Context, m *message) {
 		return
 	}
 	_ = s.send(&message{ID: m.ID, Type: typeResult, Result: r.Result, ResultDigest: r.ResultDigest, ResultSize: r.ResultSize,
-		Error: r.Error, Log: r.Log, LogTruncated: r.LogTruncated})
+		Error: r.Error, Log: r.Log, LogTruncated: r.LogTruncated, Phases: relayedPhases(m.Type, received, acquired, r.Phases)})
 }
 
 // acquire returns the ready child of a binary for a request, starting it
@@ -1089,4 +1115,21 @@ func (s *poolSession) shutdown() {
 	}
 	wg.Wait()
 	s.wg.Wait()
+}
+
+// relayedPhases are an execution's phases as the pool reports them: its
+// own wait for the runtime's child, then the child's phases, which count
+// from the child's receipt, shifted to count from the pool's.
+func relayedPhases(typ string, received, forwarded time.Time, child []engine.Phase) []engine.Phase {
+	if typ != typeExecute {
+		return nil
+	}
+	shift := forwarded.Sub(received)
+	out := make([]engine.Phase, 0, len(child)+1)
+	out = append(out, engine.Phase{Name: engine.PhaseRuntimeAcquire, Duration: shift})
+	for _, p := range child {
+		p.Offset += shift
+		out = append(out, p)
+	}
+	return out
 }

@@ -9,6 +9,7 @@ import { activeBuildCount, activeCaptureCount, destinationOf, type Destination }
 import { buildsQuery } from '../runtimes/pages/queries';
 import { finished } from '../runtimes/runtimes';
 import { principalLabel, shows, signInHref } from './access';
+import { isSignInPath } from './signin';
 import { sessionQuery } from './session';
 import { ProjectMenu } from './ProjectMenu';
 
@@ -26,11 +27,19 @@ const DESTINATIONS: { id: Destination; to: string; label: [string, string?]; ico
 /**
  * AppShell is the root layout: the destination rail and the page beside it.
  * Each page renders its own header (a page head or the debugger's workbench
- * head). On a team server nobody signed in gets the sign-in page; the rail
+ * head). On a team server nobody signed in gets the sign-in prompt; the rail
  * lists only the destinations the caller's permissions make usable.
  */
 export function AppShell() {
   useEffect(applyTheme, []);
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  // The sign-in page is for visitors with no session: it renders alone, so the
+  // session read below (a 401 here) never replaces it.
+  if (isSignInPath(pathname)) return <div className="od-app od-root"><Outlet /></div>;
+  return <SessionGate />;
+}
+
+function SessionGate() {
   const session = useQuery(sessionQuery);
   if (session.error instanceof ApiError && session.error.status === 401) return <SignIn />;
   // Pages wait for the session: it carries the CSRF token their first

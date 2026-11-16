@@ -28,6 +28,9 @@ Keep this file current and short. Detail belongs in `docs/`, whose
 - `docs/install.md`: installing the CLI and a team server, release assets
   and building from source. The root `README.md` presents the product and
   links here; keep install detail out of it.
+- `docs/compatibility.md`: the version table (product, worker protocol,
+  Collector line, plugin host protocol, control proto, schemas). Update it
+  when one of them changes.
 - `docs/debugger/`: debugger user and operator documentation.
 - `docs/fleet/README.md`, `docs/fleet/plugins.md`, `docs/fleet/deployment.md`:
   fleet overview, plugin contract and operation.
@@ -206,9 +209,13 @@ Do not run the full test suite on a shared or constrained machine.
 
 `.github/workflows/dco.yml` checks every pull request commit for a
 `Signed-off-by` trailer (`CONTRIBUTING.md`). `.github/workflows/ci.yml` runs on
-pull requests (and by hand from the Actions tab), not on push, and only builds the product images (`linea-server`,
+pull requests (and by hand from the Actions tab), not on push. It builds the product images (`linea-server`,
 `linea-worker`, `linea-builder`, `linea-fleet`, `linea-fleet-livecapture`)
-with the repository root as context. Tests and the test-only images run
+with the repository root as context, and runs `scripts/test-light.sh` (the
+packages whose test binaries do not link the Collector registry, and
+`pluginsdk`) and `scripts/check-deploy.sh` (chart and Compose files);
+`release.yml` runs both again before publishing. Actions are pinned by commit
+SHA. The other tests and the test-only images run
 locally: before a release, run the checklist in "Before a release" in
 `docs/internals/development.md` (every module, the 0.160 runtime, the store,
 the fan-out gate, web, the test-only images, Collector live capture and the
@@ -238,8 +245,8 @@ go run ./cmd/linea run --config <yaml> --scenario <yaml> [--compare] [--normaliz
 go run ./cmd/linea test --config samples/<id>/config.yaml --scenario samples/<id>/scenario.yaml
 # The web client, HTTP API and MCP need a team server; locally that is the
 # Compose stack (docs/debugger/deploy-compose.md). `linea-server` refuses to
-# start without --config.
-LINEA_VERSION=dev docker compose -f deploy/compose/linea/compose.yaml up -d --build   # after a .env in deploy/compose/linea/ with LINEA_AUTH (docs/debugger/deploy-compose.md)
+# start without a config (--config or LINEA_* variables).
+LINEA_VERSION=dev docker compose -f deploy/compose/linea/compose.yaml up -d --build   # after creating deploy/compose/linea/secrets/ (docs/debugger/deploy-compose.md)
 scripts/debugger/compose-fleet.sh             # the same stack plus fleet and live capture on its PostgreSQL (compose.fleet.yaml)
 go generate ./internal/debugger/registry      # after an OCB manifest change
 go generate ./internal/debugger/workersrc     # before building a binary that builds runtimes

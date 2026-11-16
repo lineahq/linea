@@ -43,6 +43,14 @@ with mode `dependency_mocked` and source `mocked_receiver`, and is summarized
 as an `inputs[]` entry with `mock: <provider>`. Stage analysis, assertions and
 the UI therefore treat it like a replayed input.
 
+Exporters run in mode `captured`: `captureExporter` in
+`internal/debugger/runtime/substitute.go` records each export and always
+returns success. Retries, sending queues, backpressure, timeouts and
+failover between exporters are therefore never exercised; the topology note
+of every captured exporter says so. Lineage ends at a stand-in connector
+(mode `stand_in`) append a note that the stand-in only forwards its own
+signal, so the end does not show the real connector's routing.
+
 Simulated endpoints are not a provider: the client endpoints of
 custom components are substituted whatever the scenario says, and declared
 with provider `endpoints`. See

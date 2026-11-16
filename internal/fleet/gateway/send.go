@@ -29,6 +29,22 @@ func (g *Gateway) respond(ctx context.Context, c types.Connection, message *prot
 	return nil
 }
 
+// refuse answers a first message whose instance UID another credential holds
+// with an OpAMP error response, then closes the socket. The agent's client
+// reports the error and backs off before reconnecting.
+func (g *Gateway) refuse(ctx context.Context, c types.Connection, s *session, m *protobufs.AgentToServer) {
+	response := &protobufs.ServerToAgent{
+		InstanceUid:  m.InstanceUid,
+		Capabilities: g.capabilities(),
+		ErrorResponse: &protobufs.ServerErrorResponse{
+			Type:         protobufs.ServerErrorResponseType_ServerErrorResponseType_BadRequest,
+			ErrorMessage: "instance uid is held by another credential",
+		},
+	}
+	_ = g.sendFrame(ctx, c, s, response)
+	disconnect(c)
+}
+
 // sendFrame serializes writes per session. A canceled context forcibly closes
 // the socket because opamp-go v0.25.0's WebSocket Send ignores its context.
 func (g *Gateway) sendFrame(ctx context.Context, c types.Connection, s *session, message *protobufs.ServerToAgent) error {

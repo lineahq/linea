@@ -6,6 +6,7 @@ import (
 	"github.com/lineahq/linea/internal/debugger/features"
 	"github.com/lineahq/linea/internal/debugger/mock"
 	"github.com/lineahq/linea/internal/debugger/release"
+	"github.com/lineahq/linea/internal/debugger/runresult"
 )
 
 // Runtime kinds of a report.
@@ -50,6 +51,10 @@ type ReportRuntime struct {
 	// Providers are the debugger providers of component modules compiled
 	// into the runtime (report schema 0.13).
 	Providers []ReportProvider `json:"providers,omitempty"`
+	// SelfCheck is the runtime's self-check: whether the Collector
+	// internals the instrumentation relies on behave as verified
+	// (report schema 0.16). Absent when the runtime did not run one.
+	SelfCheck []runresult.SelfCheck `json:"self_check,omitempty"`
 }
 
 // ReportProvider is a component module's debugger provider: its name, the
@@ -90,11 +95,13 @@ func BuiltInRuntime() *ReportRuntime {
 		gates = []release.FeatureGate{}
 	}
 	var plugins []mock.Plugin
+	var checks []runresult.SelfCheck
 	if c, err := collector(); err == nil {
 		plugins, _ = c.Plugins()
+		checks = c.SelfCheck()
 	}
 	return &ReportRuntime{Kind: RuntimeBuiltIn, CollectorVersion: release.CollectorVersion, Verified: release.Verified, FeatureGates: gates,
-		MissingFeatures: MissingFeatures(), Providers: Providers(plugins)}
+		MissingFeatures: MissingFeatures(), Providers: Providers(plugins), SelfCheck: checks}
 }
 
 // MissingFeatures names the optional features this process lacks,
@@ -113,7 +120,7 @@ func MissingFeatures() []string {
 // remote runtime, a 0.11 report a 0.12 report without components' own logs
 // and metrics, a 0.12 report a 0.13 report without providers, and
 // a 0.14 report a 0.15 report without batching, grouping and filtering.
-var readableReportSchemas = []string{"0.8", "0.9", "0.10", "0.11", "0.12", "0.13", "0.14", ReportSchemaVersion}
+var readableReportSchemas = []string{"0.8", "0.9", "0.10", "0.11", "0.12", "0.13", "0.14", "0.15", ReportSchemaVersion}
 
 // ReadableReportSchema reports whether a stored report of schema v decodes
 // into this build's Report.

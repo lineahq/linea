@@ -34,6 +34,29 @@ spec:
       annotations:
         # The server config is read at startup; a change restarts the server.
         checksum/config: {{ include "linea.serverConfig" . | sha256sum }}
+        {{- if and (include "linea.adminEnabled" .) (not .Values.admin.existingSecret) }}
+        # The admin password is read at startup too.
+        checksum/admin: {{ include "linea.adminPassword" . | sha256sum }}
+        {{- end }}
+        {{- if not .Values.store.existingSecret }}
+        # So are the store credentials, the bundled PostgreSQL's password included.
+        checksum/store: {{ printf "%s/%s/%s/%s" .Values.store.databaseURL (include "linea.objects" . | fromYaml).accessKey (include "linea.objects" . | fromYaml).secretKey (ternary (include "linea.postgresqlPassword" .) "" .Values.postgresql.enabled) | sha256sum }}
+        {{- end }}
+        {{- if and .Values.oidc.clientSecret (not .Values.oidc.existingSecret) }}
+        checksum/oidc: {{ .Values.oidc.clientSecret | sha256sum }}
+        {{- end }}
+        {{- if include "linea.workerTokenRendered" . }}
+        # And the tokens it checks workers and builders against.
+        checksum/worker-token: {{ include "linea.workerToken" . | sha256sum }}
+        {{- end }}
+        {{- if include "linea.builderTokenRendered" . }}
+        checksum/builder-token: {{ include "linea.builderToken" . | sha256sum }}
+        {{- end }}
+        {{- if include "linea.fleetDeployed" . }}
+        checksum/fleet: {{ include "linea.fleetOperatorToken" . | sha256sum }}
+        {{- else if and .Values.fleet.url (not .Values.fleet.existingSecret) }}
+        checksum/fleet: {{ .Values.fleet.token | sha256sum }}
+        {{- end }}
     spec:
       serviceAccountName: {{ $fullname }}
       automountServiceAccountToken: false
@@ -62,9 +85,6 @@ spec:
             - --config=/etc/linea/config/config.yaml
             - --addr=0.0.0.0:7070
             - --drain-timeout={{ .Values.server.drainSeconds }}s
-            {{- if include "linea.serverMetrics" . }}
-            - --metrics-listen=0.0.0.0:{{ .Values.server.metrics.port }}
-            {{- end }}
             {{- if $tls }}
             - --tls-cert-file=/etc/linea/tls/tls.crt
             - --tls-key-file=/etc/linea/tls/tls.key
@@ -101,19 +121,21 @@ spec:
           ports:
             - name: http
               containerPort: 7070
-            {{- if include "linea.serverMetrics" . }}
-            - name: metrics
-              containerPort: {{ .Values.server.metrics.port }}
-            {{- end }}
-          # Every route but the web client's assets needs a credential, so
-          # the probes check that the server accepts connections.
+          # /healthz answers while the process serves; /readyz also answers
+          # 503 while the instance drains, so the Service stops sending it
+          # requests. Neither needs a credential. The kubelet does not verify
+          # the certificate when the server serves TLS.
           readinessProbe:
-            tcpSocket:
+            httpGet:
+              path: /readyz
               port: http
+              scheme: {{ if $tls }}HTTPS{{ else }}HTTP{{ end }}
             periodSeconds: 10
           livenessProbe:
-            tcpSocket:
+            httpGet:
+              path: /healthz
               port: http
+              scheme: {{ if $tls }}HTTPS{{ else }}HTTP{{ end }}
             periodSeconds: 30
             failureThreshold: 4
           resources:
@@ -147,6 +169,16 @@ spec:
               mountPath: /etc/linea/fleet
               readOnly: true
             {{- end }}
+            {{- if .Values.postgresql.enabled }}
+            - name: postgresql
+              mountPath: /etc/linea/postgresql
+              readOnly: true
+            {{- end }}
+            {{- if include "linea.adminEnabled" . }}
+            - name: admin
+              mountPath: /etc/linea/admin
+              readOnly: true
+            {{- end }}
             {{- if include "linea.hasOIDCSecret" . }}
             - name: oidc
               mountPath: /etc/linea/oidc
@@ -173,9 +205,24 @@ spec:
           secret:
             secretName: {{ include "linea.storeSecret" . }}
             items:
+              {{- if not .Values.postgresql.enabled }}
               - {key: database-url, path: database-url}
+              {{- end }}
               - {key: access-key, path: access-key}
               - {key: secret-key, path: secret-key}
+        {{- if .Values.postgresql.enabled }}
+        # The bundled PostgreSQL's password, completing store.database_url.
+        - name: postgresql
+          secret:
+            secretName: {{ include "linea.postgresqlName" . }}
+            items: [{key: password, path: password}]
+        {{- end }}
+        {{- if include "linea.adminEnabled" . }}
+        - name: admin
+          secret:
+            secretName: {{ include "linea.adminSecret" . }}
+            items: [{key: password, path: password}]
+        {{- end }}
         - name: tmp
           emptyDir:
             sizeLimit: 1Gi
@@ -194,7 +241,8 @@ spec:
         - name: fleet
           secret:
             secretName: {{ include "linea.fleetSecret" . }}
-            items: [{key: token, path: token}]
+            {{- /* The release's own fleet gives the server its operator token; the admin token in the same Secret is not mounted. */}}
+            items: [{key: {{ ternary "operator-token" "token" (eq (include "linea.fleetDeployed" .) "true") }}, path: token}]
         {{- end }}
         {{- if include "linea.hasOIDCSecret" . }}
         - name: oidc
@@ -245,49 +293,3 @@ spec:
     - name: http
       port: {{ .Values.service.port }}
       targetPort: http
-{{- if include "linea.serverMetrics" . }}
----
-# The build metrics: counts only, without credentials, apart
-# from the API Service and never behind the ingress. Every instance reports
-# the same queue, so any one answers.
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ $fullname }}-metrics
-  labels:
-    {{- include "linea.labels" . | nindent 4 }}
-    app.kubernetes.io/component: server
-spec:
-  type: ClusterIP
-  selector:
-    {{- include "linea.serverSelector" . | nindent 4 }}
-  ports:
-    - name: metrics
-      port: {{ .Values.server.metrics.port }}
-      targetPort: metrics
-{{- if .Values.networkPolicy.enabled }}
----
-# Admits the metrics port only from server.metrics.allowFrom. The API port
-# stays open to every client, as without this policy.
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: {{ $fullname }}-server
-  labels:
-    {{- include "linea.labels" . | nindent 4 }}
-spec:
-  podSelector:
-    matchLabels:
-      {{- include "linea.serverSelector" . | nindent 6 }}
-  policyTypes: [Ingress]
-  ingress:
-    - ports:
-        - port: http
-    {{- with .Values.server.metrics.allowFrom }}
-    - from:
-        {{- toYaml . | nindent 8 }}
-      ports:
-        - port: metrics
-    {{- end }}
-{{- end }}
-{{- end }}

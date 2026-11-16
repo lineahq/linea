@@ -1,7 +1,8 @@
 // Command linea-builder compiles runtimes for a team server.
 //
-// It dials the server with --connect, presents the builder token from
-// --token-file, announces its capacity and builds the runtimes the server
+// It runs on Linux. It dials the server with --connect, presents the
+// builder token from --token-file, announces its capacity and builds the
+// runtimes the server
 // gives it: it downloads the manifest and the uploaded module sources from
 // presigned URLs, compiles the worker with the Go toolchain on its PATH, and
 // uploads the binary to a presigned URL with the hello the binary sent when
@@ -74,6 +75,9 @@ func stopping(parent context.Context, signals <-chan os.Signal, log io.Writer) (
 	return ctx, drain, cancel
 }
 
+// hostOS is the system the builder runs on; tests set it.
+var hostOS = runtime.GOOS
+
 // options are the flags.
 type options struct {
 	connect, tokenFile, caFile, name, workDir string
@@ -82,6 +86,9 @@ type options struct {
 	// exports, plainHTTP the registries reached over http.
 	registryAuth string
 	plainHTTP    []string
+	// checkUser starts each built worker for its hello check as another
+	// user.
+	checkUser *worker.ChildUser
 }
 
 func parseOptions(args []string) (options, error) {
@@ -103,10 +110,19 @@ func parseOptions(args []string) (options, error) {
 		o.plainHTTP = append(o.plainHTTP, v)
 		return nil
 	})
+	fs.Func("check-user", "UID:GID to start each built worker as for its hello check, so built code cannot read the build token (required; needs CAP_SETUID and CAP_SETGID)", func(v string) error {
+		u, err := worker.ParseChildUser(v)
+		o.checkUser = u
+		return err
+	})
 	if err := fs.Parse(args); err != nil {
 		return options{}, err
 	}
 	switch {
+	case hostOS != "linux":
+		return options{}, errors.New("linea-builder runs on Linux only: it starts the Linux workers it builds")
+	case o.checkUser == nil:
+		return options{}, errors.New("--check-user is required: a built worker never runs as the builder's user, which holds the build token")
 	case fs.NArg() > 0:
 		return options{}, fmt.Errorf("unexpected argument %q", fs.Arg(0))
 	case o.connect == "":
@@ -115,8 +131,8 @@ func parseOptions(args []string) (options, error) {
 		return options{}, errors.New("--token-file is required: the file holding the server's build token")
 	case strings.TrimSpace(o.name) == "":
 		return options{}, errors.New("--name is required when the host has no name")
-	case o.capacity < 1:
-		return options{}, errors.New("--capacity must be at least 1")
+	case o.capacity < 1 || o.capacity > 1024:
+		return options{}, errors.New("--capacity must be from 1 to 1024")
 	case o.cpus < 1:
 		return options{}, errors.New("--cpus must be at least 1")
 	}
@@ -140,7 +156,10 @@ func run(ctx context.Context, drain <-chan struct{}, args []string) error {
 			return fmt.Errorf("--ca-file: %w", err)
 		}
 	}
-	native := &container.Native{WorkDir: o.workDir, CPUs: o.cpus}
+	if why, err := worker.TokenFileExposed(o.tokenFile, *o.checkUser); err == nil && why != "" {
+		fmt.Fprintf(os.Stderr, "linea-builder: warning: check user %s can read --token-file (%s); make it readable by the builder's user only\n", o.checkUser, why)
+	}
+	native := &container.Native{WorkDir: o.workDir, CPUs: o.cpus, CheckUser: o.checkUser}
 	source, err := checkStart(ctx, native, workersrc.Embedded)
 	if err != nil {
 		return err

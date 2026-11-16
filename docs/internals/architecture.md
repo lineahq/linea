@@ -27,11 +27,19 @@ The root Go module is declared in `go.mod`.
   a temporary directory in `TestMain`; `cmd/linea` never imports
   `internal/debugger/container` (its Docker tests do, for image names).
 - `cmd/linea-server/` — the team server binary: a thin `main` that calls
-  `server.Main`. It takes `--config <file>` (required) and the flags
+  `server.Main`. It takes `--config <file>` (optional: the `LINEA_*` variables of
+  `internal/debugger/server/envconfig.go` set the same keys and override the
+  file) and the flags
   `--addr`, `--tls-cert-file`/`--tls-key-file` or `--allow-http`,
-  `--drain-timeout`, `--metrics-listen`, `--mcp`, `--fleet-url`,
-  `--fleet-token-file`, `--fleet-allow-http` and `--verbose` (debug logs), and
-  no subcommand. It links no Collector (no `engine/local/install`): every
+  `--drain-timeout`, `--mcp`, `--fleet-url`,
+  `--fleet-token-file`, `--fleet-allow-http` and `--verbose` (adds debug logs;
+  info and above always go to stderr as JSON), and two subcommands that
+  do not serve: `probe [--url]` (a healthcheck for an image without a shell)
+  and `revoke-admin [--config <file>]` (`revoke.go`: loads the same server
+  config, opens the store and calls `platform.RevokeAdminAccess`, which revokes
+  the built-in admin's API tokens, ends its web sessions through
+  `Sessions.DeleteSessionsOf` and appends one `RevokeAdminAccess` audit event
+  with counts; run after rotating the admin password). It links no Collector (no `engine/local/install`): every
   request runs on connected workers. It is always a team server on PostgreSQL
   and object storage, with no Docker; `linea serve` no longer exists.
 - `cmd/linea-worker/` — the worker process for the built-in registry, in two
@@ -42,11 +50,13 @@ The root Go module is declared in `go.mod`.
   `internal/debugger/worker/`), or with `--pool` as a pool worker that serves
   any server-built runtime binary for its platform, one child process per
   runtime (`--capacity` default 8, `--warm` 4, `--idle` 10m, `--cache` 5GiB,
-  `--cache-dir`; `--name` defaults to `pool`). It listens on no port: there is
+  `--cache-dir`, and the required `--child-user UID:GID` to start every child
+  as another user; Linux only;
+  `--name` defaults to `pool`). It listens on no port: there is
   no `--listen`, and no TLS flags.
 - `cmd/linea-builder/` — the runtime builder:
   `--connect URL --token-file F [--name N] [--capacity C] [--ca-file F]`
-  `[--work-dir D] [--cpus N]` dials `/v1/builders/connect`
+  `--check-user UID:GID [--work-dir D] [--cpus N]` (Linux only) dials `/v1/builders/connect`
   (`worker.ServeBuilds`) and, per build job, downloads the manifest and uploaded
   sources from presigned URLs (size and SHA-256 checked, sources read with
   `container.ModuleArchive`), picks the verified release's dependency set from
@@ -92,8 +102,15 @@ The root Go module is declared in `go.mod`.
   `simulated_endpoints[].provider` and topology components' `provider`
   (`runtime.DrivingProviders`); 0.14 added kind `image` (a runtime image a
   direct command read from a registry and ran natively: its `name` is the
-  reference by digest and its `image_id` that digest); `ReadableReportSchema`
-  reads 0.8 to 0.14). Bundle schema 5 records source labels and
+  reference by digest and its `image_id` that digest); 0.16 added topology
+  components' `not_shown` (`engine.markNotShown`: codes `export_outcome`,
+  `host_memory`, `receiver_intake`, `stand_in_processing`,
+  `stand_in_routing`, each with a sentence), `runtime.self_check` (the
+  runtime's self-check, below) and `warnings` (`engine.RunWarning{Code,
+  Component, Detail}`, `engine.runWarnings`: `self_check_failed` per failed
+  check of `runtime.self_check`, `unattributed_stage` per processor whose
+  stage has pipeline "", `unattributed_route` per connector with deliveries
+  to pipeline ""); `ReadableReportSchema` reads 0.8 to 0.16). Bundle schema 5 records source labels and
   `Request.Sources` (saved revision IDs, never resolved by the engine;
   `BundleInfo.Sources`). Bundle schema 6 records the target runtime
   (`Request.Runtime`); built-in bundles stay schema 5, `DecodeBundle` refuses a
@@ -131,7 +148,29 @@ The root Go module is declared in `go.mod`.
   a scheduler (`scheduler.go`) that claims runs from the repository's queue
   (`artifact.Queue`; an ephemeral service uses `memory.Queue`) under a renewed
   lease (`Options.Lease`, clock `Options.Now`) and executes through executors
-  (the service itself, one run at a time, and each connected worker, below),
+  (the service itself, one run at a time, and each connected worker, below).
+  The heartbeat renews leases in a loop of its own that never takes the
+  service lock, and `finish` writes a run's outcome without holding it (each
+  write within two minutes), so a slow repository does not stop renewals; the
+  run reads as running, and its executor stays busy, until the write
+  completes. Every transition (start, cancel, requeue, expiry, recovery and
+  the outcome) is decided under the locks, written without them (metadata
+  within a third of the lease) and applied to the handle only once the
+  repository accepts it: concurrent transitions race there, and the run's
+  generation decides (a conflict means the other write moved the run first).
+  A run whose end the repository refuses stays as the repository holds it:
+  `finish` writes the outcome again, backing off, and a refused cancel of a
+  queued run reports a persistence error and is written again in the
+  background, both until accepted, the run moves or the service closes.
+  Without a repository a trivial local writer accepts every write.
+  Admission installs the run's handle and job under the service lock, which
+  holds its queue slot and principal hold, writes the admission (bundle
+  included) without the lock, and withdraws the run if the repository refuses
+  it; a claim, the change feed or a load that meets the run meanwhile finds
+  that handle. A suite prepares every member first, each holding its
+  preparation slot, then queues them together and admits them in one
+  `AdmitRuns` write, as a comparison admits its two runs: all of them or
+  none, with the principal's limit counted against all of them. The service also offers
   bounded admission, run handles, cancellation through the queue, events,
   ephemeral or repository-backed history (`platform.Open`), source artifacts,
   captured input bundles, the environment capture policy
@@ -166,7 +205,17 @@ The root Go module is declared in `go.mod`.
   `built-in@<product version>`
   (`builtin_runtime.go`), a name no request or registration can take, listed and
   bound as `built-in`; it removes the entries of other releases no connected
-  worker serves. The default runtime, the runtime of every request that names
+  worker serves. Runtime self-check: `runtime.SelfCheck` (`selfcheck.go`,
+  once per process) runs one log record through a probe configuration on the
+  run path (stand-ins for its receiver, processor, connector and exporter, a
+  local `MutatesData` processor and a watched extension marked custom) and
+  judges the events per assumption (`runresult.SelfCheck{Code, OK, Detail}`;
+  codes in `runresult/selfcheck.go`). `engine.Collector.SelfCheck` exposes it;
+  `engine.BuiltInRuntime` stamps it on reports, `worker.Identity` adds it to
+  the hello after the identity hash (`Hello.SelfCheck`, so it never changes a
+  runtime identity), `boundRuntime.stamp` keeps the worker's, and catalog
+  runtimes carry it as `RuntimeInfo.SelfCheck` (`api.Runtime.self_check`). A
+  failed check refuses nothing. The default runtime, the runtime of every request that names
   none, is the team's choice (`default_runtime.go`): `GetDefaultRuntime` and
   `SetDefaultRuntime` (`runtime.read`, `runtime.manage`; type
   `DefaultRuntimeInfo{Name, SetBy, Set}`), `built-in` until one is set. The name
@@ -238,10 +287,20 @@ The root Go module is declared in `go.mod`.
   (`instances.go`, `interactive_jobs.go`): on a repository-backed service the
   repository is the truth and each instance's in-memory view is a cache. It
   catches up from the change feed (`Repository.Changes`, table `changes`) before
-  every operation and follows it in the background, so suites, runs and catalog
+  every operation and follows it in the background (an operation composed of
+  others, `CheckUpgrade`, `SubmitComparison` and `CompareRuns`, puts a
+  `requestScope` in its context so they share one catch-up and each runtime's
+  binding, `request_traces.go`), so suites, runs and catalog
   changes show on every instance. The run cache (`run_cache.go`) holds
-  unfinished runs, suite members and the `Options.RunCache` (default 1,000)
-  terminal runs read most recently; `GetRun`, `WatchRun` and every run reader
+  unfinished runs, suite members and the terminal runs used most recently:
+  at most `Options.RunCache` (default 1,000) of them, holding at most
+  `Options.RunCacheBytes` (default 256 MiB) of evidence, each weighed by its
+  decoded evidence archive (`Handle.weight`), but never fewer than the 8 used
+  last (`runCacheFloor`), so a run read just now stays however large it is.
+  Admitting, ending and reading a run all mark it used (`touchLocked`). Once
+  the repository holds a run's terminal state (`storedLocked`), the handle
+  drops its raw bundle, which `GetRunBundle` reads from the repository;
+  `GetRun`, `WatchRun` and every run reader
   load a cold run from the repository (`load`), listing reads pages without
   caching handles, and the feed updates cached runs and adopts unfinished ones but skips
   other terminal runs. Listing reads a run it does not hold, its evidence and
@@ -257,8 +316,11 @@ The root Go module is declared in `go.mod`.
   through `run_events` (an outbox: `AppendRunEvents`, `RunEvents`). An
   interactive request that needs a worker slot is a row in `jobs`: an instance
   with a connected worker of the runtime claims it and the posting instance
-  waits for the answer (a local fast path when it has the worker itself; a team
-  server gives up after 30 s). OIDC sign-ins in progress are rows in `logins`
+  waits for the answer (a local fast path when it has the worker itself). A
+  job no worker claims is withdrawn after 30 s. Jobs have no lease: when the
+  claiming instance stops, the posting instance waits out 30 s plus the
+  execution budget plus one minute (about 11.5 minutes with the default
+  budget) before it answers `unavailable`. OIDC sign-ins in progress are rows in `logins`
   (`SaveLogin`, `TakeLogin`, taken once, at most 1000), so the callback may land
   on any instance. One instance, the upkeep's leader, runs the optional
   `artifact.Upkeep` (`Lead`, `Housekeep`) every 5 minutes: the store sweep,
@@ -269,8 +331,9 @@ The root Go module is declared in `go.mod`.
   `Service.Drain` (called by `linea-server --config` on SIGTERM with
   `--drain-timeout`) stops claiming runs and jobs, waits for the runs of its
   workers, then hands the rest back with `Queue.Release`, which does not spend
-  an attempt (`runs.released`; the requeue limit counts `attempt - released`). A
-  killed instance's runs expire with their leases and another instance's
+  an attempt (`runs.released`; the requeue limit counts `attempt - released`);
+  `Close` hands back what it still executes before waiting for those
+  executions to stop. A killed instance's runs expire with their leases and another instance's
   heartbeat requeues them. Each instance records its connected workers in the
   repository (`artifact.Presence`, `presence.go`) under its own ID, valid for
   one lease, on every connection, disconnection and heartbeat; Close removes the
@@ -298,7 +361,10 @@ The root Go module is declared in `go.mod`.
   done build of identical inputs, at most 2 unfinished builds per principal and
   20 in total, callers read and cancel their own builds and `runtime.manage`
   all, `ListRuntimeBuilds` pages, and upkeep expires lost builders' leases (2
-  attempts) and keeps the last 100 finished builds. `ChangeBuild` on the change
+  attempts) and keeps the last 100 finished builds. Build IDs are `build-` and
+  16 hex digits (`newBuildID`; builds admitted earlier keep `run-` IDs). A
+  build's manifest never changes, so `manifestCache` (4 MiB) keeps those read
+  for status polls, the catalog and registration. `ChangeBuild` on the change
   feed wakes watchers on every instance. Builders (`builders.go`) dial
   `ConnectBuilder` with `Options.BuilderToken` (404 without it, or without
   object storage that implements `artifact.BuildTransfers`); the instance
@@ -311,12 +377,58 @@ The root Go module is declared in `go.mod`.
   builder that sends `drain` (`linea-builder` on its first SIGTERM) gets no new
   claim; once its builds ended the instance answers `drain` and closes the link,
   and the builder exits rather than dial again. A second SIGTERM cancels its
-  builds, which return to the queue when their leases end. `BuildMetrics`
-  (`build_metrics.go`) counts the queued and running builds
-  (`Builds.CountBuilds`, reused for 10 s) and the builders connected to this
-  instance with their slots; it takes no caller and names nothing, and
-  `api.Metrics` serves it as Prometheus text on `linea-server --metrics-listen`, never
-  on the API listener. Pool workers (`worker_pool.go`): a worker whose hello
+  builds, which return to the queue when their leases end.
+  `readBuildMetrics` (`build_metrics.go`) counts the queued and running
+  builds (`Builds.CountBuilds`, reused for 10 s) and the builders connected
+  to this instance with their slots, for the server's metrics. The server
+  serves no metrics endpoint. The server's own metrics (`server_metrics.go`) are
+  recorded with the OpenTelemetry metric API on `Options.MeterProvider`
+  (none without one): claim wait in `takeLocked`, lease renewals, losses and
+  expiries in the scheduler, audit append failures in `recordAudit`, and the
+  queue, executors, builds and storage as observed instruments read under
+  `mu` at collection. `tendLeases` records each answered lease scan, and
+  `StorageReady` is false once none answered for a whole lease; the server's
+  `/readyz` reads it. `linea-server` builds the SDK provider with an OTLP
+  exporter from the standard `OTEL_*` variables (`server/telemetry.go`) and
+  shuts it down after the service closes. Spans (`server_traces.go`) use the
+  trace API on `Options.TracerProvider`: `runJob` starts one root
+  `linea.run` span per attempt, linked to the submitting request's span
+  context, and ends it with the run's state, or `released`;
+  `endRun` wraps the write in `linea.run.publish` and passes that span
+  down to the store. `prepareRun` takes the span context from the request,
+  `queueLocked` keeps it on `Handle.submitted` and `admitAll` writes the admission under
+  the request's context without its cancellation (`context.WithoutCancel`:
+  the store's spans join the request's, and a cancel cannot cut a commit the
+  caller would then see as failed), and the run metadata stores
+  it as the optional `submitted` (`storedSpan`: trace ID, span ID, sampled),
+  which `handleFromRecord` reads back, so every instance's attempt links to
+  it; a malformed value is ignored. Builds (`build_traces.go`): `runBuild`
+  starts a root `linea.build` span per attempt, linked to the span context
+  `queueServerBuild` stores in `serverBuildSpec.Submitted` (not part of
+  `buildKey`), with `linea.build.execute` (the builder's phases, from
+  `BuildResult.Phases`, kept by `worker.KnownBuildPhase`) and
+  `linea.build.publish` around `StoreBuildBinary` and `finishBuild`, which
+  returns the state it ended the build in. Its state is `released` unless the
+  attempt ended the build; a failed one carries a fixed `linea.build.failure`
+  reason. `endPhasedSpan` places the phases of both kinds of execute span.
+  The pg store (`store/pg/tracing.go`) records client spans for statements
+  (a pgx tracer) and object storage calls (an `ObjectStore` decorator) under
+  `pg.Config.TracerProvider`, only when the context carries a span.
+  `Service.run` wraps the execution in `linea.run.execute` and, when it
+  records, hands an `engine.Phases` recorder (`engine/phases.go`) down as
+  `engine.Request.Phases` / `worker.Job.Phases`. `engine.Execute` times
+  `config.resolve`, `collector.run`, `analysis` and `collector.reference`. The
+  worker adds `bundle.fetch`, `bundle.decode`, `result.encode` and
+  `result.upload`, counted from its receipt of the request, and sends them as
+  the result's `phases`. A pool relay prepends `runtime.acquire` and shifts its
+  child's phases. `endExecuteSpan` keeps known names only, at most
+  `maxPhases`, and clamps each into the execute span, which `endPhasedSpan`
+  ends at its start plus the elapsed time (monotonic), never the wall clock
+  read at the end: a container's wall clock can drift under load, which put
+  phases past their execute span (seen in Docker Desktop, 2026-11-12).
+  The server's `traced` middleware (`server/tracing.go`) gives each request
+  one server span named by `api.Server.Route` or the outer mux pattern, and
+  skips upgraded worker and builder connections. Pool workers (`worker_pool.go`): a worker whose hello
   carries `Pool` is an executor for every catalog entry with a `binary` of its
   platform (refused without `artifact.BuildTransfers`). A run on such an entry
   is pinned at admission to its binary (`artifact.RunBinary`,
@@ -473,9 +585,10 @@ The root Go module is declared in `go.mod`.
   and every write records `ChangeBuild`. The build binaries
   (`008_runtime_binaries.sql`, `artifact.BuildTransfers`, pg only):
   `BuildInputURL` presigns an input for the builder, and `StoreBuildBinary`
-  hashes the staged upload, copies it to its blob key if it is unchanged,
-  without the installation lock, and then rechecks the lease, the storage limit
-  and the copy under the lock; the running build's staged binary and every
+  hashes the staged upload, checks the lease and the storage limit in a
+  read-only transaction without the installation lock, copies it to its blob
+  key if it is unchanged, and then rechecks the lease, the storage limit and
+  the copy (a `Stat`) under the lock; the running build's staged binary and every
   catalog entry's `binary` are referenced objects, counted in storage and kept
   by `Sweep`. Each unfinished build without a binary reserves
   `Limits.BuildBytes`, and `SaveRuntime` refuses an entry naming a binary its
@@ -705,7 +818,10 @@ The root Go module is declared in `go.mod`.
   `-gates` writes `gateowners.go` from the worker's import
   graph: who links each feature gate (the Collector, components by
   `componentTypes`, or only the debugger), giving `FeatureGates()` a `scope`
-  (`gates.go`; a runtime build regenerates it in the container).
+  (`gates.go`; a runtime build regenerates it in the container, the native
+  builder in process). The scan itself is `internal/debugger/gatescan`,
+  standard library only: `go list` and `go/parser`, no code of the scanned
+  module runs.
   `-providers FILE` with repeatable `-provider PKG` writes `providers.go`
   (`Providers()`: the module providers compiled in, `registry.Provider`), empty
   for the built-in registry.
@@ -876,7 +992,9 @@ The root Go module is declared in `go.mod`.
   required and replaced by the embedded `collector/provider/`, a source
   requiring a newer SDK is refused (`checkSDK`), and the sources' providers are
   compiled into `providers.go` and named in the label `io.linea.providers`),
-  generates its gate owners and compiles it in the pinned official Go image
+  generates its gate owners (`Native` scans in process with `gatescan`
+  instead of `go run`, so a builder runs no code the build module resolves
+  before the hello check) and compiles it in the pinned official Go image
   (`GoImage`) with the user's module source and the cache volumes
   `linea-gomod`/`linea-gocache` (`Offline` is `--network none` and
   `GOPROXY=off`), packages a runtime image `FROM scratch`

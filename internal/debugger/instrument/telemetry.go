@@ -329,11 +329,22 @@ func Extension(f extension.Factory, rec *Recorder) extension.Factory {
 		}, f.Stability())
 }
 
-// observe hands the processor its own logger and meter provider.
+// observe hands the processor its own logger and meter provider. A
+// processor whose pipeline could not be learned (pipelineOf) says so in
+// its own log, which the run report shows.
 func (s *stage) observe(set processor.Settings) processor.Settings {
 	set.TelemetrySettings = s.rec.observe(observed{kind: ComponentProcessor, component: s.name, pipeline: s.pipeline, signal: s.signal}, set.TelemetrySettings)
+	if s.pipeline == "" && set.Logger != nil {
+		set.Logger.Warn(UnattributedWarning)
+	}
 	return set
 }
+
+// UnattributedWarning is logged for a processor the Collector created
+// without the pipeline ID on its logger, as releases other than the one
+// pipelineOf was verified against may.
+const UnattributedWarning = "linea: the Collector gave this processor no pipeline ID (logger field " + pipelineIDKey +
+	"), so its stages in several pipelines are reported as one; pipeline attribution is verified against Collector v0.162.0"
 
 // observeConnector hands the connector its own logger and meter provider,
 // one for every signal pair it is created for.

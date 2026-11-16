@@ -97,6 +97,9 @@ type Gateway struct {
 	reportErrors     atomic.Uint64
 	admissionRefused atomic.Uint64
 	admissionHeld    atomic.Uint64
+	// credentialRefused counts connections refused because another
+	// credential holds the instance UID.
+	credentialRefused atomic.Uint64
 	// config is nil unless config management is enabled.
 	config *configState
 }
@@ -290,6 +293,11 @@ func (g *Gateway) message(_ context.Context, c types.Connection, m *protobufs.Ag
 	if first {
 		generation, stored, err := g.store.ConnectAgent(ctx, id, s.principal.ID, report, time.Now())
 		s.handshake.release()
+		if errors.Is(err, fleet.ErrUIDHeld) {
+			g.credentialRefused.Add(1)
+			g.refuse(ctx, c, s, m)
+			return nil
+		}
 		if err != nil {
 			disconnect(c)
 			return nil
@@ -426,6 +434,7 @@ func (g *Gateway) WriteMetrics(w io.Writer) {
 	connections := len(g.connections)
 	g.mu.Unlock()
 	fmt.Fprintf(w, "# TYPE linea_fleet_agent_connections gauge\nlinea_fleet_agent_connections %d\n# TYPE linea_fleet_agent_connection_limit gauge\nlinea_fleet_agent_connection_limit %d\n# TYPE linea_fleet_agent_admission_refused_total counter\nlinea_fleet_agent_admission_refused_total %d\n# TYPE linea_fleet_agent_admission_held_total counter\nlinea_fleet_agent_admission_held_total %d\n# TYPE linea_fleet_report_errors_total counter\nlinea_fleet_report_errors_total %d\n", connections, g.maxConnections, g.admissionRefused.Load(), g.admissionHeld.Load(), g.reportErrors.Load())
+	fmt.Fprintf(w, "# TYPE linea_fleet_agent_credential_refused_total counter\nlinea_fleet_agent_credential_refused_total %d\n", g.credentialRefused.Load())
 	slots, _ := g.admission.state()
 	fmt.Fprintf(w, "# TYPE linea_fleet_agent_handshakes_pending gauge\nlinea_fleet_agent_handshakes_pending %d\n# TYPE linea_fleet_agent_handshake_limit gauge\nlinea_fleet_agent_handshake_limit %d\n", len(slots), cap(slots))
 	fmt.Fprintf(w, "# TYPE linea_fleet_attributes_dropped_total counter\nlinea_fleet_attributes_dropped_total %d\n# TYPE linea_fleet_config_summaries_skipped_total counter\nlinea_fleet_config_summaries_skipped_total %d\n", g.ingest.Dropped(), g.ingest.Unsummarized())

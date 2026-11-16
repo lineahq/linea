@@ -125,3 +125,68 @@ type retiringBody struct {
 }
 
 func (b *retiringBody) Read(p []byte) (int, error) { b.once.Do(b.retire); return b.Reader.Read(p) }
+
+func TestStalledRequestBodyDoesNotHoldAPISlot(t *testing.T) {
+	config := fixtureConfig("")
+	config.APIVersion = "1"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if req.URL.Path == pluginsdk.ManifestPath {
+			_ = json.NewEncoder(w).Encode(pluginsdk.Manifest{ID: config.ID, Version: config.Version, ProtocolVersion: pluginsdk.ProtocolVersion, InstanceID: strings.Repeat("c", 32), APIVersion: "1"})
+			return
+		}
+		w.WriteHeader(201)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+	config.Endpoint = server.URL
+	r := New(context.Background(), []Config{config}, fleet.NewStore(1))
+	defer r.Close()
+	r.probe(r.entries[0])
+	serve := func(body io.Reader) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "http://fleet/api/v1/plugins/"+config.ID+"/api/v1/custom", body)
+		w := httptest.NewRecorder()
+		r.ServeAPI(w, req, config.ID, "v1/custom", auth.Principal{ID: "reader", Role: "reader"})
+		return w
+	}
+	slots := cap(r.entries[0].apiWrites)
+	started, release := make(chan struct{}, slots), make(chan struct{})
+	done := make(chan int, slots)
+	for i := 0; i < slots; i++ {
+		go func() {
+			done <- serve(&stalledBody{started: started, release: release}).Code
+		}()
+	}
+	for i := 0; i < slots; i++ {
+		<-started
+	}
+	if len(r.entries[0].apiWrites) != 0 {
+		t.Fatal("stalled request bodies hold write slots")
+	}
+	if w := serve(strings.NewReader(`{}`)); w.Code != 201 {
+		t.Fatal("request was refused while other bodies were stalled", w.Code)
+	}
+	close(release)
+	for i := 0; i < slots; i++ {
+		if code := <-done; code != 201 {
+			t.Fatal("released request failed", code)
+		}
+	}
+}
+
+// stalledBody blocks its first read until release is closed, then yields `{}`.
+type stalledBody struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+	rest    io.Reader
+}
+
+func (b *stalledBody) Read(p []byte) (int, error) {
+	b.once.Do(func() {
+		b.started <- struct{}{}
+		<-b.release
+		b.rest = strings.NewReader(`{}`)
+	})
+	return b.rest.Read(p)
+}

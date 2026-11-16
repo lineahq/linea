@@ -14,7 +14,7 @@ import (
 // resolving relative paths against its directory, and refuses a file that
 // leaves a team server unauthenticated, unbound, in process or ambiguous.
 func TestServerConfigComposesTheServer(t *testing.T) {
-	tm, err := loadConfig(writeTeam(t, teamYAML()))
+	tm, err := loadTest(writeTeam(t, teamYAML()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,19 +32,19 @@ func TestServerConfigComposesTheServer(t *testing.T) {
 		"retention: {runs: 500, age: 7d}\n": {Runs: 500, Age: 7 * 24 * time.Hour},
 		"retention: {age: 36h}\n":           {Runs: 10_000, Age: 36 * time.Hour},
 	} {
-		if tm, err := loadConfig(writeTeam(t, teamYAML()+yaml)); err != nil || tm.retention != want {
+		if tm, err := loadTest(writeTeam(t, teamYAML()+yaml)); err != nil || tm.retention != want {
 			t.Fatalf("%s: %+v, %v", yaml, tm, err)
 		}
 	}
 	limited := teamYAML() + "limits: {queue: 8, runs_per_principal: 4, captures_per_principal: 2}\n"
-	if tm, err := loadConfig(writeTeam(t, limited)); err != nil || tm.queue != 8 || tm.principals != (platform.PrincipalLimits{Runs: 4, Captures: 2}) {
+	if tm, err := loadTest(writeTeam(t, limited)); err != nil || tm.queue != 8 || tm.principals != (platform.PrincipalLimits{Runs: 4, Captures: 2}) {
 		t.Fatalf("limits: %+v, %v", tm, err)
 	}
-	if tm, err := loadConfig(writeTeam(t, teamYAML())); err != nil || tm.connections != defaultTeamConnections || tm.gitClone != defaultGitCloneSize {
+	if tm, err := loadTest(writeTeam(t, teamYAML())); err != nil || tm.connections != defaultTeamConnections || tm.gitClone != defaultGitCloneSize {
 		t.Fatalf("default connection and clone limits: %+v, %v", tm, err)
 	}
 	bounded := teamYAML() + "limits: {connections: 64, git_clone_size: 32MiB}\n"
-	if tm, err := loadConfig(writeTeam(t, bounded)); err != nil || tm.connections != 64 || tm.gitClone != 32<<20 {
+	if tm, err := loadTest(writeTeam(t, bounded)); err != nil || tm.connections != 64 || tm.gitClone != 32<<20 {
 		t.Fatalf("connection and clone limits: %+v, %v", tm, err)
 	}
 
@@ -93,7 +93,7 @@ func TestServerConfigComposesTheServer(t *testing.T) {
 		if text == valid {
 			t.Fatalf("%s: the replacement does not apply", name)
 		}
-		if _, err := loadConfig(writeTeam(t, text)); err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "server config ") {
+		if _, err := loadTest(writeTeam(t, text)); err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "server config ") {
 			t.Errorf("%s: %v, want %q", name, err, tc.want)
 		}
 	}
@@ -143,15 +143,15 @@ func TestServerConfigHoldsTheWorkerRegistrationToken(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	tm, err := loadConfig(writeTeamIn(t, dir, "registration", teamYAML()+"worker_token_file: registration\n"))
+	tm, err := loadTest(writeTeamIn(t, dir, "registration", teamYAML()+"worker_token_file: registration\n"))
 	if err != nil || tm.workerToken != token {
 		t.Fatalf("team = %+v, %v", tm, err)
 	}
-	if tm, err := loadConfig(writeTeamIn(t, dir, "none", teamYAML())); err != nil || tm.workerToken != "" {
+	if tm, err := loadTest(writeTeamIn(t, dir, "none", teamYAML())); err != nil || tm.workerToken != "" {
 		t.Fatalf("a server config without a registration token = %+v, %v", tm, err)
 	}
 	for _, file := range []string{"short", "spaced", "missing"} {
-		if _, err := loadConfig(writeTeamIn(t, dir, file, teamYAML()+"worker_token_file: "+file+"\n")); err == nil || !strings.Contains(err.Error(), "worker_token_file") {
+		if _, err := loadTest(writeTeamIn(t, dir, file, teamYAML()+"worker_token_file: "+file+"\n")); err == nil || !strings.Contains(err.Error(), "worker_token_file") {
 			t.Fatalf("worker_token_file %s = %v", file, err)
 		}
 	}
@@ -168,12 +168,12 @@ func TestServerConfigHoldsTheBuilderToken(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	tm, err := loadConfig(writeTeamIn(t, dir, "builds", teamYAML()+"worker_token_file: registration\nbuilds:\n  token_file: builders\n"))
+	tm, err := loadTest(writeTeamIn(t, dir, "builds", teamYAML()+"worker_token_file: registration\nbuilds:\n  token_file: builders\n"))
 	if err != nil || tm.buildToken != builders || tm.workerToken != workers {
 		t.Fatalf("team = %+v, %v", tm, err)
 	}
 	for _, file := range []string{"short", "missing", "registration"} {
-		if _, err := loadConfig(writeTeamIn(t, dir, "bad", teamYAML()+"worker_token_file: registration\nbuilds:\n  token_file: "+file+"\n")); err == nil || !strings.Contains(err.Error(), "builds.token_file") {
+		if _, err := loadTest(writeTeamIn(t, dir, "bad", teamYAML()+"worker_token_file: registration\nbuilds:\n  token_file: "+file+"\n")); err == nil || !strings.Contains(err.Error(), "builds.token_file") {
 			t.Fatalf("builds.token_file %s = %v", file, err)
 		}
 	}

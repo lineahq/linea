@@ -76,7 +76,7 @@ func (s *Store) CreateAssignment(ctx context.Context, actor string, a configmgmt
 	}
 	target := a.Version
 	err = s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		if err := requireAdmin(ctx, tx, actor); err != nil {
+		if err := requireManager(ctx, tx, actor); err != nil {
 			return err
 		}
 		// Serialize creations so the bound holds under concurrency.
@@ -134,7 +134,7 @@ func (s *Store) CreateRollout(ctx context.Context, actor string, req configmgmt.
 		return view, err
 	}
 	err := s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		if err := requireAdmin(ctx, tx, actor); err != nil {
+		if err := requireManager(ctx, tx, actor); err != nil {
 			return err
 		}
 		a, err := scanAssignment(tx.QueryRow(ctx, "SELECT "+assignmentColumns+assignmentFrom+" WHERE a.id=$1 FOR UPDATE OF a", req.AssignmentID))
@@ -402,7 +402,7 @@ func (s *Store) ControlRollout(ctx context.Context, actor, id string, action con
 		return configmgmt.RolloutView{}, fleet.ErrNotFound
 	}
 	err := s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		if err := requireAdmin(ctx, tx, actor); err != nil {
+		if err := requireManager(ctx, tx, actor); err != nil {
 			return err
 		}
 		r, _, err := scanRollout(tx.QueryRow(ctx, "SELECT "+rolloutColumns+" FROM fleet.rollouts r WHERE r.id=$1 FOR UPDATE", id))

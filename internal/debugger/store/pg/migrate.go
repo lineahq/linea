@@ -70,6 +70,10 @@ func migrate(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS) error {
 		return storageErr("migrate", err)
 	}
 	defer tx.Rollback(context.WithoutCancel(ctx))
+	// A migration may rewrite large tables and waits for another instance's.
+	if _, err := tx.Exec(ctx, "SET LOCAL statement_timeout = 0"); err != nil {
+		return storageErr("migrate", err)
+	}
 	// The lock is per schema, so installations in different schemas of one
 	// database do not wait for each other.
 	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended('linea.debugger.store.migrate:' || current_schema(), 0))"); err != nil {

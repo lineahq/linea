@@ -17,7 +17,8 @@ import (
 const (
 	maxAuditField     = 256
 	maxAuditResources = 16
-	maxTokens         = 1000
+	maxTokens         = 1000 // that still authenticate
+	maxStoredTokens   = 10 * maxTokens
 	maxTokenField     = 256
 	maxTokenGroups    = 64
 	tokenRetention    = 30 * 24 * time.Hour
@@ -162,17 +163,39 @@ func (s *Store) SaveToken(ctx context.Context, r artifact.TokenRecord) error {
 		}
 	}
 	now := time.Now()
+	d.pruneTokens(now)
+	authenticates := func(o artifact.TokenRecord) bool { return o.Revoked == nil && o.Expires.After(now) }
 	live := 0
 	for _, o := range d.tokens {
-		if now.Sub(o.Expires) < tokenRetention {
+		if authenticates(o) {
 			live++
 		}
 	}
 	if live >= maxTokens {
 		return fmt.Errorf("%w: at most %d tokens", artifact.ErrLimit, maxTokens)
 	}
+	if over := len(d.tokens) - maxStoredTokens + 1; over > 0 {
+		// The revoked and expired tokens kept longest make room.
+		ended := func(o artifact.TokenRecord) time.Time {
+			if o.Revoked != nil && o.Revoked.Before(o.Expires) {
+				return *o.Revoked
+			}
+			return o.Expires
+		}
+		var old []artifact.TokenRecord
+		for _, o := range d.tokens {
+			if !authenticates(o) {
+				old = append(old, o)
+			}
+		}
+		slices.SortFunc(old, func(a, b artifact.TokenRecord) int { return ended(a).Compare(ended(b)) })
+		drop := map[string]bool{}
+		for _, o := range old[:min(over, len(old))] {
+			drop[o.ID] = true
+		}
+		d.tokens = slices.DeleteFunc(d.tokens, func(o artifact.TokenRecord) bool { return drop[o.ID] })
+	}
 	d.tokens = append(d.tokens, r)
-	d.pruneTokens(now)
 	return nil
 }
 
@@ -312,4 +335,25 @@ func (s *Store) DeleteSession(ctx context.Context, hash string) error {
 	now := time.Now()
 	d.sessions = slices.DeleteFunc(d.sessions, func(o artifact.SessionRecord) bool { return !now.Before(o.Expires) })
 	return nil
+}
+
+// DeleteSessionsOf ends every session of a principal and drops expired ones;
+// it counts the unexpired sessions it ended.
+func (s *Store) DeleteSessionsOf(ctx context.Context, principal string) (int, error) {
+	d := s.d
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err := s.ready(ctx.Err()); err != nil {
+		return 0, err
+	}
+	now := time.Now()
+	ended := 0
+	d.sessions = slices.DeleteFunc(d.sessions, func(r artifact.SessionRecord) bool {
+		live := now.Before(r.Expires)
+		if r.Principal == principal && live {
+			ended++
+		}
+		return r.Principal == principal || !live
+	})
+	return ended, nil
 }

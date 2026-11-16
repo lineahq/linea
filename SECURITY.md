@@ -31,3 +31,9 @@ principal was granted; a team server request that reads a host file or host
 environment variable;
 agent or management credentials crossing their listeners; and a fleet
 reporting path that sends commands to agents.
+
+Out of scope: one team server is one trust boundary. Debugger projects
+organize work and access, but runtime code built on a server runs on its
+shared workers and is not isolated between projects
+([what a project isolates](docs/debugger/team-server.md#what-a-project-isolates)).
+A runtime reaching the registration token or a pool's cache is in scope.
