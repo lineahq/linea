@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -648,5 +649,96 @@ func TestStopBeforeSendReleasesTheCollector(t *testing.T) {
 	request.ID = pluginsdk.RandomID()
 	if _, err := s.Create(context.Background(), "owner", request); err != nil {
 		t.Fatal("collector still reserved after a stop before send", err)
+	}
+}
+
+// Admin access lists and stops every owner's capture; write access sees and
+// stops only its own, and nobody but the owner reads a channel.
+func TestAdminListsAndStopsAnyCapture(t *testing.T) {
+	s, r, _ := fixture(t)
+	op, err := s.Create(context.Background(), "owner", r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(method, path, access, owner string, header http.Header) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, pluginsdk.APIPath+path, nil)
+		for k, v := range header {
+			req.Header[k] = v
+		}
+		req.Header.Set("Authorization", "Bearer "+s.config.serviceToken)
+		req.Header.Set(pluginsdk.CallerIDHeader, owner)
+		req.Header.Set(pluginsdk.CallerAccessHeader, access)
+		req.Header.Set(pluginsdk.InstanceHeader, s.instance)
+		req.Header.Set(pluginsdk.EpochHeader, s.epoch)
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, req)
+		return w
+	}
+	list := func(access, owner string) []RunningOperation {
+		w := call("GET", "v1/captures", access, owner, nil)
+		var page struct {
+			Items []RunningOperation `json:"items"`
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &page) != nil {
+			t.Fatalf("list as %s/%s = %d", access, owner, w.Code)
+		}
+		return page.Items
+	}
+	if got := list("write", "owner"); len(got) != 1 || got[0].ID != op.ID || got[0].Owner != "owner" {
+		t.Fatalf("owner list = %+v", got)
+	}
+	for _, access := range []string{"read", "write"} {
+		if got := list(access, "other"); len(got) != 0 {
+			t.Fatalf("%s access listed another owner's capture", access)
+		}
+	}
+	if got := list("admin", "admin"); len(got) != 1 || got[0].Owner != "owner" {
+		t.Fatalf("admin list = %+v", got)
+	}
+	if w := call("GET", "v1/captures/"+op.ID, "write", "other", nil); w.Code != 403 {
+		t.Fatalf("other owner read = %d", w.Code)
+	}
+	if w := call("GET", "v1/captures/"+op.ID, "admin", "admin", nil); w.Code != 200 {
+		t.Fatalf("admin read = %d", w.Code)
+	}
+	if w := call("GET", "v1/channels/"+r.ChannelID+"/next", "admin", "admin", nil); w.Code != 403 {
+		t.Fatalf("admin read a channel: %d", w.Code)
+	}
+	ifMatch := http.Header{"If-Match": {`"` + strconv.FormatInt(op.Revision, 10) + `"`}}
+	if w := call("POST", "v1/captures/"+op.ID+"/stop", "write", "other", ifMatch); w.Code != 403 {
+		t.Fatalf("other owner stop = %d", w.Code)
+	}
+	w := call("POST", "v1/captures/"+op.ID+"/stop", "admin", "admin", ifMatch)
+	var stopped Operation
+	if w.Code != 202 || json.Unmarshal(w.Body.Bytes(), &stopped) != nil || stopped.Reason != "requested_stop" {
+		t.Fatalf("admin stop = %d %s", w.Code, w.Body)
+	}
+}
+
+// One owner cannot take more than its share of operations and channels; the
+// share defaults to the plugin's limit.
+func TestSlotsPerOwner(t *testing.T) {
+	s, r, _ := fixture(t)
+	s.config.MaxChannelsPerOwner, s.config.MaxOperationsPerOwner = 2, 1
+	if _, err := s.NewChannel(context.Background(), "owner", time.Now().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.NewChannel(context.Background(), "owner", time.Now().Add(time.Minute)); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("third channel of one owner: %v", err)
+	}
+	if _, err := s.NewChannel(context.Background(), "other", time.Now().Add(time.Minute)); err != nil {
+		t.Fatalf("another owner was starved: %v", err)
+	}
+	s.operations["held"] = &activeOperation{op: Operation{ID: "held", Owner: "owner"}}
+	if _, err := s.Create(context.Background(), "owner", r); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("second operation of one owner: %v", err)
+	}
+	delete(s.operations, "held")
+	s.operations["held"] = &activeOperation{op: Operation{ID: "held", Owner: "other"}}
+	if _, err := s.Create(context.Background(), "owner", r); err != nil {
+		t.Fatalf("another owner's operation counted: %v", err)
+	}
+	if ownerLimit(0, maxOperations) != maxOperations || ownerLimit(3, maxOperations) != 3 {
+		t.Fatal("unset limit is not the plugin's")
 	}
 }

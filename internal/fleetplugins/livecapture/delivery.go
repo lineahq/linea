@@ -57,13 +57,44 @@ func (s *Server) NewChannel(ctx context.Context, owner string, expiry time.Time)
 	if !expiry.After(now) || expiry.After(now.Add(5*time.Minute)) {
 		return ChannelInfo{}, ErrInvalid
 	}
-	if len(s.channels) >= 32 {
+	if len(s.channels) >= maxChannels || s.ownedChannelsLocked(owner) >= ownerLimit(s.config.MaxChannelsPerOwner, maxChannels) {
 		return ChannelInfo{}, ErrCapacity
 	}
 	c := &channel{id: pluginsdk.RandomID(), owner: owner, expires: expiry, lastSeen: now}
 	s.channels[c.id] = c
 	return ChannelInfo{AuthorityID: s.repo.AuthorityID(), PluginInstance: s.instance, ID: c.id, ExpiresAt: c.expires, HeartbeatSeconds: 5}, nil
 }
+
+// ownedChannelsLocked counts the owner's open channels.
+func (s *Server) ownedChannelsLocked(owner string) int {
+	n := 0
+	for _, c := range s.channels {
+		if c.owner == owner {
+			n++
+		}
+	}
+	return n
+}
+
+// ownerLimit is a per-owner limit; unset, it is the plugin's limit.
+func ownerLimit(set, plugin int) int {
+	if set == 0 {
+		return plugin
+	}
+	return set
+}
+
+// ownedLocked counts the owner's operations in memory.
+func (s *Server) ownedLocked(owner string) int {
+	n := 0
+	for _, a := range s.operations {
+		if a.op.Owner == owner {
+			n++
+		}
+	}
+	return n
+}
+
 func (s *Server) closeChannelLocked(c *channel) {
 	if c.closed {
 		return

@@ -208,6 +208,13 @@ type Operation struct {
 	// created the operation. Attribution only; Owner stays the authority.
 	ActingFor *pluginsdk.Acting `json:"acting_for,omitempty"`
 }
+
+// RunningOperation is an operation in a list, with the credential that owns
+// it, so an admin can see who holds the plugin's slots.
+type RunningOperation struct {
+	Owner string `json:"owner"`
+	Operation
+}
 type Envelope struct {
 	AuthorityID    string    `json:"authority_id"`
 	PluginInstance string    `json:"plugin_instance"`

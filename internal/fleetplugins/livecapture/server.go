@@ -630,7 +630,7 @@ func (s *Server) Create(ctx context.Context, owner string, request CreateRequest
 		}
 		return known, nil
 	}
-	if len(s.operations) >= 32 {
+	if len(s.operations) >= maxOperations || s.ownedLocked(owner) >= ownerLimit(s.config.MaxOperationsPerOwner, maxOperations) {
 		return Operation{}, ErrCapacity
 	}
 	c := s.channels[request.ChannelID]
@@ -871,7 +871,14 @@ func (s *Server) capturableLocked(p *peer, request CreateRequest, raw bool) erro
 	return nil
 }
 
+// Get returns one of the owner's operations.
 func (s *Server) Get(ctx context.Context, owner, id string) (Operation, error) {
+	return s.get(ctx, owner, false, id)
+}
+
+// get returns an operation of the owner, or of any owner for an admin.
+// Operations hold metadata only; channels stay owner-only.
+func (s *Server) get(ctx context.Context, owner string, admin bool, id string) (Operation, error) {
 	if !pluginsdk.ValidUID(id) {
 		return Operation{}, ErrInvalid
 	}
@@ -883,14 +890,14 @@ func (s *Server) Get(ctx context.Context, owner, id string) (Operation, error) {
 	if !known {
 		op, err = s.repo.Get(ctx, id)
 	}
-	if err == nil && op.Owner != owner {
+	if err == nil && op.Owner != owner && !admin {
 		return Operation{}, ErrForbidden
 	}
 	if err == nil && !time.Now().Before(op.ExpiresAt) && (op.State == "starting" || op.State == "active" || op.State == "stopping") {
 		s.mu.Lock()
 		if active := s.operations[id]; active != nil {
 			defer s.mu.Unlock()
-			if active.op.Owner != owner {
+			if active.op.Owner != owner && !admin {
 				return Operation{}, ErrForbidden
 			}
 			if active.op.Reason == "" {
@@ -936,7 +943,14 @@ func (s *Server) liveStats(op *Operation) {
 		}
 	}
 }
+
+// Stop ends one of the owner's operations.
 func (s *Server) Stop(ctx context.Context, owner, id string, revision int64) (Operation, error) {
+	return s.stop(ctx, owner, false, id, revision)
+}
+
+// stop ends an operation of the owner, or of any owner for an admin.
+func (s *Server) stop(ctx context.Context, owner string, admin bool, id string, revision int64) (Operation, error) {
 	s.mu.Lock()
 	a := s.operations[id]
 	if a == nil {
@@ -949,7 +963,7 @@ func (s *Server) Stop(ctx context.Context, owner, id string, revision int64) (Op
 		if !queued {
 			op, err = s.repo.Get(ctx, id)
 		}
-		if err == nil && op.Owner != owner {
+		if err == nil && op.Owner != owner && !admin {
 			return Operation{}, ErrForbidden
 		}
 		if err == nil && op.Revision != revision {
@@ -967,7 +981,7 @@ func (s *Server) Stop(ctx context.Context, owner, id string, revision int64) (Op
 		return op, err
 	}
 	defer s.mu.Unlock()
-	if a.op.Owner != owner {
+	if a.op.Owner != owner && !admin {
 		return Operation{}, ErrForbidden
 	}
 	if a.op.Revision != revision {
@@ -978,6 +992,29 @@ func (s *Server) Stop(ctx context.Context, owner, id string, revision int64) (Op
 	}
 	s.stopLocked(a, "stopping")
 	return cloneOperation(a.op), nil
+}
+
+// Running lists the operations held in memory, soonest expiry first: the owner's,
+// or every owner's for an admin. It is bounded by the operation limit.
+func (s *Server) Running(owner string, admin bool) []RunningOperation {
+	s.mu.Lock()
+	list := []RunningOperation{}
+	for _, a := range s.operations {
+		if a.op.Owner == owner || admin {
+			list = append(list, RunningOperation{Owner: a.op.Owner, Operation: cloneOperation(a.op)})
+		}
+	}
+	s.mu.Unlock()
+	for i := range list {
+		s.liveStats(&list[i].Operation)
+	}
+	slices.SortFunc(list, func(a, b RunningOperation) int {
+		if c := a.ExpiresAt.Compare(b.ExpiresAt); c != 0 {
+			return c
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
+	return list
 }
 
 func cloneOperation(op Operation) Operation {

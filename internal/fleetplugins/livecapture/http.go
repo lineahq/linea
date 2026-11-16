@@ -191,7 +191,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, page)
 		return
 	}
-	// read lists peers and schemas; write opens channels and runs captures.
+	// read lists peers and schemas; write opens channels and runs captures;
+	// admin also lists and stops every owner's captures, without reading them.
+	admin := access == pluginsdk.AccessAdmin
 	if r.Method != "GET" && access == pluginsdk.AccessRead {
 		fail(w, ErrForbidden)
 		return
@@ -209,6 +211,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, 201, result)
+		return
+	}
+	if path == "v1/captures" && r.Method == "GET" {
+		writeJSON(w, 200, map[string]any{"items": s.Running(owner, admin)})
 		return
 	}
 	if path == "v1/captures" && r.Method == "POST" {
@@ -273,7 +279,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if len(parts) >= 3 && parts[1] == "captures" && pluginsdk.ValidUID(parts[2]) {
 		id := parts[2]
 		if len(parts) == 3 && r.Method == "GET" {
-			op, err := s.Get(r.Context(), owner, id)
+			op, err := s.get(r.Context(), owner, admin, id)
 			if err != nil {
 				fail(w, err)
 				return
@@ -287,7 +293,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			op, err := s.Stop(r.Context(), owner, id, rev)
+			op, err := s.stop(r.Context(), owner, admin, id, rev)
 			if err != nil {
 				fail(w, err)
 				return

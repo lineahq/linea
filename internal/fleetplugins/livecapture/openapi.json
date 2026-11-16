@@ -359,11 +359,48 @@
       }
     },
     "/v1/captures": {
+      "get": {
+        "summary": "Running operations: the caller's own, or every owner's with admin access",
+        "responses": {
+          "200": {
+            "description": "Running operations: the caller's own, or every owner's with admin access",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "items"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "maxItems": 32,
+                      "items": {
+                        "$ref": "#/components/schemas/RunningOperation"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid general API credential"
+          },
+          "403": {
+            "description": "Access level, raw permission, or ownership denied"
+          },
+          "503": {
+            "description": "Plugin, host, database, or admission unavailable"
+          }
+        }
+      },
       "post": {
-        "summary": "Admin reserves fixed target generations before dispatch; admission is not activation",
+        "summary": "Caller with write access reserves fixed target generations before dispatch; admission is not activation",
         "responses": {
           "202": {
-            "description": "Admin reserves fixed target generations before dispatch; admission is not activation",
+            "description": "Caller with write access reserves fixed target generations before dispatch; admission is not activation",
             "content": {
               "application/json": {
                 "schema": {
@@ -414,10 +451,10 @@
     },
     "/v1/captures/{id}": {
       "get": {
-        "summary": "Owner reconciles durable operation metadata",
+        "summary": "Owner, or admin access, reconciles durable operation metadata",
         "responses": {
           "200": {
-            "description": "Owner reconciles durable operation metadata",
+            "description": "Owner, or admin access, reconciles durable operation metadata",
             "content": {
               "application/json": {
                 "schema": {
@@ -469,10 +506,10 @@
     },
     "/v1/captures/{id}/stop": {
       "post": {
-        "summary": "Owner withdraws desired state; reservations remain until terminal ACK or expiry guard",
+        "summary": "Owner, or admin access, withdraws desired state; reservations remain until terminal ACK or expiry guard",
         "responses": {
           "202": {
-            "description": "Owner withdraws desired state; reservations remain until terminal ACK or expiry guard",
+            "description": "Owner, or admin access, withdraws desired state; reservations remain until terminal ACK or expiry guard",
             "content": {
               "application/json": {
                 "schema": {
@@ -1226,6 +1263,88 @@
             }
           }
         }
+      },
+      "RunningOperation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "owner",
+          "id",
+          "state",
+          "revision",
+          "expires_at",
+          "targets",
+          "authority_id"
+        ],
+        "properties": {
+          "owner": {
+            "type": "string",
+            "description": "Fleet credential that owns the operation"
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "state": {
+            "enum": [
+              "starting",
+              "active",
+              "stopping",
+              "completed",
+              "stopped",
+              "failed",
+              "expired",
+              "interrupted"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TargetOutcome"
+            },
+            "minItems": 1,
+            "maxItems": 16
+          },
+          "authority_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "acting_for": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id"
+            ],
+            "description": "The user the owning fleet credential acted for, from fleet's X-Fleet-Acting-* headers on create. Attribution only; it grants nothing.",
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "name": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "request_id": {
+                "type": "string",
+                "maxLength": 128
+              }
+            }
+          }
+        },
+        "description": "An operation in a list, with the credential that owns it"
       },
       "ChannelRequest": {
         "type": "object",

@@ -37,6 +37,7 @@ func TestOpenAPIMatchesWireTypes(t *testing.T) {
 		"CaptureRequest": CreateRequest{AuthorityID: id, PluginInstance: id, ID: id, ChannelID: id, Targets: []TargetRequest{{PeerID: peer, Generation: 1}}, Agents: []string{id}, Selector: "a", GroupID: id,
 			Points: []Point{{Pipeline: "traces", Point: "egress"}}, Signals: []string{"traces"}, Filter: filter, Sampling: &Sampling{Rate: 1, Mode: "hash"},
 			Limits: Limits{BytesPerSecond: 1, RecordsPerSecond: 1, TotalBytes: 1, TotalRecords: 1, RecordBytes: 1}, ExpiresAt: now},
+		"RunningOperation": RunningOperation{Owner: "o", Operation: Operation{AuthorityID: id, ID: id, State: "active", Reason: "r", Revision: 1, ExpiresAt: now, ActingFor: &pluginsdk.Acting{ID: "user:alice", Name: "Alice", RequestID: "r"}}},
 		"Ack": Acknowledgement{ID: id},
 	} {
 		encoded, err := json.Marshal(value)

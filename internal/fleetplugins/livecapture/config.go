@@ -16,6 +16,13 @@ const Version = "0.5.0"
 // APIVersion is the plugin-owned management API schema version.
 const APIVersion = "3"
 
+// maxOperations and maxChannels bound the plugin's operations and consumer
+// channels; the per-owner limits default to them.
+const (
+	maxOperations = 32
+	maxChannels   = 32
+)
+
 // DefaultCaptureLabel names the fleet agent-credential label that lists the
 // collector groups a credential may serve captures for.
 const DefaultCaptureLabel = "capture"
@@ -36,6 +43,8 @@ type Config struct {
 	CaptureLabel            string   `json:"capture_label,omitempty"`
 	RawPrincipals           []string `json:"raw_principals"`
 	MaxPeers                int      `json:"max_peers,omitempty"`
+	MaxOperationsPerOwner   int      `json:"max_operations_per_owner,omitempty"`
+	MaxChannelsPerOwner     int      `json:"max_channels_per_owner,omitempty"`
 	MetricsTokenFile        string   `json:"metrics_token_file,omitempty"`
 	hostToken, serviceToken string
 	metricsToken            string
@@ -104,6 +113,15 @@ func LoadConfig(path string) (Config, error) {
 		c.MaxPeers = 256
 	}
 	if c.MaxPeers < 1 || c.MaxPeers > 4096 {
+		return c, ErrInvalid
+	}
+	if c.MaxOperationsPerOwner == 0 {
+		c.MaxOperationsPerOwner = maxOperations
+	}
+	if c.MaxChannelsPerOwner == 0 {
+		c.MaxChannelsPerOwner = maxChannels
+	}
+	if c.MaxOperationsPerOwner < 1 || c.MaxOperationsPerOwner > maxOperations || c.MaxChannelsPerOwner < 1 || c.MaxChannelsPerOwner > maxChannels {
 		return c, ErrInvalid
 	}
 	if c.MetricsTokenFile != "" {

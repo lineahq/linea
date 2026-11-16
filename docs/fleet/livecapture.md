@@ -239,8 +239,9 @@ at `v1/openapi.json` through this authenticated ingress.
 
 | Rule | Detail |
 | --- | --- |
-| Credential | A fleet management credential with `plugin_access` `{"livecapture": "write"}` (or `admin`, which acts as `write` for now). `read` can discover peers and schemas but cannot create channels or captures. The fleet role grants no access to the plugin |
-| Ownership | Capture and channel reads and ACKs are owner-only, even between admins |
+| Credential | A fleet management credential with `plugin_access` `{"livecapture": "write"}`. `read` can discover peers and schemas but cannot create channels or captures. `admin` can do what `write` can, and also list (`GET v1/captures`), read and stop every owner's capture. The fleet role grants no access to the plugin |
+| Ownership | Channel reads and ACKs are owner-only, even for `admin`: an admin can end someone else's capture, not read its records. `GET v1/captures` lists the caller's running captures, or every owner's with `admin`, each with its `owner` credential ID |
+| Slots per owner | Operator `max_operations_per_owner` and `max_channels_per_owner` (1 to 32; default 32, the plugin's limit, so unset they change nothing) keep one credential from holding every slot. A debugger is one owner for all its users |
 | Raw data | Default selection permits only catalog points marked redacted. Operator `raw_principals` is an explicit grant of credential IDs; admin alone never grants raw |
 | Filters on redacted points | Filters run before redaction, so a filter can test a value the copy will not show and reveal whether it matches ([configuration](../collector-components/configuration.md#filters)). Creating a capture on a redacted point is therefore more than reading redacted records |
 | Delegating clients | A client acting for its users (a shared team service) may send fleet's `X-Fleet-Acting-ID`, `-Name` and `-Request` headers ([plugins](plugins.md#opaque-public-api)). The plugin records them on the capture as `acting_for` and persists them with the operation (plugin migration 3, API schema 2.2.0) |
@@ -473,10 +474,10 @@ its unchanged wire implementation, and clients may request lower limits.
 | Resource | Bound |
 | --- | --- |
 | Connected peers / durable peer generation identities | Default 256 (operator `max_peers` 1 to 4,096; restart required) / 10,000, of which the plugin deletes unused ones after 24 hours |
-| Active operations / retained operation IDs | 32 / 10,000 |
+| Active operations / retained operation IDs | 32, and `max_operations_per_owner` per credential / 10,000 |
 | Targets / points / signals per operation | 16 / 64 / 3 |
 | Capture and channel absolute lifetime | 5 minutes |
-| Channels / pending bytes / pending batches | 32 / 2 MiB each, 32 MiB in all / 64 each |
+| Channels / pending bytes / pending batches | 32, and `max_channels_per_owner` per credential / 2 MiB each, 32 MiB in all / 64 each |
 | Pending batch age | 10 seconds |
 | OTLP request / resource groups | 256 KiB / 256 |
 | Per-target requested maximums | 1 MiB/s, 5,000 records/s, 16 MiB total, 10,000 records, 64 KiB/record |
