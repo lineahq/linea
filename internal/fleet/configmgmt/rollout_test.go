@@ -427,3 +427,15 @@ func TestEvaluateWaveNeedsOneSuccess(t *testing.T) {
 		t.Fatal("a successful last wave did not complete", step)
 	}
 }
+
+func TestEvaluateDeleteWavePassesOnUnmatched(t *testing.T) {
+	c := &clock{now: time.Unix(1_000_000, 0)}
+	r := Rollout{State: Running, CurrentWave: 0, WaveCount: 1, PhaseStartedAt: c.now, Policy: DefaultPolicy(), Delete: true}
+	if step := Evaluate(r, nil, map[int]Tally{0: {Settled: 1}}, c.now); step.Action != Complete {
+		t.Fatal("a delete wave whose target ended unmatched did not complete", step)
+	}
+	// A failure is settled too, but removed nothing.
+	if step := Evaluate(r, nil, map[int]Tally{0: {Settled: 1, Failures: 1}}, c.now); step.Action == Complete {
+		t.Fatal("a delete wave with only a failure completed", step)
+	}
+}

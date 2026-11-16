@@ -216,6 +216,9 @@ type Rollout struct {
 	// last resumed, or the rollback began.
 	PhaseStartedAt time.Time
 	Policy         Policy
+	// Delete marks a rollout that removes the assignment's layer. A target
+	// left without remote config (unmatched) is then what it aims for.
+	Delete bool
 }
 
 // Observation is one released target with its agent's current state.
@@ -389,8 +392,11 @@ func Evaluate(r Rollout, open []Observation, settled map[int]Tally, now time.Tim
 	// accepted its failures: a canary whose agents are all offline,
 	// incompatible or gone proves nothing. Until the wave timeout an offline
 	// agent may still come back; after it the rollout pauses. Resuming
-	// restarts the wave timeout.
-	if current := waves[r.CurrentWave]; current.Succeeded == 0 && current.Accepted == 0 {
+	// restarts the wave timeout. A delete rollout also passes on an
+	// unmatched target: settled without a failure.
+	current := waves[r.CurrentWave]
+	removed := r.Delete && current.Settled > current.Failures+current.Accepted
+	if current.Succeeded == 0 && current.Accepted == 0 && !removed {
 		if now.Sub(r.PhaseStartedAt) >= r.Policy.WaveTimeout() {
 			step.Action = PauseAction
 		}

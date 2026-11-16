@@ -294,7 +294,9 @@ The target set is fixed when the rollout starts. A wave passes only once at
 least one of its targets `succeeded`, or an operator accepted its failures
 with `:resume`. A wave whose agents are all offline, incompatible or
 unmatched proves nothing about the version: it waits for the wave timeout,
-in case an agent comes back, and then pauses with reason `threshold`.
+in case an agent comes back, and then pauses with reason `threshold`. A
+delete rollout is the exception for `unmatched`: an agent left with no
+matching assignment is what it aims for, so such a target passes its wave.
 Target outcomes:
 
 | Outcome | Meaning | Counts against thresholds |

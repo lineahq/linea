@@ -217,7 +217,8 @@ the first item below.
   offline, incompatible or unmatched waits for the wave timeout and then
   pauses with reason `threshold`; before, it advanced at once and could
   complete a rollout no agent had applied. `:resume` restarts the current
-  wave's timeout.
+  wave's timeout. A delete rollout's wave also passes on an `unmatched`
+  target, since leaving the agent without the layer is its aim.
 - Live capture: a Collector still reserved by an earlier capture is refused
   with `collector_busy` also after a stop, reconnect or restart (it was a
   plain `capture_request_refused`). A stop before the session was sent frees

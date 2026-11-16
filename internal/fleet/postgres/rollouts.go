@@ -607,7 +607,7 @@ func (s *Store) advanceRollout(ctx context.Context, id string, base []configmgmt
 		if err != nil {
 			return err
 		}
-		state := configmgmt.Rollout{State: r.State, CurrentWave: r.CurrentWave, WaveCount: r.WaveCount, Policy: r.Policy}
+		state := configmgmt.Rollout{State: r.State, CurrentWave: r.CurrentWave, WaveCount: r.WaveCount, Policy: r.Policy, Delete: r.ToVersion == 0}
 		if phase != nil {
 			state.PhaseStartedAt = *phase
 		}
