@@ -2,6 +2,6 @@ module github.com/lineahq/linea/examples/fleet-agent-summary-plugin
 
 go 1.22
 
-require github.com/lineahq/linea/pluginsdk v0.2.0
+require github.com/lineahq/linea/pluginsdk v0.3.0
 
 replace github.com/lineahq/linea/pluginsdk => ../../pluginsdk

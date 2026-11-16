@@ -94,7 +94,7 @@ services:
   # runs; stop_grace_period leaves room for that.
   linea:
     <<: *hardened
-    image: ghcr.io/lineahq/linea-server:${LINEA_VERSION:-0.2.0}
+    image: ghcr.io/lineahq/linea-server:${LINEA_VERSION:-0.3.0}
     build:
       context: ../../..
       dockerfile: deploy/docker/linea-server.Dockerfile
@@ -182,7 +182,7 @@ services:
   # ones; --idle, default 10m; --cache, default 5GiB, bounds the cache).
   pool:
     <<: *hardened
-    image: ghcr.io/lineahq/linea-worker:${LINEA_VERSION:-0.2.0}
+    image: ghcr.io/lineahq/linea-worker:${LINEA_VERSION:-0.3.0}
     build:
       context: ../../..
       dockerfile: deploy/docker/linea-worker.Dockerfile
@@ -224,7 +224,7 @@ services:
   # --registry-auth with its path; egress must reach the registry.
   builder:
     <<: *hardened
-    image: ghcr.io/lineahq/linea-builder:${LINEA_VERSION:-0.2.0}
+    image: ghcr.io/lineahq/linea-builder:${LINEA_VERSION:-0.3.0}
     build:
       context: ../../..
       dockerfile: deploy/docker/linea-builder.Dockerfile

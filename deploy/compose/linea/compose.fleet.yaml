@@ -131,7 +131,7 @@ services:
 
   fleet:
     <<: *fleet-hardened
-    image: ghcr.io/lineahq/linea-fleet:${LINEA_VERSION:-0.2.0}
+    image: ghcr.io/lineahq/linea-fleet:${LINEA_VERSION:-0.3.0}
     build:
       context: ../../..
       dockerfile: deploy/docker/linea-fleet.Dockerfile
@@ -164,7 +164,7 @@ services:
 
   livecapture-plugin:
     <<: *fleet-hardened
-    image: ghcr.io/lineahq/linea-fleet-livecapture:${LINEA_VERSION:-0.2.0}
+    image: ghcr.io/lineahq/linea-fleet-livecapture:${LINEA_VERSION:-0.3.0}
     build:
       context: ../../..
       dockerfile: deploy/docker/linea-fleet-livecapture.Dockerfile
@@ -207,7 +207,7 @@ services:
   # Explicit steps, run by scripts/debugger/compose-fleet.sh (profile fleet-init).
   fleet-migrate:
     <<: *fleet-hardened
-    image: ghcr.io/lineahq/linea-fleet:${LINEA_VERSION:-0.2.0}
+    image: ghcr.io/lineahq/linea-fleet:${LINEA_VERSION:-0.3.0}
     profiles: [fleet-init]
     command: [migrate, --runtime-role, fleet_app]
     environment:
@@ -217,7 +217,7 @@ services:
     restart: "no"
   capture-migrate:
     <<: *fleet-hardened
-    image: ghcr.io/lineahq/linea-fleet-livecapture:${LINEA_VERSION:-0.2.0}
+    image: ghcr.io/lineahq/linea-fleet-livecapture:${LINEA_VERSION:-0.3.0}
     profiles: [fleet-init]
     command: [migrate, --runtime-role, capture_app]
     environment:
@@ -230,7 +230,7 @@ services:
   # users; repeating it only reapplies those grants while they are active.
   fleet-bootstrap:
     <<: *fleet-hardened
-    image: ghcr.io/lineahq/linea-fleet:${LINEA_VERSION:-0.2.0}
+    image: ghcr.io/lineahq/linea-fleet:${LINEA_VERSION:-0.3.0}
     profiles: [fleet-init]
     command: [bootstrap, --server-id, "${LINEA_FLEET_SERVER_ID:-linea-fleet}", --name, deployment-admin, --plugin-access, livecapture=admin, --operator-name, linea-server, --operator-plugin-access, livecapture=write, --operator-delegate]
     environment:

@@ -7,9 +7,27 @@ change APIs, report schemas and persisted formats; the release notes say how.
 
 ## Unreleased
 
-**Upgrading from 0.2.0:** a Docker Compose stack moves its secrets from `.env`
-into files, changes a few `.env` settings and needs one cleanup, described in
-the first item below.
+## [0.3.0]
+
+**Upgrading from 0.2.0:** 0.3.0 changes deployments, credentials and
+persisted schemas. Each item below that needs action has an **Upgrading**
+note; in short:
+
+- A Docker Compose stack moves its secrets from `.env` into files, changes a
+  few `.env` settings and needs one cleanup (the first item below).
+- Helm: remove `builder.autoscaling` and `server.metrics`; reach fleet's
+  management API at `<release>-linea-fleet-internal`; a builder that uses an
+  internal proxy or registry needs a `builderEgress` rule.
+- Fleet: run `migrate` before the new release starts (schema version 15) and
+  rerun the migration job's grant; add `credential_labels` to every config
+  assignment that should keep reaching agents.
+- Fleet plugins: upgrade fleet and its plugins together (host protocol 4);
+  reissue agent credentials of Collectors that use a plugin and give them
+  the new plugin token; grant `plugin_access` to management credentials that
+  call a plugin.
+- Live capture: fetch the new `livecapture.json` and `fleet-plugins.json`
+  (plugin 0.5.0, `api_version` 3), delete `test_insecure`, and run the
+  plugin's `migrate` (plugin database schema 4).
 
 - The Docker Compose stack is one stack for one person and for a team; they
   differ only in `.env`. It runs five services (`postgres`, `seaweedfs`,
@@ -285,7 +303,7 @@ the first item below.
 
   **Upgrading:** upgrade fleet and its plugins together; a plugin built for
   protocol 3 is `incompatible` until it is rebuilt on `pluginsdk` 4. Live
-  capture 0.5.0 (unreleased) and its `api_version` 3 do not change, so
+  capture 0.5.0 and its `api_version` 3 do not change, so
   registrations stay as they are. A plugin of your own changes its paths and
   `ProtocolVersion` (the SDK constants do both), answers 421 instead of 409
   for a mismatch (`pluginsdk.AuthorityMatches`, `pluginsdk.StatusMisdirected`)
@@ -679,6 +697,7 @@ First public release.
   `github.com/lineahq/linea/collector/livecapture`, tagged
   `collector/livecapture/v0.1.0`, and the contrib `opamp` extension.
 
+[0.3.0]: https://github.com/lineahq/linea/releases/tag/v0.3.0
 [0.2.0]: https://github.com/lineahq/linea/releases/tag/v0.2.0
 [0.1.1]: https://github.com/lineahq/linea/releases/tag/v0.1.1
 [0.1.0]: https://github.com/lineahq/linea/releases/tag/v0.1.0
