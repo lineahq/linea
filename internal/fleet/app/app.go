@@ -131,10 +131,11 @@ func runWithStore(ctx context.Context, cfg Config, version string, notify func(m
 	defer registry.Close()
 	registry.SetLogger(log)
 	registry.SetHost(control, introspector)
-	if lifecycle, ok := store.(fleet.PluginLifecycleRepository); ok {
-		if err := registry.RestoreLifecycle(ctx, lifecycle); err != nil {
-			return translog.ReasonDatabaseUnavailable, err
-		}
+	if err := registry.Load(ctx); err != nil {
+		return translog.ReasonDatabaseUnavailable, err
+	}
+	if durable != nil {
+		durable.SetPluginSignal(registry.Notify)
 	}
 	apiHandler.SetPlugins(registry)
 	if cfg.ConfigManagement {

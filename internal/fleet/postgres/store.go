@@ -117,6 +117,7 @@ type Store struct {
 	onTakeover func(string, uint64)
 	onRevoked  func(string)
 	onConfig   func(string)
+	onPlugin   func(string)
 	eventWake  chan struct{}
 
 	queryDuration metrics.Duration
@@ -514,6 +515,15 @@ func (s *Store) SetConfigSignal(changed func(agentID string)) {
 	s.signalMu.Lock()
 	defer s.signalMu.Unlock()
 	s.onConfig = changed
+}
+
+// SetPluginSignal binds the plugin state hint: the payload is the plugin ID
+// whose row changed, and an empty ID after the listener reconnects means any
+// row may have changed. The callback must not block.
+func (s *Store) SetPluginSignal(changed func(pluginID string)) {
+	s.signalMu.Lock()
+	defer s.signalMu.Unlock()
+	s.onPlugin = changed
 }
 
 // EventSignal closes on the next event notification.

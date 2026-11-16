@@ -178,8 +178,10 @@ func TestManifestFailuresAndBoundedStatus(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(m)
 	}))
 	defer server.Close()
-	registry := New(context.Background(), []Config{fixtureConfig(server.URL)}, fleet.NewStore(1))
+	store := fleet.NewStore(1)
+	registry := New(context.Background(), []Config{fixtureConfig(server.URL)}, store)
 	defer registry.Close()
+	clock := useClock(store, registry)
 	e := registry.entries[0]
 	for _, tc := range []struct {
 		mode int32
@@ -209,6 +211,11 @@ func TestManifestFailuresAndBoundedStatus(t *testing.T) {
 	<-e.calls
 	<-e.calls
 	server.Close()
+	registry.probe(e)
+	if e.snapshot().State != "ready" {
+		t.Fatal("one unanswered probe ended readiness")
+	}
+	clock.advance(fleet.PluginSeenWindow)
 	registry.probe(e)
 	if e.snapshot().State != "unavailable" {
 		t.Fatal("stopped service remained ready")

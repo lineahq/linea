@@ -48,22 +48,6 @@ func (l *logBuffer) take(t *testing.T) []map[string]any {
 	return out
 }
 
-// The embedded interface stays nil: this test never reads or writes plugin state.
-type lifecycleStore struct {
-	fleet.PluginLifecycleRepository
-	revision int64
-}
-
-func (lifecycleStore) PluginLifecycles(context.Context) ([]fleet.PluginLifecycle, error) {
-	return nil, nil
-}
-
-func (s *lifecycleStore) SetPluginLifecycle(_ context.Context, _ string, item fleet.PluginLifecycle, _ int64) (fleet.PluginLifecycle, error) {
-	s.revision++
-	item.Revision = s.revision
-	return item, nil
-}
-
 func TestPluginTransitionsAreLoggedOnceWithReasons(t *testing.T) {
 	var instance atomic.Value
 	instance.Store(strings.Repeat("c", 32))
@@ -82,9 +66,6 @@ func TestPluginTransitionsAreLoggedOnceWithReasons(t *testing.T) {
 	r := New(context.Background(), []Config{config}, fleet.NewStore(1))
 	defer r.Close()
 	r.SetLogger(translog.New(&out))
-	if err := r.RestoreLifecycle(context.Background(), &lifecycleStore{}); err != nil {
-		t.Fatal(err)
-	}
 	e := r.entries[0]
 
 	r.probe(e)
@@ -105,7 +86,7 @@ func TestPluginTransitionsAreLoggedOnceWithReasons(t *testing.T) {
 	r.probe(e)
 	r.probe(e)
 	lines = out.take(t)
-	if len(lines) != 2 || lines[0]["msg"] != "plugin_epoch_changed" || lines[0]["reason"] != "probe_lost" ||
+	if len(lines) != 2 || lines[0]["msg"] != "plugin_epoch_changed" || lines[0]["reason"] != "probe_failed" ||
 		lines[1]["msg"] != "plugin_state_changed" || lines[1]["state"] != "unavailable" || lines[1]["reason"] != "probe_failed" {
 		t.Fatalf("outage: %v", lines)
 	}

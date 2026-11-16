@@ -49,8 +49,9 @@ credential. Build a plugin when you need one of:
   plugin on the host listener by its host token alone.
 - **Instance ID:** the plugin picks a random one at every process start and
   reports it in its manifest.
-- **Epoch:** fleet keeps one per plugin and changes it on every lifecycle
-  change, plugin restart and loss of readiness. The plugin learns it from the
+- **Epoch:** fleet keeps one per plugin, shared by every fleet replica, and
+  changes it on every lifecycle change, plugin restart and refusal, and when
+  no replica has reached the plugin for 3 s. One lost probe changes nothing. The plugin learns it from the
   host session and sends it on every host request. Fleet sends it on every
   API call. A request with an old instance or epoch is refused with 421
   (Misdirected Request) on both sides, so work admitted before a drain,
@@ -261,9 +262,10 @@ from a plugin and sends no other headers.
   JSON value makes the answer invalid and the plugin `unavailable`.
 - Answer non-200 (503) when the plugin cannot serve, for example while its
   database is down or it is shutting down. Fleet reports it `unavailable` and
-  stops forwarding. Going from `ready` to not ready rotates the epoch, so
-  admitted work is fenced; the next successful probe makes it `ready` under
-  the new epoch.
+  stops forwarding. A refusal rotates the epoch at once, so admitted work is
+  fenced; the next successful probe makes it `ready` under the new epoch. A
+  plugin that does not answer at all is fenced only after 3 s in which no
+  fleet replica reached it.
 
 ### Session and epoch
 

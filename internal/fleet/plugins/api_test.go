@@ -107,9 +107,7 @@ func TestOpaquePluginAPIIsolationAndBounds(t *testing.T) {
 		e := r.entries[0]
 		e.mu.Lock()
 		defer e.mu.Unlock()
-		e.info.Desired = "disabled"
-		e.info.State = "disabled"
-		r.fenceLocked(e, translog.ReasonLifecycleDisable)
+		r.adoptLocked(e, fleet.PluginState{ID: e.config.ID, Desired: "disabled", Epoch: pluginsdk.RandomID(), SeenAge: -1}, r.now(), translog.ReasonLifecycleDisable)
 	}}
 	req := httptest.NewRequest("POST", "http://fleet/api/v1/plugins/inventory-example/api/v1/custom", body)
 	w = httptest.NewRecorder()

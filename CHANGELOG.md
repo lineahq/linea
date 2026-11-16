@@ -416,8 +416,14 @@ the first item below.
   transitions on it, each conditional on the epoch the caller read, with a
   `fleet_plugin` hint on every change; the memory store applies the same
   rules, so plugin lifecycle (drain, disable, enable) now also works in
-  memory mode, without surviving a restart. The plugin registry does not use
-  the row yet.
+  memory mode, without surviving a restart.
+- Every fleet replica now takes a plugin's state and epoch from that shared
+  row, so all replicas show one epoch and a drain on one is seen by all. The
+  session route reads the row on every request; other paths read a cache
+  refreshed by the `fleet_plugin` hint and every 500 ms. One lost probe no
+  longer fences the plugin: a refusal rotates the epoch at once, and a plugin
+  no replica reached for 3 s rotates once. New log reason `shared_state`;
+  `plugin_epoch_changed` for a refusal now says `probe_failed`.
 
 ## [0.2.0]
 

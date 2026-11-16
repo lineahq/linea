@@ -65,7 +65,7 @@ func (r *Registry) ServeAPI(w http.ResponseWriter, request *http.Request, id, pa
 		fail(404)
 		return
 	}
-	if !e.ready() || r.ctx.Err() != nil {
+	if !r.ready(e) || r.ctx.Err() != nil {
 		fail(503)
 		return
 	}

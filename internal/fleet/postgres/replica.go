@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/lineahq/linea/internal/fleet/fleet"
 	"github.com/lineahq/linea/internal/fleet/translog"
+	"github.com/lineahq/linea/pluginsdk"
 )
 
 const leaderLease = "leader"
@@ -372,7 +373,7 @@ func (s *Store) listen() {
 
 // receive listens on conn until it fails and reports whether it listened.
 func (s *Store) receive(conn *pgx.Conn) bool {
-	for _, channel := range []string{"fleet_events", "fleet_agent_takeover", "fleet_credential_revoked", "fleet_config"} {
+	for _, channel := range []string{"fleet_events", "fleet_agent_takeover", "fleet_credential_revoked", "fleet_config", pluginChannel} {
 		if _, err := conn.Exec(s.ctx, "LISTEN "+channel); err != nil {
 			return false
 		}
@@ -380,10 +381,13 @@ func (s *Store) receive(conn *pgx.Conn) bool {
 	// Anything may have been missed while disconnected.
 	s.wakeEvents()
 	s.signalMu.Lock()
-	config := s.onConfig
+	config, plugin := s.onConfig, s.onPlugin
 	s.signalMu.Unlock()
 	if config != nil {
 		config("")
+	}
+	if plugin != nil {
+		plugin("")
 	}
 	for {
 		n, err := conn.WaitForNotification(s.ctx)
@@ -391,7 +395,7 @@ func (s *Store) receive(conn *pgx.Conn) bool {
 			return true
 		}
 		s.signalMu.Lock()
-		takeover, revoked, config := s.onTakeover, s.onRevoked, s.onConfig
+		takeover, revoked, config, plugin := s.onTakeover, s.onRevoked, s.onConfig, s.onPlugin
 		s.signalMu.Unlock()
 		switch n.Channel {
 		case "fleet_events":
@@ -409,6 +413,10 @@ func (s *Store) receive(conn *pgx.Conn) bool {
 		case "fleet_config":
 			if (n.Payload == "" || fleet.ValidID(n.Payload)) && config != nil {
 				config(n.Payload)
+			}
+		case pluginChannel:
+			if pluginsdk.ValidID(n.Payload) && plugin != nil {
+				plugin(n.Payload)
 			}
 		}
 	}

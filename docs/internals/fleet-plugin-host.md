@@ -5,32 +5,54 @@ How core decides plugin state and fences work. The wire contract is
 
 ## Readiness and epoch
 
-- Fleet probes each registered plugin's manifest every 1 s. The first
-  matching answer makes it `ready`. The plugin's session poll then succeeds
-  (it got 421 until then) and the plugin starts work under that epoch.
-- `ready` lasts 3 s after the last successful probe. Public API calls are
-  forwarded only while the plugin is `ready` and the last probe is under 3 s
-  old.
-- Fleet keeps one epoch per plugin. It changes the epoch on every lifecycle
-  change, every plugin restart (new instance ID) and every loss of readiness.
-- A request with an old instance or epoch is refused with 421 on both sides.
-  Work admitted before a drain, disable or restart cannot continue after it.
-  In-flight public calls are canceled when the epoch changes.
-- Core never forwards a plugin's 421 (`ServeAPI`) and never maps it to a
-  conflict: it calls `Registry.refresh` and answers 503 with `Retry-After: 1`.
-  `refresh` is the one place that reloads the plugin's state after a plugin
-  saw another authority than core sent. Today the in-memory entry is the only
-  state, so it re-reads that; it is the seam where shared plugin state will
-  be loaded. 409 passes through, because it now always means a conflict in the
-  plugin's own domain.
+The row described under "Stored state" is the truth; every replica's probe
+writes evidence to it, and everything else reads it. Each registry entry
+caches its row.
+
+- Every replica probes each registered plugin's manifest every 1 s and writes
+  the result as one of the transitions below. The first matching answer from
+  any replica makes the plugin ready on all of them. The plugin's session poll
+  then succeeds (it got 421 until then) and the plugin starts work under that
+  epoch.
+- A replica forwards public API calls and serves host requests while the
+  cached row is enabled, has an epoch and an instance, this replica's own
+  manifest check did not find a mismatch (T3a), and either the row's
+  `seen_at` or this replica's own last good probe is under 3 s old. A plugin
+  unreachable from one replica only keeps its epoch; that replica's
+  forwarded calls fail with 503.
+- The epoch changes on every lifecycle change (T5), plugin restart (T2),
+  refusal (T3), and after 3 s in which no replica saw the plugin (T4). One
+  lost probe changes nothing. A refusal rotates only an epoch that was seen,
+  so a plugin that keeps refusing is fenced once, not every second.
+- When a replica adopts a new epoch it cancels its admitted calls (the
+  lease) and forgets its own probe result, so it never acts again on evidence
+  another replica already acted on. A request with an old instance or epoch
+  is refused with 421 on both sides. Work admitted before a drain, disable or
+  restart cannot continue after it.
+- Reading the row:
+
+  | Path | Reads |
+  | --- | --- |
+  | Session route | The row from the database on every request, so every replica answers the same at once. A database error is 503 |
+  | Other host requests | The cache. On an instance or epoch mismatch, the row once more, then compare again |
+  | API forwarding and status | The cache. On a plugin's 421, `Registry.refresh` reads the row and core answers 503 with `Retry-After: 1` |
+  | `GET /api/v1/plugins` | The cache |
+
+- The cache is read again on the `fleet_plugin` hint (`Registry.Notify`,
+  bound with `postgres.Store.SetPluginSignal`), after the listener reconnects
+  (an empty hint), and by a sweep every 500 ms. Every read or write of one
+  plugin's row and the adoption of its result hold that entry's row slot, so
+  an older read never replaces a newer one.
+- Core never forwards a plugin's 421 and never maps it to a conflict. 409
+  passes through, because it always means a conflict in the plugin's own
+  domain.
 
 ## Stored state
 
 One row per plugin in `fleet.plugin_lifecycle` is the single source of its
 state, so that every core replica shows the plugin one epoch (schema
 migration 013). Replicas write evidence to it and read it back; nothing else
-holds the epoch. The store and its rules exist; the registry still keeps its
-own epoch in memory (as described above) until it moves onto the row.
+holds the epoch.
 
 | Column | Meaning |
 | --- | --- |
@@ -70,11 +92,11 @@ store returns `SeenAge` (negative when unseen) computed in SQL.
 - A write that changed a row sends `NOTIFY fleet_plugin, '<plugin id>'` in the
   same transaction. This includes the T1 refresh (at most about once a second
   per plugin for the whole cluster). The hint only wakes readers; the table is
-  the truth. Nothing listens yet: the registry still keeps its own epoch.
+  the truth.
 - The memory store applies the same rules in process with an injectable
   clock (`fleet.Store.SetClock`), so memory mode now has a lifecycle store
   too; it does not survive a restart, and it checks no actor (the registry
-  checks the caller's role). It sends no hint.
+  checks the caller's role). It sends no hint; one process needs none.
 - `internal/fleet/fleettest` holds the contract suite for both stores
   (`RunPluginState`). PostgreSQL also has tests for the hints, for a probe,
   a fence and lifecycle changes racing on one row, and for the migration of

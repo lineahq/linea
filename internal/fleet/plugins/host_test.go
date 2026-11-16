@@ -44,8 +44,7 @@ func readyHost(t *testing.T, store fleet.Repository, permissions ...string) (*Re
 	registry := New(context.Background(), []Config{config}, store)
 	t.Cleanup(registry.Close)
 	e := registry.entries[0]
-	now := time.Now()
-	e.info.InstanceID, e.info.State, e.info.CheckedAt = pluginsdk.RandomID(), "ready", &now
+	markReady(t, registry, e, pluginsdk.RandomID())
 	server := httptest.NewServer(registry)
 	t.Cleanup(server.Close)
 	client := pluginsdk.HostClient{Endpoint: server.URL, Token: config.hostToken, InstanceID: e.info.InstanceID, HTTP: pluginsdk.NewHTTPClient()}

@@ -137,6 +137,8 @@ const (
 	ReasonLifecycleEnable
 	ReasonLifecycleDrain
 	ReasonLifecycleDisable
+	// ReasonSharedState: another replica changed the shared plugin row.
+	ReasonSharedState
 	// Rollouts.
 	ReasonOperator
 	ReasonThreshold
@@ -180,6 +182,7 @@ var reasonNames = [numReasons]string{
 	ReasonLifecycleEnable:        "lifecycle_enable",
 	ReasonLifecycleDrain:         "lifecycle_drain",
 	ReasonLifecycleDisable:       "lifecycle_disable",
+	ReasonSharedState:            "shared_state",
 	ReasonOperator:               "operator",
 	ReasonThreshold:              "threshold",
 	ReasonController:             "controller",
