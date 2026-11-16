@@ -620,6 +620,23 @@ func (s *Store) write(ctx context.Context, work func(context.Context, pgx.Tx) er
 	return normalize(tx.Commit(ctx))
 }
 
+// capped refuses a new row in table once it holds limit rows. It locks the
+// table against other writes until commit (reads go on), so concurrent
+// creations cannot each see room for one more row. table is a constant.
+func capped(ctx context.Context, tx pgx.Tx, table string, limit int) error {
+	if _, err := tx.Exec(ctx, "LOCK TABLE "+table+" IN SHARE ROW EXCLUSIVE MODE"); err != nil {
+		return err
+	}
+	var count int
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM "+table).Scan(&count); err != nil {
+		return err
+	}
+	if count >= limit {
+		return fleet.ErrCapacity
+	}
+	return nil
+}
+
 func normalize(err error) error {
 	if err == nil {
 		return nil

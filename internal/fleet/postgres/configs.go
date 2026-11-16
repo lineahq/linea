@@ -45,12 +45,8 @@ func (s *Store) CreateConfig(ctx context.Context, actor string, c configmgmt.Con
 		if err := requireManager(ctx, tx, actor); err != nil {
 			return err
 		}
-		var count int
-		if err := tx.QueryRow(ctx, "SELECT count(*) FROM fleet.configs").Scan(&count); err != nil {
+		if err := capped(ctx, tx, "fleet.configs", configmgmt.MaxConfigs); err != nil {
 			return err
-		}
-		if count >= configmgmt.MaxConfigs {
-			return fleet.ErrCapacity
 		}
 		var err error
 		c, err = scanConfig(tx.QueryRow(ctx, `INSERT INTO fleet.configs(id,name,description,revision,created_at,created_by)

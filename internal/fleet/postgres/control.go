@@ -117,12 +117,8 @@ func (s *Store) PutGroup(ctx context.Context, actor string, g fleet.Group, expec
 			return fleet.ErrPrecondition
 		}
 		if revision == 0 {
-			var count int
-			if err := tx.QueryRow(ctx, "SELECT count(*) FROM fleet.groups").Scan(&count); err != nil {
+			if err := capped(ctx, tx, "fleet.groups", 1000); err != nil {
 				return err
-			}
-			if count >= 1000 {
-				return fleet.ErrCapacity
 			}
 		}
 		g.Revision = revision + 1

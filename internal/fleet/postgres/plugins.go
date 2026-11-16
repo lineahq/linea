@@ -109,12 +109,8 @@ RETURNING `+pluginColumns, id, epoch, instance, pluginsdk.RandomID(), fleet.Plug
 		if state, err = pluginState(ctx, tx, id); err == nil || !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
-		var count int
-		if err := tx.QueryRow(ctx, "SELECT count(*) FROM fleet.plugin_lifecycle").Scan(&count); err != nil {
+		if err := capped(ctx, tx, "fleet.plugin_lifecycle", fleet.MaxPluginRows); err != nil {
 			return err
-		}
-		if count >= fleet.MaxPluginRows {
-			return fleet.ErrCapacity
 		}
 		state, err = scanPluginState(tx.QueryRow(ctx, `INSERT INTO fleet.plugin_lifecycle(id,desired,revision,epoch,instance_id,seen_at)
 VALUES($1,'enabled',0,$2,$3,now())
@@ -191,12 +187,8 @@ func (s *Store) SetPluginLifecycle(ctx context.Context, actor string, item fleet
 				return err
 			}
 		} else {
-			var count int
-			if err := tx.QueryRow(ctx, "SELECT count(*) FROM fleet.plugin_lifecycle").Scan(&count); err != nil {
+			if err := capped(ctx, tx, "fleet.plugin_lifecycle", fleet.MaxPluginRows); err != nil {
 				return err
-			}
-			if count >= fleet.MaxPluginRows {
-				return fleet.ErrCapacity
 			}
 			tag, err := tx.Exec(ctx, "INSERT INTO fleet.plugin_lifecycle(id,desired,revision,epoch) VALUES($1,$2,$3,$4) ON CONFLICT (id) DO NOTHING", item.ID, item.Desired, item.Revision, pluginsdk.RandomID())
 			if err != nil {

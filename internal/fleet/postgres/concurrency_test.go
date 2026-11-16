@@ -90,6 +90,23 @@ func TestPostgresConcurrentControlWrites(t *testing.T) {
 		t.Fatalf("stored revision %d, %v", revision, err)
 	}
 
+	// Creations racing for the last group slots must not overshoot the cap.
+	var groups int
+	if err := s.pool.QueryRow(ctx, "SELECT count(*) FROM fleet.groups").Scan(&groups); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `INSERT INTO fleet.groups(id,name,kind,selector,revision)
+		SELECT md5('fill'||i), 'fill-'||i, 'selector', 'a=b', 1 FROM generate_series(1,$1) i`, 998-groups); err != nil {
+		t.Fatal(err)
+	}
+	filled := race(6, func(i int) error {
+		_, err := s.PutGroup(ctx, admin, fleet.Group{ID: strings.Repeat(string(rune('a'+i)), 32), Name: "cap-" + string(rune('a'+i)), Selector: "a=b"}, 0)
+		return err
+	})
+	if count(filled, nil) != 2 || count(filled, fleet.ErrCapacity) != 4 {
+		t.Fatalf("concurrent creates at the group cap: %v", filled)
+	}
+
 	// Two administrators that each revoke the other must leave one active.
 	second, err := auth.Generate(auth.CredentialRequest{ID: randomID(), Name: "second-admin", Role: "admin"}, time.Now())
 	if err != nil {

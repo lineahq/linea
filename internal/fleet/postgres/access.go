@@ -221,12 +221,8 @@ func (s *Store) ListCredentials(ctx context.Context, after string, limit int) (a
 	return p, nil
 }
 func insertCredential(ctx context.Context, tx pgx.Tx, c auth.Credential) error {
-	var count int
-	if err := tx.QueryRow(ctx, "SELECT count(*) FROM fleet.credentials").Scan(&count); err != nil {
+	if err := capped(ctx, tx, "fleet.credentials", 1000); err != nil {
 		return err
-	}
-	if count >= 1000 {
-		return fleet.ErrCapacity
 	}
 	var err error
 	labels, access := []byte("{}"), []byte("{}")
