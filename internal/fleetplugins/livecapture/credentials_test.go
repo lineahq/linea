@@ -141,7 +141,7 @@ func TestAuthenticateIntrospectsAndCaches(t *testing.T) {
 	}}
 	withHost(t, s, h)
 	for range 2 {
-		c, err := s.authenticate(bearer(allowed))
+		c, err := s.authenticate(bearer(allowed), false)
 		if err != nil || c.id != "allowed" || !c.allows("test") {
 			t.Fatal("labeled agent credential rejected", err)
 		}
@@ -149,21 +149,50 @@ func TestAuthenticateIntrospectsAndCaches(t *testing.T) {
 	if h.introspects != 1 {
 		t.Fatalf("introspected %d times, want cached", h.introspects)
 	}
-	if _, err := s.authenticate(bearer(unlabeled)); status.Code(err) != codes.Unauthenticated {
+	if _, err := s.authenticate(bearer(unlabeled), false); status.Code(err) != codes.Unauthenticated {
 		t.Fatal("credential without capture label admitted", err)
 	}
-	if _, err := s.authenticate(context.Background()); status.Code(err) != codes.Unauthenticated {
+	if _, err := s.authenticate(context.Background(), false); status.Code(err) != codes.Unauthenticated {
 		t.Fatal("missing credential admitted", err)
 	}
 	s.host.Endpoint = "http://127.0.0.1:1"
-	if _, err := s.authenticate(bearer(strings.Repeat("3", 64))); status.Code(err) != codes.Unavailable {
+	if _, err := s.authenticate(bearer(strings.Repeat("3", 64)), false); status.Code(err) != codes.Unavailable {
 		t.Fatal("unreachable host did not fail closed", err)
 	}
 	s.mu.Lock()
 	s.hostOK = false
 	s.mu.Unlock()
-	if _, err := s.authenticate(bearer(allowed)); status.Code(err) != codes.Unavailable {
+	if _, err := s.authenticate(bearer(allowed), false); status.Code(err) != codes.Unavailable {
 		t.Fatal("cached credential admitted without host authority", err)
+	}
+}
+
+// TestControlStreamIgnoresCachedAdmission: a credential revoked after it was
+// cached still passes a delivery request until the cache expires, but a new
+// control stream asks the host again and is refused.
+func TestControlStreamIgnoresCachedAdmission(t *testing.T) {
+	s, _, _ := fixture(t)
+	token := strings.Repeat("4", 64)
+	revoked := false
+	h := &fakeHost{introspect: func(pluginsdk.IntrospectRequest) pluginsdk.Introspection {
+		return pluginsdk.Introspection{Active: !revoked, CredentialID: "agent", Role: "agent", Labels: map[string]string{"capture": "*"}}
+	}}
+	withHost(t, s, h)
+	if _, err := s.authenticate(bearer(token), true); err != nil {
+		t.Fatal(err)
+	}
+	revoked = true
+	if _, err := s.authenticate(bearer(token), false); err != nil {
+		t.Fatalf("cached delivery admission: %v", err)
+	}
+	if _, err := s.authenticate(bearer(token), true); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("control stream after revocation: %v, want Unauthenticated", err)
+	}
+	if h.introspects != 2 {
+		t.Fatalf("introspected %d times, want once per control stream", h.introspects)
+	}
+	if _, err := s.authenticate(bearer(token), false); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("delivery after the fresh refusal: %v", err)
 	}
 }
 
@@ -199,10 +228,10 @@ func TestPreauthenticateRefusesBeforeDecoding(t *testing.T) {
 	if code := tapCode(info("Bearer " + unlabeled)); code != codes.OK || h.introspects != 0 {
 		t.Fatalf("cache miss: %v after %d introspections, want passed on without one", code, h.introspects)
 	}
-	if _, err := s.authenticate(bearer(unlabeled)); status.Code(err) != codes.Unauthenticated {
+	if _, err := s.authenticate(bearer(unlabeled), false); status.Code(err) != codes.Unauthenticated {
 		t.Fatal("credential without capture label admitted", err)
 	}
-	if _, err := s.authenticate(bearer(allowed)); err != nil {
+	if _, err := s.authenticate(bearer(allowed), false); err != nil {
 		t.Fatal(err)
 	}
 	if code := tapCode(info("Bearer " + unlabeled)); code != codes.Unauthenticated {

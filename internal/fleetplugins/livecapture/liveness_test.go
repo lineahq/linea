@@ -81,7 +81,7 @@ func TestRequestsReadStorageFlagWithoutPinging(t *testing.T) {
 			t.Fatalf("%s answered %d", path, code)
 		}
 	}
-	if _, err := s.authenticate(bearer(strings.Repeat("d", 64))); err != nil {
+	if _, err := s.authenticate(bearer(strings.Repeat("d", 64)), false); err != nil {
 		t.Fatal(err)
 	}
 	if got := repo.probes.Load(); got != 0 {
@@ -120,7 +120,7 @@ func TestRequestsReadStorageFlagWithoutPinging(t *testing.T) {
 	if code := call(pluginsdk.APIPath + "v1/peers"); code != 503 {
 		t.Fatalf("request after a fatal database answered %d", code)
 	}
-	if _, err := s.authenticate(bearer(strings.Repeat("d", 64))); err == nil {
+	if _, err := s.authenticate(bearer(strings.Repeat("d", 64)), false); err == nil {
 		t.Fatal("authentication succeeded after a fatal database")
 	}
 }

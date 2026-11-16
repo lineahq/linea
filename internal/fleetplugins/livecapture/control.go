@@ -133,7 +133,7 @@ func (c captureControl) WatchCaptures(stream controlpb.CaptureControl_WatchCaptu
 	return c.server.Watch(stream)
 }
 func (s *Server) Watch(stream grpc.ServerStream) error {
-	credential, err := s.authenticate(stream.Context())
+	credential, err := s.authenticate(stream.Context(), true)
 	if err != nil {
 		if status.Code(err) == codes.Unauthenticated {
 			s.authFailures.Record(translog.ListenerControl)

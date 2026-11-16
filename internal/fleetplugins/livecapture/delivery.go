@@ -294,7 +294,7 @@ func (s *Server) bindingLocked(credentialID, signal string, resources []pcommon.
 func (s *Server) deliver(ctx context.Context, signal string, resources []pcommon.Map, count int64, data []byte) (resultErr error) {
 	started := time.Now()
 	defer func() { s.observeDelivery(signal, started, resultErr) }()
-	credential, err := s.authenticate(ctx)
+	credential, err := s.authenticate(ctx, false)
 	if err != nil {
 		if status.Code(err) == codes.Unauthenticated {
 			s.authFailures.Record(translog.ListenerOTLP)

@@ -16,6 +16,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/lineahq/linea/collector/livecapture/controlpb"
+	"github.com/lineahq/linea/pluginsdk"
 )
 
 // The control stream speaks the extension's typed protocol: identity first,
@@ -125,6 +126,13 @@ func setResendInterval(t *testing.T, d time.Duration) {
 // helper that stamps the identity on each report.
 func watch(t *testing.T, s *Server) (controlpb.CaptureControl_WatchCapturesClient, *controlpb.Identity, func(*controlpb.CollectorReport)) {
 	t.Helper()
+	// A control stream always introspects, so a test without a host of its
+	// own gets one that admits the fixture's credential.
+	if s.host.Endpoint == "http://127.0.0.1:1" {
+		withHost(t, s, &fakeHost{introspect: func(pluginsdk.IntrospectRequest) pluginsdk.Introspection {
+			return pluginsdk.Introspection{Active: true, CredentialID: "credential", Role: "agent", Labels: map[string]string{"capture": "test"}}
+		}})
+	}
 	s.mu.Lock()
 	s.dbOK = true
 	s.mu.Unlock()

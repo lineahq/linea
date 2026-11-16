@@ -34,9 +34,11 @@ the generic plugin mechanisms are in [fleet-plugin-host.md](fleet-plugin-host.md
   core. It caches the answer for at most 10 s (rejections 2 s, never past
   `expires_at`; at most 1,024 hashes) and clears the cache when the epoch
   changes.
-- It re-introspects open connections every 10 s. Revoking, expiring or
-  relabeling a credential in core closes affected streams within that
-  interval. The loop keeps a deadline (10 s after the last recheck started), so
+- A control stream always introspects when it opens; only delivery
+  requests use the cache. It re-introspects open connections every 10 s.
+  Revoking, expiring or relabeling a credential in core closes affected
+  streams within that interval, and delivery requests are refused once the
+  cached answer expires. The loop keeps a deadline (10 s after the last recheck started), so
   link wakeups and early timers neither skip a round nor delay the next.
 - While core is unreachable, new streams are refused and capture stops with
   host authority.

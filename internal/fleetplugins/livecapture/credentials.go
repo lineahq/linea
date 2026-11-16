@@ -140,7 +140,11 @@ func (s *Server) preauthenticate(ctx context.Context, info *tap.Info) (context.C
 	return ctx, nil
 }
 
-func (s *Server) authenticate(ctx context.Context) (credential, error) {
+// authenticate admits the bearer credential of ctx. fresh skips the cache: a
+// control stream lives until the next recheck closes it, so admitting one on
+// an answer cached before a revocation would keep it open for that answer's
+// remaining lifetime plus a recheck interval.
+func (s *Server) authenticate(ctx context.Context, fresh bool) (credential, error) {
 	hash, ok := bearerHash(metadata.ValueFromIncomingContext(ctx, "authorization"))
 	if !ok {
 		return credential{}, status.Error(codes.Unauthenticated, "fleet agent credential required")
@@ -152,7 +156,7 @@ func (s *Server) authenticate(ctx context.Context) (credential, error) {
 	if !ready {
 		return credential{}, status.Error(codes.Unavailable, "capture authority unavailable")
 	}
-	if !cached || !time.Now().Before(entry.until) {
+	if fresh || !cached || !time.Now().Before(entry.until) {
 		var err error
 		if entry, err = s.introspect(ctx, session, hash); err != nil {
 			return credential{}, status.Error(codes.Unavailable, "capture authority unavailable")
