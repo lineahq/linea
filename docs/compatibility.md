@@ -38,6 +38,10 @@ and `seen_at` on `fleet.plugin_lifecycle`), and version 14 adds
 Version 15 adds the audit record `fleet.audit`. Run the fleet `migrate` step before
 starting the new release; an older fleet server refuses the newer schema.
 
+Live capture schema version 3 records the user a delegated request acts for,
+and version 4 adds peer retention. Run the plugin's `migrate` step before
+starting plugin 0.5.0.
+
 ## Upgrade order
 
 1. Debugger: stop the builders and workers, upgrade `linea-server`, then
