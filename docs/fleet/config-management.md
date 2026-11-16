@@ -215,6 +215,7 @@ curl -s -H "$ADMIN" -H 'Content-Type: application/json' -X POST $API/configs/$CO
 | --- | --- |
 | Body | Collector YAML up to 128 KiB with only the top-level keys `receivers`, `processors`, `exporters`, `connectors`, `extensions`, `service`. The server does not merge or render YAML; the supervisor validates against the real Collector |
 | Secrets | Must be `${env:...}` or `${file:...}` references resolved on the host. Literal values under secret-looking keys, header values and URL passwords are rejected with 422 `inline_secret` |
+| Host access | The server does not restrict which variables or files a reference names, nor where a config sends them. Whoever may write versions and assignments (`operator`, `admin`) can therefore read any environment variable and any file the Collector process can, on every host whose credential the assignment's labels match. Give an agent credential `remote_config` only where that is acceptable, and use `--config-allowed-components` to keep exporters and extensions to the ones you trust |
 | Component allowlist | `--config-allowed-components receiver:otlp,processor:batch,...` restricts the component types versions may use (422 `invalid_config`). Unset allows any |
 | Visibility | Bodies are readable only with `admin` or `operator` and never appear in events, logs or metrics |
 | Retention | Each config keeps its newest 100 versions plus every version an assignment references |

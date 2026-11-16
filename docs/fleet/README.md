@@ -118,7 +118,7 @@ return an error object with `code` and `message`.
 | Role | May |
 | --- | --- |
 | `reader` | Read inventory, groups, events, metrics and plugin discovery |
-| `operator` | Everything a reader may, plus write groups, configs, config versions, assignments and rollouts, retry an agent's config, read config version bodies. Config management still needs `--config-management`. No credentials API, no plugin lifecycle |
+| `operator` | Everything a reader may, plus write groups, configs, config versions, assignments and rollouts, retry an agent's config, read config version bodies. Config management still needs `--config-management`. No credentials API, no plugin lifecycle. With config management on, an operator controls what managed Collectors run, so it can make them read host files and environment variables through `${file:...}` and `${env:...}` and send them anywhere ([config management](config-management.md#store-config-versions)) |
 | `admin` | Everything an operator may, plus the credentials API, plugin lifecycle and the audit record |
 
 No role reaches a plugin's status or API. An admin grants that per credential
