@@ -99,12 +99,14 @@ type Store struct {
 	closed    atomic.Bool
 	stopped   atomic.Bool
 	pool      *pgxpool.Pool
-	options   Options
-	replica   string
-	ctx       context.Context
-	cancel    context.CancelFunc
-	loops     sync.WaitGroup
-	writer    *writer
+	// beatConfig opens the heartbeat's own session, outside the pool.
+	beatConfig *pgx.ConnConfig
+	options    Options
+	replica    string
+	ctx        context.Context
+	cancel     context.CancelFunc
+	loops      sync.WaitGroup
+	writer     *writer
 
 	heartbeat atomic.Int64 // UnixNano of the last successful heartbeat
 	leader    atomic.Bool
@@ -364,7 +366,7 @@ func Open(ctx context.Context, url string, options Options) (*Store, error) {
 	}
 	poolConfig.ConnConfig = cfg
 	poolConfig.MaxConns, poolConfig.MinConns = 8, 1
-	s := &Store{log: options.Log, options: options, replica: randomID(), lost: make(chan struct{}), seen: map[string]seenAt{}, eventWake: make(chan struct{}), reapBatch: reapBatch,
+	s := &Store{beatConfig: cfg.Copy(), log: options.Log, options: options, replica: randomID(), lost: make(chan struct{}), seen: map[string]seenAt{}, eventWake: make(chan struct{}), reapBatch: reapBatch,
 		uses: configmgmt.NewUsesCache()}
 	cfg.Tracer = s
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
@@ -381,9 +383,10 @@ func Open(ctx context.Context, url string, options Options) (*Store, error) {
 	s.heartbeat.Store(time.Now().UnixNano())
 	s.log.Info(translog.ReplicaRegistered, translog.ID(translog.KeyReplica, s.replica))
 	s.writer = newWriter(s)
-	s.loops.Add(5)
+	s.loops.Add(6)
 	go s.writer.run()
 	go s.heartbeatLoop()
+	go s.leaderLoop()
 	go s.flushLoop()
 	go s.listen()
 	go s.rolloutLoop()

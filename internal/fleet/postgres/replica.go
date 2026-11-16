@@ -20,13 +20,20 @@ const leaderLease = "leader"
 // reapBatch and trimBatch bound each leader transaction.
 const reapBatch, trimBatch = 1000, 5000
 
-// heartbeatLoop proves liveness, holds or seeks the leader lease, and runs
-// singleton jobs while leader. A replica that cannot renew its heartbeat for
-// most of the liveness window fences itself before others reap its agents.
+// heartbeatLoop proves liveness. A replica that cannot renew its heartbeat
+// for most of the liveness window fences itself before others reap its
+// agents. It owns one session outside the pool, so a pool exhausted by
+// reports, reads or leader jobs never delays the renewal.
 func (s *Store) heartbeatLoop() {
 	defer s.loops.Done()
 	ticker := time.NewTicker(s.options.Heartbeat)
 	defer ticker.Stop()
+	var conn *pgx.Conn
+	defer func() {
+		if conn != nil {
+			closeAdmin(conn)
+		}
+	}()
 	failure := "none"
 	// down is when heartbeat writes began to fail; zero while they succeed.
 	var down time.Time
@@ -40,8 +47,26 @@ func (s *Store) heartbeatLoop() {
 			continue
 		}
 		ctx, cancel := context.WithTimeout(s.ctx, s.options.Heartbeat)
-		tag, err := s.pool.Exec(ctx, "UPDATE fleet.replicas SET heartbeat_at=now() WHERE id=$1", s.replica)
+		var tag pgconn.CommandTag
+		var err error
+		if conn == nil {
+			conn, err = pgx.ConnectConfig(ctx, s.beatConfig.Copy())
+			if err != nil {
+				conn = nil
+			}
+		}
+		if conn != nil {
+			tag, err = conn.Exec(ctx, "UPDATE fleet.replicas SET heartbeat_at=now() WHERE id=$1", s.replica)
+			if err != nil {
+				// The session's state is unknown after a failure; reconnect.
+				closeAdmin(conn)
+				conn = nil
+			}
+		}
 		cancel()
+		if s.ctx.Err() != nil {
+			return
+		}
 		switch {
 		case err == nil && tag.RowsAffected() == 1:
 			s.heartbeat.Store(time.Now().UnixNano())
@@ -63,13 +88,31 @@ func (s *Store) heartbeatLoop() {
 		if age := time.Since(time.Unix(0, s.heartbeat.Load())); age >= s.options.Alive*8/10 {
 			s.markLost(translog.ReasonHeartbeatLapsed, "heartbeat not renewed for "+age.Round(time.Second).String()+" (last error: "+failure+")")
 		}
+	}
+}
+
+// leaderLoop holds or seeks the leader lease and runs singleton jobs while
+// leader, apart from the heartbeat so slow jobs never delay a renewal.
+func (s *Store) leaderLoop() {
+	defer s.loops.Done()
+	ticker := time.NewTicker(s.options.Heartbeat)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		if s.stopped.Load() {
+			continue
+		}
 		select {
 		case <-s.lost:
 			s.setLeader(false, translog.ReasonReplicaFenced)
 			continue
 		default:
 		}
-		ctx, cancel = context.WithTimeout(s.ctx, 2*s.options.Heartbeat)
+		ctx, cancel := context.WithTimeout(s.ctx, 2*s.options.Heartbeat)
 		s.lead(ctx)
 		cancel()
 	}

@@ -350,7 +350,7 @@ Sizing:
 | --- | --- |
 | Load balancer | Relays TCP only: one CPU and 512 MiB carried 20,000 sessions. Keep `nbthread` in `haproxy.cfg` equal to the container's `cpus`. `maxconn` (45,000 agents) must exceed the fleet with room for reconnect overlap. Idle timeouts are 90 s, above the heartbeat and event long-poll |
 | Replicas | About 33 KiB per session: the 1 GiB limit covers 10,000 sessions with margin. Size `--max-connections` for the survivors of a replica loss |
-| PostgreSQL | Each replica opens at most eight connections, so eight replicas need 64 plus replication and administration, within the default `max_connections` of 100. A faster disk or more primary CPU shortens reconnect storms directly. Heartbeats cause no writes |
+| PostgreSQL | Each replica opens at most nine connections (a pool of eight and one reserved for its heartbeat), so eight replicas need 72 plus replication and administration, within the default `max_connections` of 100. A faster disk or more primary CPU shortens reconnect storms directly. Heartbeats cause no writes |
 
 ## Inventory and retention
 
