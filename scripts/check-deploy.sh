@@ -29,6 +29,7 @@ compose deploy/compose/linea/compose.yaml
 compose deploy/compose/linea/compose.yaml deploy/compose/linea/compose.fleet.yaml
 compose deploy/compose/fleet/compose.yaml
 compose deploy/compose/fleet/compose.yaml deploy/compose/fleet/compose.ha.yaml
+compose deploy/compose/fleet/compose.yaml deploy/compose/fleet/compose.ha.yaml examples/fleet-agent-summary-plugin/compose.yaml examples/fleet-agent-summary-plugin/compose.ha.yaml
 compose deploy/compose/fleet/compose.yaml deploy/compose/fleet/compose.livecapture.yaml
 compose deploy/compose/fleet/compose.yaml deploy/compose/fleet/compose.supervised.yaml
 compose deploy/compose/collector/compose.yaml

@@ -205,8 +205,8 @@ exports `linea_fleet_plugins` by state and the plugin API metrics
 
 ## Lifecycle
 
-Admin lifecycle changes need PostgreSQL storage and a quoted `If-Match`
-revision:
+Admin lifecycle changes need a quoted `If-Match` revision. They survive a
+restart only with PostgreSQL storage:
 
 ```sh
 auth="Authorization: Bearer $ADMIN_TOKEN"

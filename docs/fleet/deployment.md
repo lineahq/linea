@@ -332,6 +332,17 @@ docker compose $ha exec postgres-standby psql -U postgres -d fleet -c "SELECT pg
 Never start the old primary beside the promoted one. Rebuild it as a new
 standby from an empty volume.
 
+Plugins behind replicas: every replica probes each plugin directly and keeps
+its state in one shared row, so all replicas show one epoch. The plugin must
+reach the host listener through the load balancer, whose `plugin_host`
+frontend (`:8081`, HTTP, per-request balancing over ready replicas) a plugin
+overlay puts on the internal plugin network; point the plugin's host
+endpoint at `http://lb:8081`.
+`examples/fleet-agent-summary-plugin/compose.ha.yaml` does this for the
+example plugin, and `scripts/fleet/smoke-ha-plugin.sh` checks it: one epoch on
+every replica, no rotation when a replica dies, a drain seen by all. The Helm
+chart runs one fleet pod and needs none of this.
+
 Sizing:
 
 | Part | Guidance |
